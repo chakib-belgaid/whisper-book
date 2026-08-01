@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Whisperbook" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">serif</item>
+        <item name="android:windowActionModeOverlay">true</item>
+        <item name="android:colorAccent">@color/parchment_light</item>
+        <item name="android:navigationBarColor">@color/midnight_paper</item>
+        <item name="android:statusBarColor">@color/midnight_paper</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+</resources>

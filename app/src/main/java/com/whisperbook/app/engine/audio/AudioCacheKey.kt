@@ -1,0 +1,87 @@
+package com.whisperbook.app.engine.audio
+
+import com.whisperbook.app.domain.SynthesisRequest
+import java.nio.ByteBuffer
+import java.security.MessageDigest
+
+/**
+ * Builds stable, filesystem-safe cache keys for locally synthesized audio.
+ *
+ * Every field which can change the emitted waveform is length-delimited before it is hashed. This
+ * avoids ambiguous concatenations while keeping book text and voice choices out of filenames.
+ */
+object AudioCacheKey {
+    private const val SCHEMA = "whisperbook-pcm16-v1"
+    private val SHA_256_PATTERN = Regex("^[0-9a-f]{64}$")
+
+    fun create(
+        text: String,
+        voiceId: String,
+        speakerIndex: Int,
+        modelVersion: String,
+        speed: Float,
+        sampleRate: Int,
+    ): String {
+        require(voiceId.isNotBlank()) { "voiceId must not be blank" }
+        require(modelVersion.isNotBlank()) { "modelVersion must not be blank" }
+        require(speed.isFinite() && speed > 0f) { "speed must be finite and positive" }
+        require(sampleRate > 0) { "sampleRate must be positive" }
+
+        val digest = MessageDigest.getInstance("SHA-256")
+        digest.updateField(SCHEMA)
+        digest.updateField(text)
+        digest.updateField(voiceId)
+        digest.updateInt(speakerIndex)
+        digest.updateField(modelVersion)
+        digest.updateInt(speed.toRawBits())
+        digest.updateInt(sampleRate)
+        return digest.digest().joinToString(separator = "") { byte -> "%02x".format(byte.toInt() and 0xff) }
+    }
+
+    fun fromRequest(
+        request: SynthesisRequest,
+        modelVersion: String,
+        sampleRate: Int,
+    ): String = create(
+        text = request.text,
+        voiceId = request.voice.id,
+        speakerIndex = request.voice.speakerIndex,
+        modelVersion = modelVersion,
+        speed = request.speed,
+        sampleRate = sampleRate,
+    )
+
+    /**
+     * Produces a passage-scoped key for persistence models where one segment row owns one passage.
+     * The nested waveform digest keeps the output deterministic without exposing the passage text.
+     */
+    fun forPassage(
+        passageId: String,
+        request: SynthesisRequest,
+        modelVersion: String,
+        sampleRate: Int,
+    ): String {
+        require(passageId.isNotBlank()) { "passageId must not be blank" }
+        val waveformKey = fromRequest(request, modelVersion, sampleRate)
+        return create(
+            text = "$passageId\u0000$waveformKey",
+            voiceId = request.voice.id,
+            speakerIndex = request.voice.speakerIndex,
+            modelVersion = modelVersion,
+            speed = request.speed,
+            sampleRate = sampleRate,
+        )
+    }
+
+    fun isValid(value: String): Boolean = SHA_256_PATTERN.matches(value)
+
+    private fun MessageDigest.updateField(value: String) {
+        val bytes = value.toByteArray(Charsets.UTF_8)
+        updateInt(bytes.size)
+        update(bytes)
+    }
+
+    private fun MessageDigest.updateInt(value: Int) {
+        update(ByteBuffer.allocate(Int.SIZE_BYTES).putInt(value).array())
+    }
+}

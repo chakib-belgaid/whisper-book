@@ -1,0 +1,174 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1200" viewBox="0 0 1600 1200" role="img" aria-labelledby="title description">
+  <title id="title">Whisperbook mobile navigation graph</title>
+  <desc id="description">Navigation relationships between Welcome, Library, Import Book, Processing, Book Details, Now Playing, Voice Cast, Settings, and Current Chapter.</desc>
+  <defs>
+    <filter id="paperShadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="10" stdDeviation="10" flood-color="#081526" flood-opacity="0.32"/>
+    </filter>
+    <pattern id="paperGrain" width="24" height="24" patternUnits="userSpaceOnUse">
+      <circle cx="3" cy="5" r="0.7" fill="#18304d" opacity="0.08"/>
+      <circle cx="17" cy="14" r="0.55" fill="#18304d" opacity="0.07"/>
+      <path d="M1 20L7 18M14 3l5 2" stroke="#18304d" stroke-width="0.45" opacity="0.05"/>
+    </pattern>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M1 1L11 6L1 11Z" fill="#d6b06a"/>
+    </marker>
+    <marker id="arrowBlue" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M1 1L11 6L1 11Z" fill="#9bb5d4"/>
+    </marker>
+    <style>
+      .title { font: 700 52px Georgia, serif; fill: #f7edd7; letter-spacing: 1px; }
+      .subtitle { font: 400 22px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; fill: #aebfd2; }
+      .node-title { font: 700 27px Georgia, serif; fill: #142943; }
+      .node-copy { font: 500 18px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; fill: #526174; }
+      .node-id { font: 700 15px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; fill: #f5e8d0; letter-spacing: 1.5px; }
+      .edge { fill: none; stroke: #d6b06a; stroke-width: 4; marker-end: url(#arrow); }
+      .edge-secondary { fill: none; stroke: #9bb5d4; stroke-width: 3; stroke-dasharray: 10 10; marker-end: url(#arrowBlue); }
+      .edge-label { font: 600 16px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; fill: #f5e8d0; paint-order: stroke; stroke: #10243d; stroke-width: 8px; stroke-linejoin: round; }
+      .nav-label { font: 700 20px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; fill: #f5e8d0; }
+      .legend { font: 500 17px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; fill: #aebfd2; }
+    </style>
+  </defs>
+
+  <rect width="1600" height="1200" fill="#10243d"/>
+  <rect width="1600" height="1200" fill="url(#paperGrain)" opacity="0.45"/>
+  <path d="M0 150C240 105 420 185 650 138S1100 95 1600 155V0H0Z" fill="#183451" opacity="0.75"/>
+  <circle cx="1445" cy="90" r="44" fill="#f6e9cd"/>
+  <circle cx="1463" cy="75" r="44" fill="#183451"/>
+
+  <text x="80" y="82" class="title">Whisperbook navigation</text>
+  <text x="82" y="121" class="subtitle">Primary mobile flow · offline import to multi-voice listening</text>
+
+  <!-- Primary edges -->
+  <path class="edge" d="M330 275H430"/>
+  <text x="350" y="256" class="edge-label">Begin</text>
+
+  <path class="edge" d="M710 225H810"/>
+  <text x="725" y="206" class="edge-label">Add book</text>
+
+  <path class="edge" d="M1090 225H1190"/>
+  <text x="1110" y="206" class="edge-label">Choose file</text>
+
+  <path class="edge" d="M1330 300C1330 370 1140 405 1060 455"/>
+  <text x="1205" y="370" class="edge-label">Ready</text>
+
+  <path class="edge" d="M570 300C570 395 690 440 810 490"/>
+  <text x="585" y="382" class="edge-label">Open book</text>
+
+  <path class="edge" d="M1090 515H1190"/>
+  <text x="1110" y="496" class="edge-label">Play chapter</text>
+
+  <path class="edge" d="M950 590V700"/>
+  <text x="968" y="654" class="edge-label">Edit voices</text>
+
+  <!-- Secondary cross-links -->
+  <path class="edge-secondary" d="M710 265C850 335 1120 350 1250 445"/>
+  <text x="810" y="325" class="edge-label">Continue listening</text>
+
+  <path class="edge-secondary" d="M1295 590C1265 675 1120 725 1090 755"/>
+  <text x="1200" y="677" class="edge-label">Voice cast</text>
+
+  <path class="edge-secondary" d="M1190 555C1145 560 1130 565 1090 565"/>
+  <text x="1110" y="548" class="edge-label">Chapters</text>
+
+  <path class="edge-secondary" d="M1325 590C1460 670 1450 900 1160 900H720C675 900 650 880 650 850"/>
+  <text x="850" y="921" class="edge-label">Read along</text>
+
+  <path class="edge-secondary" d="M710 780H810"/>
+  <text x="724" y="761" class="edge-label">Speaker</text>
+
+  <!-- Screen nodes -->
+  <g transform="translate(50 200)" filter="url(#paperShadow)">
+    <rect width="280" height="150" rx="28" fill="#f7edd7"/>
+    <path d="M0 28Q0 0 28 0H252Q280 0 280 28V43H0Z" fill="#9b493f"/>
+    <text x="22" y="29" class="node-id">01</text>
+    <text x="24" y="84" class="node-title">Welcome</text>
+    <text x="24" y="116" class="node-copy">First launch · local promise</text>
+  </g>
+
+  <g transform="translate(430 200)" filter="url(#paperShadow)">
+    <rect width="280" height="150" rx="28" fill="#f7edd7"/>
+    <path d="M0 28Q0 0 28 0H252Q280 0 280 28V43H0Z" fill="#355a83"/>
+    <text x="22" y="29" class="node-id">02</text>
+    <text x="24" y="84" class="node-title">Library</text>
+    <text x="24" y="116" class="node-copy">Books · resume · add</text>
+  </g>
+
+  <g transform="translate(810 150)" filter="url(#paperShadow)">
+    <rect width="280" height="150" rx="28" fill="#f7edd7"/>
+    <path d="M0 28Q0 0 28 0H252Q280 0 280 28V43H0Z" fill="#9b493f"/>
+    <text x="22" y="29" class="node-id">03</text>
+    <text x="24" y="84" class="node-title">Import book</text>
+    <text x="24" y="116" class="node-copy">PDF · EPUB · privacy</text>
+  </g>
+
+  <g transform="translate(1190 150)" filter="url(#paperShadow)">
+    <rect width="300" height="150" rx="28" fill="#f7edd7"/>
+    <path d="M0 28Q0 0 28 0H272Q300 0 300 28V43H0Z" fill="#355a83"/>
+    <text x="22" y="29" class="node-id">04</text>
+    <text x="24" y="84" class="node-title">Processing</text>
+    <text x="24" y="116" class="node-copy">Chapters · cast · voices</text>
+  </g>
+
+  <g transform="translate(810 440)" filter="url(#paperShadow)">
+    <rect width="280" height="150" rx="28" fill="#f7edd7"/>
+    <path d="M0 28Q0 0 28 0H252Q280 0 280 28V43H0Z" fill="#355a83"/>
+    <text x="22" y="29" class="node-id">06</text>
+    <text x="24" y="84" class="node-title">Book details</text>
+    <text x="24" y="116" class="node-copy">Chapters · progress · cast</text>
+  </g>
+
+  <g transform="translate(1190 440)" filter="url(#paperShadow)">
+    <rect width="300" height="150" rx="28" fill="#f7edd7"/>
+    <path d="M0 28Q0 0 28 0H272Q300 0 300 28V43H0Z" fill="#9b493f"/>
+    <text x="22" y="29" class="node-id">05</text>
+    <text x="24" y="84" class="node-title">Now playing</text>
+    <text x="24" y="116" class="node-copy">Listen · seek · sleep timer</text>
+  </g>
+
+  <g transform="translate(810 700)" filter="url(#paperShadow)">
+    <rect width="280" height="150" rx="28" fill="#f7edd7"/>
+    <path d="M0 28Q0 0 28 0H252Q280 0 280 28V43H0Z" fill="#9b493f"/>
+    <text x="22" y="29" class="node-id">07</text>
+    <text x="24" y="84" class="node-title">Voice cast</text>
+    <text x="24" y="116" class="node-copy">Preview · change · apply</text>
+  </g>
+
+  <g transform="translate(1190 700)" filter="url(#paperShadow)">
+    <rect width="300" height="150" rx="28" fill="#f7edd7"/>
+    <path d="M0 28Q0 0 28 0H272Q300 0 300 28V43H0Z" fill="#355a83"/>
+    <text x="22" y="29" class="node-id">08</text>
+    <text x="24" y="84" class="node-title">Settings</text>
+    <text x="24" y="116" class="node-copy">Voices · storage · access</text>
+  </g>
+
+  <g transform="translate(430 700)" filter="url(#paperShadow)">
+    <rect width="280" height="150" rx="28" fill="#f7edd7"/>
+    <path d="M0 28Q0 0 28 0H252Q280 0 280 28V43H0Z" fill="#355a83"/>
+    <text x="22" y="29" class="node-id">09</text>
+    <text x="24" y="84" class="node-title">Current chapter</text>
+    <text x="24" y="116" class="node-copy">Read along · live passage</text>
+  </g>
+
+  <!-- Persistent navigation -->
+  <g transform="translate(350 950)" filter="url(#paperShadow)">
+    <rect width="900" height="130" rx="34" fill="#183451" stroke="#d6b06a" stroke-width="3"/>
+    <text x="34" y="40" class="node-id">PERSISTENT BOTTOM NAVIGATION</text>
+    <line x1="300" y1="60" x2="300" y2="105" stroke="#54769b" stroke-width="2"/>
+    <line x1="600" y1="60" x2="600" y2="105" stroke="#54769b" stroke-width="2"/>
+    <text x="92" y="91" class="nav-label">Library</text>
+    <text x="405" y="91" class="nav-label">Listen</text>
+    <text x="694" y="91" class="nav-label">Settings</text>
+  </g>
+
+  <path class="edge-secondary" d="M500 950C450 880 480 510 550 350"/>
+  <path class="edge-secondary" d="M800 950C970 890 1280 760 1325 590"/>
+  <path class="edge-secondary" d="M1100 950C1250 930 1335 890 1340 850"/>
+
+  <g transform="translate(65 1030)">
+    <line x1="0" y1="0" x2="70" y2="0" class="edge"/>
+    <text x="88" y="6" class="legend">Primary task flow</text>
+    <line x1="0" y1="42" x2="70" y2="42" class="edge-secondary"/>
+    <text x="88" y="48" class="legend">Cross-link or persistent navigation</text>
+  </g>
+</svg>
