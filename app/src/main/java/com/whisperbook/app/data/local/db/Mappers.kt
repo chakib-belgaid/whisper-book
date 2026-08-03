@@ -33,6 +33,8 @@ fun BookAggregate.toDomain(): Book {
         currentPassageId = book.currentPassageId,
         progressFraction = book.progressFraction.normalized(default = 0f, minimum = 0f, maximum = 1f),
         lastOpenedAtEpochMs = book.lastOpenedAtEpochMs,
+        chapterCount = chapterCount.coerceAtLeast(0),
+        currentChapterOrdinal = currentChapterOrdinal?.coerceAtLeast(0),
     )
 }
 
@@ -147,6 +149,22 @@ fun CharacterVoiceAssignment.toEntity(): VoiceAssignmentEntity = VoiceAssignment
     modelVersion = modelVersion,
     speed = speed.normalized(default = 1f, minimum = MIN_SPEAKING_SPEED, maximum = MAX_SPEAKING_SPEED),
 )
+
+fun ChapterVoiceAssignmentEntity.toDomain(): CharacterVoiceAssignment = CharacterVoiceAssignment(
+    characterId = characterId,
+    voiceId = voiceId,
+    modelVersion = modelVersion,
+    speed = speed.normalized(default = 1f, minimum = MIN_SPEAKING_SPEED, maximum = MAX_SPEAKING_SPEED),
+)
+
+fun CharacterVoiceAssignment.toChapterEntity(chapterId: String): ChapterVoiceAssignmentEntity =
+    ChapterVoiceAssignmentEntity(
+        chapterId = chapterId,
+        characterId = characterId,
+        voiceId = voiceId,
+        modelVersion = modelVersion,
+        speed = speed.normalized(default = 1f, minimum = MIN_SPEAKING_SPEED, maximum = MAX_SPEAKING_SPEED),
+    )
 
 fun AudioSegmentEntity.toDomain(): AudioSegment = AudioSegment(
     id = id,

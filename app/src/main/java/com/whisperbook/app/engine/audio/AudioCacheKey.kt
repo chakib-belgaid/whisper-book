@@ -1,7 +1,6 @@
 package com.whisperbook.app.engine.audio
 
 import com.whisperbook.app.domain.SynthesisRequest
-import java.nio.ByteBuffer
 import java.security.MessageDigest
 
 /**
@@ -35,7 +34,7 @@ object AudioCacheKey {
         digest.updateField(modelVersion)
         digest.updateInt(speed.toRawBits())
         digest.updateInt(sampleRate)
-        return digest.digest().joinToString(separator = "") { byte -> "%02x".format(byte.toInt() and 0xff) }
+        return digest.digest().toLowerHexString()
     }
 
     fun fromRequest(
@@ -82,6 +81,21 @@ object AudioCacheKey {
     }
 
     private fun MessageDigest.updateInt(value: Int) {
-        update(ByteBuffer.allocate(Int.SIZE_BYTES).putInt(value).array())
+        update((value ushr 24).toByte())
+        update((value ushr 16).toByte())
+        update((value ushr 8).toByte())
+        update(value.toByte())
     }
+
+    private fun ByteArray.toLowerHexString(): String {
+        val encoded = CharArray(size * 2)
+        forEachIndexed { index, byte ->
+            val value = byte.toInt() and 0xff
+            encoded[index * 2] = HEX_DIGITS[value ushr 4]
+            encoded[index * 2 + 1] = HEX_DIGITS[value and 0x0f]
+        }
+        return encoded.concatToString()
+    }
+
+    private const val HEX_DIGITS = "0123456789abcdef"
 }

@@ -11,15 +11,61 @@ import kotlinx.coroutines.flow.Flow
 @Dao
 interface BookDao {
     @Transaction
-    @Query("SELECT * FROM books ORDER BY last_opened_at_epoch_ms DESC, title COLLATE NOCASE ASC")
+    @Query(
+        """
+        SELECT books.*,
+            (SELECT COUNT(*) FROM chapters WHERE chapters.book_id = books.id) AS chapter_count,
+            (SELECT ordinal FROM chapters
+                WHERE chapters.id = books.current_chapter_id AND chapters.book_id = books.id
+                LIMIT 1) AS current_chapter_ordinal
+        FROM books
+        ORDER BY last_opened_at_epoch_ms DESC, title COLLATE NOCASE ASC
+        """,
+    )
     fun observeAll(): Flow<List<BookAggregate>>
 
     @Transaction
-    @Query("SELECT * FROM books WHERE id = :bookId LIMIT 1")
+    @Query(
+        """
+        SELECT books.*,
+            (SELECT COUNT(*) FROM chapters WHERE chapters.book_id = books.id) AS chapter_count,
+            (SELECT ordinal FROM chapters
+                WHERE chapters.id = books.current_chapter_id AND chapters.book_id = books.id
+                LIMIT 1) AS current_chapter_ordinal
+        FROM books
+        WHERE books.id = :bookId
+        LIMIT 1
+        """,
+    )
     fun observeById(bookId: String): Flow<BookAggregate?>
+
+    @Query("SELECT * FROM books WHERE id = :bookId LIMIT 1")
+    suspend fun getById(bookId: String): BookEntity?
 
     @Query("SELECT COUNT(*) FROM books")
     suspend fun count(): Int
+
+    @Query(
+        """
+        SELECT id FROM books
+        WHERE source_sha256 = :sourceSha256
+        ORDER BY last_opened_at_epoch_ms DESC
+        LIMIT 1
+        """,
+    )
+    suspend fun findIdBySourceSha256(sourceSha256: String): String?
+
+    @Query(
+        """
+        SELECT * FROM books
+        WHERE source_sha256 IS NOT NULL AND source_sha256 != ''
+        ORDER BY source_sha256 ASC, last_opened_at_epoch_ms DESC, id ASC
+        """,
+    )
+    suspend fun getBooksWithSourceSha256(): List<BookEntity>
+
+    @Query("SELECT COUNT(*) FROM books WHERE private_source_path = :privateSourcePath")
+    suspend fun countByPrivateSourcePath(privateSourcePath: String): Int
 
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insert(book: BookEntity)
@@ -56,6 +102,21 @@ interface ChapterDao {
     @Query("SELECT * FROM chapters WHERE id = :chapterId LIMIT 1")
     suspend fun getById(chapterId: String): ChapterAggregate?
 
+    @Query("SELECT * FROM chapters WHERE book_id = :bookId ORDER BY ordinal ASC")
+    suspend fun getHeadersForBook(bookId: String): List<ChapterEntity>
+
+    @Query(
+        """
+        SELECT
+            (SELECT ordinal FROM chapters WHERE id = :chapterId AND book_id = :bookId LIMIT 1)
+                AS chapter_ordinal,
+            COUNT(*) AS chapter_count
+        FROM chapters
+        WHERE book_id = :bookId
+        """,
+    )
+    suspend fun getProgressPosition(bookId: String, chapterId: String): ChapterProgressPosition
+
     @Upsert
     suspend fun insertAll(chapters: List<ChapterEntity>)
 
@@ -78,6 +139,9 @@ interface StoryCharacterDao {
     @Query("SELECT * FROM characters WHERE book_id = :bookId ORDER BY display_name COLLATE NOCASE ASC")
     fun observeForBook(bookId: String): Flow<List<CharacterAggregate>>
 
+    @Query("SELECT * FROM characters WHERE book_id = :bookId ORDER BY display_name COLLATE NOCASE ASC")
+    suspend fun getEntitiesForBook(bookId: String): List<StoryCharacterEntity>
+
     @Upsert
     suspend fun insertAll(characters: List<StoryCharacterEntity>)
 
@@ -96,14 +160,63 @@ interface VoiceAssignmentDao {
     @Query("SELECT * FROM voice_assignments WHERE character_id = :characterId LIMIT 1")
     fun observeForCharacter(characterId: String): Flow<VoiceAssignmentEntity?>
 
+    @Query("SELECT * FROM voice_assignments WHERE character_id IN (:characterIds)")
+    fun observeForCharacters(characterIds: List<String>): Flow<List<VoiceAssignmentEntity>>
+
     @Query("SELECT * FROM voice_assignments WHERE character_id = :characterId LIMIT 1")
     suspend fun getForCharacter(characterId: String): VoiceAssignmentEntity?
+
+    @Query("SELECT * FROM voice_assignments WHERE character_id IN (:characterIds)")
+    suspend fun getForCharacters(characterIds: List<String>): List<VoiceAssignmentEntity>
+}
+
+@Dao
+interface ChapterVoiceAssignmentDao {
+    @Query(
+        """
+        SELECT * FROM chapter_voice_assignments
+        WHERE chapter_id = :chapterId AND character_id = :characterId
+        LIMIT 1
+        """,
+    )
+    suspend fun getForChapterAndCharacter(
+        chapterId: String,
+        characterId: String,
+    ): ChapterVoiceAssignmentEntity?
+
+    @Query("SELECT * FROM chapter_voice_assignments WHERE character_id = :characterId")
+    suspend fun getForCharacter(characterId: String): List<ChapterVoiceAssignmentEntity>
+
+    @Upsert
+    suspend fun upsertAll(assignments: List<ChapterVoiceAssignmentEntity>)
+
+    @Query("DELETE FROM chapter_voice_assignments WHERE character_id = :characterId")
+    suspend fun deleteForCharacter(characterId: String)
+
+    @Query(
+        """
+        DELETE FROM chapter_voice_assignments
+        WHERE character_id = :characterId
+          AND chapter_id IN (
+              SELECT id FROM chapters
+              WHERE book_id = :bookId AND ordinal >= :fromChapterOrdinal
+          )
+        """,
+    )
+    suspend fun deleteForCharacterFromChapterOrdinal(
+        characterId: String,
+        bookId: String,
+        fromChapterOrdinal: Int,
+    )
 }
 
 @Dao
 interface AudioSegmentDao {
     @Query("SELECT * FROM audio_segments WHERE cache_key = :cacheKey LIMIT 1")
     suspend fun findByCacheKey(cacheKey: String): AudioSegmentEntity?
+
+    @Query("SELECT * FROM audio_segments WHERE cache_key IN (:cacheKeys)")
+    suspend fun findByCacheKeys(cacheKeys: List<String>): List<AudioSegmentEntity>
 
     @Query("SELECT * FROM audio_segments WHERE passage_id = :passageId ORDER BY id ASC")
     fun observeForPassage(passageId: String): Flow<List<AudioSegmentEntity>>
@@ -119,6 +232,19 @@ interface AudioSegmentDao {
 
     @Query(
         """
+        SELECT audio_segments.path FROM audio_segments
+        INNER JOIN passages ON passages.id = audio_segments.passage_id
+        INNER JOIN chapters ON chapters.id = passages.chapter_id
+        WHERE chapters.book_id = :bookId AND audio_segments.path IS NOT NULL
+        """,
+    )
+    suspend fun getPathsForBook(bookId: String): List<String>
+
+    @Query("SELECT COUNT(*) FROM audio_segments WHERE path = :path")
+    suspend fun countByPath(path: String): Int
+
+    @Query(
+        """
         DELETE FROM audio_segments
         WHERE passage_id IN (
             SELECT id FROM passages WHERE speaker_id = :characterId
@@ -126,6 +252,39 @@ interface AudioSegmentDao {
         """,
     )
     suspend fun deleteForCharacter(characterId: String)
+
+    @Query(
+        """
+        SELECT passages.id FROM passages
+        INNER JOIN chapters ON chapters.id = passages.chapter_id
+        WHERE passages.speaker_id = :characterId
+          AND chapters.book_id = :bookId
+          AND chapters.ordinal >= :fromChapterOrdinal
+        """,
+    )
+    suspend fun getPassageIdsForCharacterFromChapterOrdinal(
+        characterId: String,
+        bookId: String,
+        fromChapterOrdinal: Int,
+    ): List<String>
+
+    @Query(
+        """
+        DELETE FROM audio_segments
+        WHERE passage_id IN (
+            SELECT passages.id FROM passages
+            INNER JOIN chapters ON chapters.id = passages.chapter_id
+            WHERE passages.speaker_id = :characterId
+              AND chapters.book_id = :bookId
+              AND chapters.ordinal >= :fromChapterOrdinal
+        )
+        """,
+    )
+    suspend fun deleteForCharacterFromChapterOrdinal(
+        characterId: String,
+        bookId: String,
+        fromChapterOrdinal: Int,
+    )
 }
 
 @Dao

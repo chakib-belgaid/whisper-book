@@ -13,6 +13,7 @@ import com.whisperbook.app.domain.ImportedBook
 import com.whisperbook.app.domain.model.BookFormat
 import java.io.File
 import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -47,6 +48,20 @@ class PdfAndroidParserTest {
         assertTrue(text.contains("forest", ignoreCase = true))
     }
 
+    @Test
+    fun reportsTextLayerProgressByPageBatch() = runBlocking {
+        val file = File(context.cacheDir, "progress-story.pdf")
+        writePdf(file, scanned = false, pageCount = 9)
+        val updates = mutableListOf<Pair<Int, Int>>()
+
+        OfflinePublicationExtractor(context).extract(imported(file)) { completed, total ->
+            updates += completed to total
+        }.getOrThrow()
+
+        assertEquals(8 to 9, updates.first())
+        assertEquals(9 to 9, updates.last())
+    }
+
     private fun imported(file: File) = ImportedBook(
         title = "Offline PDF Story",
         author = "Device Test",
@@ -55,19 +70,21 @@ class PdfAndroidParserTest {
         sha256 = "device-test",
     )
 
-    private fun writePdf(file: File, scanned: Boolean) {
+    private fun writePdf(file: File, scanned: Boolean, pageCount: Int = 1) {
         val document = PdfDocument()
-        val pageInfo = PdfDocument.PageInfo.Builder(PAGE_WIDTH, PAGE_HEIGHT, 1).create()
-        val page = document.startPage(pageInfo)
-        if (scanned) {
-            val bitmap = Bitmap.createBitmap(PAGE_WIDTH, PAGE_HEIGHT, Bitmap.Config.ARGB_8888)
-            drawStory(Canvas(bitmap))
-            page.canvas.drawBitmap(bitmap, 0f, 0f, null)
-            bitmap.recycle()
-        } else {
-            drawStory(page.canvas)
+        repeat(pageCount) { pageIndex ->
+            val pageInfo = PdfDocument.PageInfo.Builder(PAGE_WIDTH, PAGE_HEIGHT, pageIndex + 1).create()
+            val page = document.startPage(pageInfo)
+            if (scanned) {
+                val bitmap = Bitmap.createBitmap(PAGE_WIDTH, PAGE_HEIGHT, Bitmap.Config.ARGB_8888)
+                drawStory(Canvas(bitmap))
+                page.canvas.drawBitmap(bitmap, 0f, 0f, null)
+                bitmap.recycle()
+            } else {
+                drawStory(page.canvas)
+            }
+            document.finishPage(page)
         }
-        document.finishPage(page)
         file.outputStream().use(document::writeTo)
         document.close()
     }

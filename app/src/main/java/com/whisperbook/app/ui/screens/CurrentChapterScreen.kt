@@ -2,8 +2,6 @@ package com.whisperbook.app.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -47,9 +45,13 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.whisperbook.app.ui.components.FloatingMiniPlayer
+import com.whisperbook.app.ui.components.AssetFittedText
 import com.whisperbook.app.ui.components.LeafOrnament
+import com.whisperbook.app.ui.components.PaperFold
 import com.whisperbook.app.ui.components.ParchmentPanel
 import com.whisperbook.app.ui.components.SpeakerPassageCard
+import com.whisperbook.app.ui.components.paperClickable
+import com.whisperbook.app.ui.components.paperToggleable
 import com.whisperbook.app.ui.theme.WhisperbookTheme
 
 @Composable
@@ -90,6 +92,18 @@ fun CurrentChapterScreen(
                 onAutoScrollChange = appState::updateAutoScroll,
                 onChooseChapter = { showChapterPicker = true },
             )
+            if (appState.isBusy && !appState.statusMessage.isNullOrBlank()) {
+                Text(
+                    text = appState.statusMessage.orEmpty(),
+                    color = WhisperbookTheme.colors.inkMuted,
+                    style = WhisperbookTheme.typography.label,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(vertical = 4.dp)
+                        .testTag("chapter-loading-status"),
+                )
+            }
             LazyColumn(
                 state = listState,
                 modifier = Modifier.weight(1f).fillMaxWidth(),
@@ -135,8 +149,10 @@ fun CurrentChapterScreen(
                 isPlaying = appState.isPlaying,
                 progress = appState.chapterProgress,
                 onPlayPause = appState::togglePlayback,
-                onRewind = { appState.seekBy(-.05f) },
-                onForward = { appState.seekBy(.05f) },
+                onPreviousChapter = appState::playPreviousChapter,
+                onNextChapter = appState::playNextChapter,
+                hasPreviousChapter = appState.hasPreviousChapter,
+                hasNextChapter = appState.hasNextChapter,
                 onSeek = appState::seekTo,
                 modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth().testTag("reader-mini-player"),
             )
@@ -186,7 +202,11 @@ private fun ReaderHeaderButton(
     content: @Composable () -> Unit,
 ) {
     Box(
-        modifier = modifier.size(48.dp).clip(CircleShape).toggleable(value = false, role = Role.Button, onValueChange = { onClick() }).semantics { contentDescription = description },
+        modifier = modifier
+            .size(48.dp)
+            .paperClickable(onClick = onClick, role = Role.Button, fold = PaperFold.Control)
+            .clip(CircleShape)
+            .semantics { contentDescription = description },
         contentAlignment = Alignment.Center,
     ) {
         Box(
@@ -211,20 +231,19 @@ private fun ReaderChapterPlate(
         shape = RoundedCornerShape(topStart = 54.dp, topEnd = 54.dp, bottomStart = 3.dp, bottomEnd = 3.dp),
         contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
     ) {
-        Text(
-            title,
+        AssetFittedText(
+            text = title,
             color = WhisperbookTheme.colors.ink,
             style = WhisperbookTheme.typography.display.copy(fontSize = 27.sp, lineHeight = 29.sp),
+            minFontSize = 14.sp,
             textAlign = TextAlign.Center,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
             modifier = Modifier.fillMaxWidth(),
         )
         Row(
             Modifier
                 .fillMaxWidth()
+                .paperClickable(onClick = onChooseChapter, role = Role.Button, fold = PaperFold.Card)
                 .clip(RoundedCornerShape(50))
-                .clickable(role = Role.Button, onClick = onChooseChapter)
                 .semantics {
                     contentDescription = "Choose chapter, currently $chapterNumber of $totalChapters"
                 }
@@ -268,7 +287,12 @@ private fun CompactReaderToggle(checked: Boolean, onCheckedChange: (Boolean) -> 
     Box(
         modifier = Modifier
             .size(width = 48.dp, height = 36.dp)
-            .toggleable(value = checked, role = Role.Switch, onValueChange = onCheckedChange)
+            .paperToggleable(
+                value = checked,
+                role = Role.Switch,
+                onValueChange = onCheckedChange,
+                fold = PaperFold.Toggle,
+            )
             .semantics {
                 contentDescription = "Auto-scroll current passage"
                 stateDescription = if (checked) "On" else "Off"

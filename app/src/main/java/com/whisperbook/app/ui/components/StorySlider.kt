@@ -1,9 +1,11 @@
 package com.whisperbook.app.ui.components
 
 import androidx.compose.foundation.layout.defaultMinSize
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.material3.Slider
 import androidx.compose.material3.SliderDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -20,15 +22,18 @@ fun StorySlider(
     onValueChangeFinished: (() -> Unit)? = null,
 ) {
     val colors = WhisperbookTheme.colors
+    val interactionSource = remember { MutableInteractionSource() }
     Slider(
         value = value.coerceIn(valueRange),
         onValueChange = onValueChange,
         modifier = modifier
+            .paperFold(interactionSource, enabled, PaperFold.Toggle)
             .defaultMinSize(minHeight = WhisperbookTheme.components.minimumTouchTarget)
             .semantics { stateDescription = valueDescription(value) },
         enabled = enabled,
         valueRange = valueRange,
         onValueChangeFinished = onValueChangeFinished,
+        interactionSource = interactionSource,
         colors = SliderDefaults.colors(
             thumbColor = colors.ornament,
             activeTrackColor = colors.action,

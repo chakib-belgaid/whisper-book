@@ -3,7 +3,6 @@ package com.whisperbook.app.ui.screens
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -25,6 +24,7 @@ import androidx.compose.material.icons.outlined.AutoStories
 import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material.icons.outlined.Settings
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -48,11 +48,15 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.whisperbook.app.R
+import com.whisperbook.app.ui.components.AssetFittedText
+import com.whisperbook.app.ui.components.ChapterNavigationButton
 import com.whisperbook.app.ui.components.EmbossedCircularButton
-import com.whisperbook.app.ui.components.FifteenSecondButton
 import com.whisperbook.app.ui.components.LeafOrnament
+import com.whisperbook.app.ui.components.PaperFold
 import com.whisperbook.app.ui.components.PaperProgressBar
 import com.whisperbook.app.ui.components.ParchmentPanel
+import com.whisperbook.app.ui.components.TheatreTitleSafeWidthFraction
+import com.whisperbook.app.ui.components.paperClickable
 import com.whisperbook.app.ui.theme.WhisperbookTheme
 
 @Composable
@@ -151,7 +155,7 @@ private fun PlayerTheatre(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .clickable(role = Role.Button, onClick = onBookDetails)
+            .paperClickable(onClick = onBookDetails, role = Role.Button, fold = PaperFold.Card)
             .semantics { contentDescription = "$bookTitle, chapter $chapterNumber. Open book details" }
             .testTag("player-theatre"),
     ) {
@@ -176,14 +180,18 @@ private fun PlayerTheatre(
             contentScale = ContentScale.FillBounds,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 42.dp).align(Alignment.TopCenter).padding(top = 55.dp).height(44.dp),
         )
-        Text(
+        AssetFittedText(
             text = bookTitle,
             color = WhisperbookTheme.colors.ink,
             style = WhisperbookTheme.typography.display.copy(fontSize = 21.sp, lineHeight = 24.sp),
+            minFontSize = 10.sp,
+            maxLines = 2,
             textAlign = TextAlign.Center,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.align(Alignment.TopCenter).fillMaxWidth(.68f).padding(top = 8.dp),
+            modifier = Modifier
+                .align(Alignment.TopCenter)
+                .fillMaxWidth(TheatreTitleSafeWidthFraction)
+                .height(38.dp)
+                .padding(top = 8.dp),
         )
         Row(
             modifier = Modifier
@@ -229,7 +237,10 @@ private fun CompactHeaderButton(
     content: @Composable () -> Unit,
 ) {
     Box(
-        modifier = modifier.size(48.dp).clickable(role = Role.Button, onClick = onClick).semantics { contentDescription = description },
+        modifier = modifier
+            .size(48.dp)
+            .paperClickable(onClick = onClick, role = Role.Button, fold = PaperFold.Control)
+            .semantics { contentDescription = description },
         contentAlignment = Alignment.Center,
     ) {
         Box(
@@ -268,15 +279,38 @@ private fun PlayerControlDeck(
             modifier = Modifier.fillMaxWidth(),
         )
         Row(Modifier.fillMaxWidth().height(62.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceEvenly) {
-            PlayerTransport("Back 15 seconds", forward = false) { appState.seekBy(-.05f) }
+            PlayerTransport(
+                description = "Previous chapter",
+                forward = false,
+                enabled = appState.hasPreviousChapter,
+                onClick = appState::playPreviousChapter,
+            )
             EmbossedCircularButton(
                 onClick = appState::togglePlayback,
-                contentDescription = if (appState.isPlaying) "Pause" else "Play",
+                contentDescription = when {
+                    appState.isChapterLoading -> "Preparing chapter audio"
+                    appState.isPlaying -> "Pause"
+                    else -> "Play"
+                },
+                enabled = !appState.isChapterLoading,
                 size = 59.dp,
             ) {
-                Icon(if (appState.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(30.dp))
+                if (appState.isChapterLoading) {
+                    CircularProgressIndicator(
+                        color = WhisperbookTheme.colors.onStage,
+                        strokeWidth = 2.dp,
+                        modifier = Modifier.size(25.dp),
+                    )
+                } else {
+                    Icon(if (appState.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(30.dp))
+                }
             }
-            PlayerTransport("Forward 15 seconds", forward = true) { appState.seekBy(.05f) }
+            PlayerTransport(
+                description = "Next chapter",
+                forward = true,
+                enabled = appState.hasNextChapter,
+                onClick = appState::playNextChapter,
+            )
         }
         Row(
             Modifier.fillMaxWidth().height(38.dp).border(width = 1.dp, color = WhisperbookTheme.colors.outline.copy(alpha = .28f), shape = RoundedCornerShape(1.dp)),
@@ -303,7 +337,11 @@ private fun PlayerControlDeck(
             LeafOrnament(Modifier.size(width = 22.dp, height = 10.dp), WhisperbookTheme.colors.outline)
         }
         Row(
-            modifier = Modifier.fillMaxWidth().height(66.dp).clickable(role = Role.Button, onClick = onVoiceCast).semantics { contentDescription = "Open voice cast" },
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(66.dp)
+                .paperClickable(onClick = onVoiceCast, role = Role.Button, fold = PaperFold.Card)
+                .semantics { contentDescription = "Open voice cast" },
             horizontalArrangement = Arrangement.SpaceEvenly,
             verticalAlignment = Alignment.CenterVertically,
         ) {
@@ -315,9 +353,9 @@ private fun PlayerControlDeck(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(40.dp)
+                .paperClickable(onClick = onChooseChapter, role = Role.Button, fold = PaperFold.Card)
                 .clip(RoundedCornerShape(9.dp))
                 .border(1.dp, WhisperbookTheme.colors.outline.copy(alpha = .65f), RoundedCornerShape(9.dp))
-                .clickable(role = Role.Button, onClick = onChooseChapter)
                 .semantics { contentDescription = "Choose chapter, currently ${appState.currentChapterNumber} of ${appState.totalChapters}" },
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Center,
@@ -368,10 +406,24 @@ internal fun formatPlaybackRemaining(milliseconds: Long): String {
 }
 
 @Composable
-private fun PlayerTransport(description: String, forward: Boolean, onClick: () -> Unit) {
+private fun PlayerTransport(
+    description: String,
+    forward: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        FifteenSecondButton(onClick = onClick, description = description, forward = forward)
-        Text(if (forward) "Forward 15s" else "Back 15s", color = WhisperbookTheme.colors.ink, style = WhisperbookTheme.typography.body.copy(fontSize = 10.sp, lineHeight = 11.sp))
+        ChapterNavigationButton(
+            onClick = onClick,
+            description = description,
+            forward = forward,
+            enabled = enabled,
+        )
+        Text(
+            if (forward) "Next chapter" else "Previous chapter",
+            color = if (enabled) WhisperbookTheme.colors.ink else WhisperbookTheme.colors.inkMuted,
+            style = WhisperbookTheme.typography.body.copy(fontSize = 10.sp, lineHeight = 11.sp),
+        )
     }
 }
 
@@ -384,7 +436,10 @@ private fun DeckSetting(
     leading: (@Composable () -> Unit)? = null,
 ) {
     Row(
-        modifier = modifier.fillMaxSize().clickable(role = Role.Button, onClick = onClick).semantics { contentDescription = "$secondary, $primary" },
+        modifier = modifier
+            .fillMaxSize()
+            .paperClickable(onClick = onClick, role = Role.Button, fold = PaperFold.Control)
+            .semantics { contentDescription = "$secondary, $primary" },
         horizontalArrangement = Arrangement.Center,
         verticalAlignment = Alignment.CenterVertically,
     ) {

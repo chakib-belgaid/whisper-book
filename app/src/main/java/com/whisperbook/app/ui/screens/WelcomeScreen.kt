@@ -15,11 +15,13 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -34,6 +36,8 @@ import com.whisperbook.app.R
 import com.whisperbook.app.ui.components.LeafDivider
 import com.whisperbook.app.ui.components.LeafOrnament
 import com.whisperbook.app.ui.components.ParchmentPanel
+import com.whisperbook.app.ui.components.PaperFold
+import com.whisperbook.app.ui.components.paperFold
 import com.whisperbook.app.ui.theme.WhisperbookTheme
 
 /**
@@ -207,11 +211,14 @@ private fun WelcomeButton(
 ) {
     val colors = WhisperbookTheme.colors
     val shape = RoundedCornerShape(10.dp)
+    val interactionSource = remember { MutableInteractionSource() }
     Button(
         onClick = onClick,
+        interactionSource = interactionSource,
         modifier = modifier
             .width(258.dp)
             .height(46.dp)
+            .paperFold(interactionSource, fold = PaperFold.Control)
             .shadow(
                 elevation = if (dark) 4.dp else 2.dp,
                 shape = shape,

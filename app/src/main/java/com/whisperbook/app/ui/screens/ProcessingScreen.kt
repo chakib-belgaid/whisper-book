@@ -1,5 +1,10 @@
 package com.whisperbook.app.ui.screens
 
+import android.Manifest
+import android.content.pm.PackageManager
+import android.os.Build
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -38,6 +43,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.contentDescription
@@ -51,7 +57,10 @@ import com.whisperbook.app.R
 import com.whisperbook.app.ui.components.PapercraftButton
 import com.whisperbook.app.ui.components.PapercraftButtonVariant
 import com.whisperbook.app.ui.components.ParchmentPanel
+import com.whisperbook.app.ui.components.AssetFittedText
+import com.whisperbook.app.ui.components.TheatreTitleSafeWidthFraction
 import com.whisperbook.app.ui.theme.WhisperbookTheme
+import androidx.core.content.ContextCompat
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
@@ -72,6 +81,10 @@ fun ProcessingScreen(
     onBackToImport: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val context = LocalContext.current
+    val notificationPermission = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { }
     LaunchedEffect(appState.importedUri, appState.isProductionBacked) {
         if (appState.importedUri != null && !appState.isProductionBacked) {
             repeat(3) {
@@ -144,7 +157,22 @@ fun ProcessingScreen(
             } else {
                 "Continue in background"
             },
-            onClick = if (appState.preparationStage >= 3) onReady else onContinueInBackground,
+            onClick = if (appState.preparationStage >= 3) {
+                onReady
+            } else {
+                {
+                    if (
+                        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                        ContextCompat.checkSelfPermission(
+                            context,
+                            Manifest.permission.POST_NOTIFICATIONS,
+                        ) != PackageManager.PERMISSION_GRANTED
+                    ) {
+                        notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    }
+                    onContinueInBackground()
+                }
+            },
             variant = PapercraftButtonVariant.Accent,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
             isLoading = appState.isBusy,
@@ -185,15 +213,17 @@ private fun ProcessingTheatre(
                 .height(142.dp)
                 .clip(RoundedCornerShape(topStart = 60.dp, topEnd = 60.dp, bottomStart = 5.dp, bottomEnd = 5.dp)),
         )
-        Text(
+        AssetFittedText(
             text = title,
             color = WhisperbookTheme.colors.ink,
             style = WhisperbookTheme.typography.title.copy(fontSize = 24.sp, lineHeight = 28.sp),
+            minFontSize = 10.sp,
+            maxLines = 2,
             textAlign = TextAlign.Center,
-            maxLines = 1,
             modifier = Modifier
-                .fillMaxWidth(0.73f)
-                .padding(top = 14.dp),
+                .fillMaxWidth(TheatreTitleSafeWidthFraction)
+                .height(50.dp)
+                .padding(top = 10.dp, bottom = 4.dp),
         )
     }
 }

@@ -17,6 +17,8 @@ data class Book(
     val currentPassageId: String?,
     val progressFraction: Float,
     val lastOpenedAtEpochMs: Long,
+    val chapterCount: Int = 0,
+    val currentChapterOrdinal: Int? = null,
 )
 
 enum class BookFormat { PDF, EPUB }
@@ -120,6 +122,24 @@ data class PlaybackCursor(
     val speed: Float,
     val segmentDurationMs: Long = 0L,
 )
+
+@Immutable
+data class PlaybackPreparationProgress(
+    val bookId: String,
+    val chapterId: String,
+    val completedSegments: Int,
+    val totalSegments: Int,
+) {
+    init {
+        require(bookId.isNotBlank())
+        require(chapterId.isNotBlank())
+        require(totalSegments > 0)
+        require(completedSegments in 0..totalSegments)
+    }
+
+    val progressFraction: Float
+        get() = completedSegments.toFloat() / totalSegments
+}
 
 @Immutable
 data class AppSettings(

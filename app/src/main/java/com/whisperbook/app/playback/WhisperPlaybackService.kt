@@ -2,11 +2,13 @@ package com.whisperbook.app.playback
 
 import android.os.Bundle
 import android.os.SystemClock
+import android.util.Log
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
 import androidx.media3.session.SessionCommand
@@ -45,6 +47,18 @@ class WhisperPlaybackService : MediaSessionService() {
             )
             publishCursor(forceCheckpoint)
         }
+
+        override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
+            Log.i(LOG_TAG, "playWhenReady=$playWhenReady reason=$reason")
+        }
+
+        override fun onPlaybackStateChanged(playbackState: Int) {
+            Log.i(LOG_TAG, "playbackState=$playbackState item=${player.currentMediaItemIndex}")
+        }
+
+        override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
+            Log.e(LOG_TAG, "Playback failed", error)
+        }
     }
 
     override fun onCreate() {
@@ -57,6 +71,17 @@ class WhisperPlaybackService : MediaSessionService() {
             .setAudioAttributes(audiobookAudioAttributes, true)
             .setHandleAudioBecomingNoisy(true)
             .setWakeMode(C.WAKE_MODE_LOCAL)
+            .setLoadControl(
+                DefaultLoadControl.Builder()
+                    .setBufferDurationsMs(
+                        MIN_AUDIO_BUFFER_MS,
+                        MAX_AUDIO_BUFFER_MS,
+                        BUFFER_FOR_PLAYBACK_MS,
+                        BUFFER_AFTER_REBUFFER_MS,
+                    )
+                    .setPrioritizeTimeOverSizeThresholds(true)
+                    .build(),
+            )
             .setSeekBackIncrementMs(SEEK_INCREMENT_MS)
             .setSeekForwardIncrementMs(SEEK_INCREMENT_MS)
             .build()
@@ -171,6 +196,11 @@ class WhisperPlaybackService : MediaSessionService() {
         const val SEEK_INCREMENT_MS = 15_000L
         const val CURSOR_UPDATE_INTERVAL_MS = 250L
         const val CHECKPOINT_INTERVAL_MS = 5_000L
+        const val MIN_AUDIO_BUFFER_MS = 2 * 60_000
+        const val MAX_AUDIO_BUFFER_MS = 5 * 60_000
+        const val BUFFER_FOR_PLAYBACK_MS = 500
+        const val BUFFER_AFTER_REBUFFER_MS = 1_000
+        const val LOG_TAG = "WhisperPlayback"
     }
 }
 

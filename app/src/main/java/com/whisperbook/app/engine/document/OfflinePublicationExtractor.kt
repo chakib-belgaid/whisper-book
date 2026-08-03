@@ -16,8 +16,10 @@ import java.net.URI
 import java.util.zip.ZipFile
 import javax.xml.XMLConstants
 import javax.xml.parsers.DocumentBuilderFactory
+import kotlin.coroutines.coroutineContext
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
@@ -27,6 +29,15 @@ import org.w3c.dom.Document
 /** Injection boundary used by the production page-at-a-time bundled OCR and deterministic tests. */
 fun interface PdfOcrHook {
     suspend fun extractText(file: File): String?
+
+    suspend fun extractText(
+        file: File,
+        onProgress: suspend (completedUnits: Int, totalUnits: Int) -> Unit,
+    ): String? {
+        val text = extractText(file)
+        onProgress(1, 1)
+        return text
+    }
 }
 
 class OfflinePublicationExtractor(
@@ -37,13 +48,20 @@ class OfflinePublicationExtractor(
     private val applicationContext = context.applicationContext
 
     override suspend fun extract(book: ImportedBook): Result<ExtractedPublication> =
+        extract(book) { _, _ -> }
+
+    override suspend fun extract(
+        book: ImportedBook,
+        onProgress: suspend (completedUnits: Int, totalUnits: Int) -> Unit,
+    ): Result<ExtractedPublication> =
         withContext(Dispatchers.IO) {
             try {
                 Result.success(
-                when (book.format) {
-                    BookFormat.EPUB -> EpubPublicationParser(chapterDetector).extract(book)
-                    BookFormat.PDF -> extractPdf(book)
-                },
+                    when (book.format) {
+                        BookFormat.EPUB -> EpubPublicationParser(chapterDetector).extract(book)
+                            .also { onProgress(1, 1) }
+                        BookFormat.PDF -> extractPdf(book, onProgress)
+                    },
                 )
             } catch (cancellation: CancellationException) {
                 throw cancellation
@@ -52,12 +70,30 @@ class OfflinePublicationExtractor(
             }
         }
 
-    private suspend fun extractPdf(book: ImportedBook): ExtractedPublication {
+    private suspend fun extractPdf(
+        book: ImportedBook,
+        onProgress: suspend (completedUnits: Int, totalUnits: Int) -> Unit,
+    ): ExtractedPublication {
         PDFBoxResourceLoader.init(applicationContext)
         val pdfData = try {
             PDDocument.load(book.privateFile).use { document ->
+                val pageCount = document.numberOfPages
+                if (pageCount <= 0) throw EmptyPdfException("The PDF contains no pages.")
+                val text = StringBuilder()
+                for (firstPage in 1..pageCount step PDF_TEXT_BATCH_SIZE) {
+                    coroutineContext.ensureActive()
+                    val lastPage = minOf(firstPage + PDF_TEXT_BATCH_SIZE - 1, pageCount)
+                    val batch = PDFTextStripper().apply {
+                        sortByPosition = true
+                        startPage = firstPage
+                        endPage = lastPage
+                    }.getText(document)
+                    if (text.isNotEmpty() && batch.isNotBlank()) text.append('\n')
+                    text.append(batch)
+                    onProgress(lastPage, pageCount)
+                }
                 Triple(
-                    PDFTextStripper().apply { sortByPosition = true }.getText(document),
+                    text.toString(),
                     document.documentInformation?.title?.trim()?.takeIf(String::isNotBlank),
                     document.documentInformation?.author?.trim()?.takeIf(String::isNotBlank),
                 )
@@ -69,7 +105,7 @@ class OfflinePublicationExtractor(
         }
 
         val extractedText = if (pdfData.first.isBlank()) {
-            pdfOcrHook.extractText(book.privateFile).orEmpty().takeIf(String::isNotBlank)
+            pdfOcrHook.extractText(book.privateFile, onProgress).orEmpty().takeIf(String::isNotBlank)
                 ?: throw EmptyPdfException("No text was recognized on any PDF page.")
         } else pdfData.first
 
@@ -80,6 +116,10 @@ class OfflinePublicationExtractor(
             author = pdfData.third ?: book.author,
             chapters = chapters.map { ExtractedChapter(it.title, it.paragraphs) },
         )
+    }
+
+    private companion object {
+        const val PDF_TEXT_BATCH_SIZE = 8
     }
 }
 

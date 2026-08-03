@@ -24,10 +24,14 @@ class AndroidPdfOcrHookTest {
             pageSourceFactory = PdfPageSourceFactory { source },
             recognizerFactory = OcrPageRecognizerFactory { recognizer },
         )
+        val progress = mutableListOf<Pair<Int, Int>>()
 
-        val output = hook.extractText(File("synthetic.pdf"))
+        val output = hook.extractText(File("synthetic.pdf")) { completed, total ->
+            progress += completed to total
+        }
 
         assertEquals("First page.\n\nSecond paragraph.\n\nThird page.", output)
+        assertEquals(listOf(1 to 2, 2 to 2), progress)
         assertEquals(listOf(0, 1), source.renderOrder)
         assertEquals(listOf(0, 1), recognizer.recognitionOrder)
         assertTrue(source.renderedPages.all(FakePage::closed))

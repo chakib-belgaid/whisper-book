@@ -5,6 +5,7 @@ import android.content.Context
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
 import androidx.media3.session.MediaController
@@ -13,16 +14,23 @@ import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
 import com.whisperbook.app.domain.PlaybackGateway
 import com.whisperbook.app.domain.model.PlaybackCursor
+import com.whisperbook.app.domain.model.PlaybackPreparationProgress
 import java.io.Closeable
 import java.util.concurrent.Executor
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import kotlin.coroutines.coroutineContext
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
@@ -39,8 +47,10 @@ class ControllerBackedPlaybackGateway(
     private val appContext = context.applicationContext
     private val continuationScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var connectedController: MediaController? = null
+    private var chapterPreparationJob: Job? = null
     private var nextChapterJob: Job? = null
     private var prefetchedAfterChapterKey: String? = null
+    private val queueGeneration = AtomicLong()
     private val controllerFuture = MediaController.Builder(
         appContext,
         SessionToken(appContext, ComponentName(appContext, WhisperPlaybackService::class.java)),
@@ -74,25 +84,64 @@ class ControllerBackedPlaybackGateway(
     }
 
     override val cursor: StateFlow<PlaybackCursor?> = PlaybackRuntime.cursor
+    override val preparationProgress = MutableStateFlow<PlaybackPreparationProgress?>(null)
 
     override suspend fun playBook(bookId: String, chapterId: String?) {
-        val queue = queueSource.load(bookId, chapterId).getOrThrow()
-        val mediaItems = PlaybackMediaItems.create(queue)
-        val startIndex = queue.startPassageId
-            ?.let { passageId -> mediaItems.indexOfFirst { PlaybackMediaItems.descriptor(it)?.passageId == passageId } }
-            ?.takeIf { it >= 0 }
-            ?: 0
-        val startDuration = PlaybackMediaItems.descriptor(mediaItems[startIndex])?.segmentDurationMs ?: 0L
-        val startPosition = queue.startSegmentPositionMs.coerceIn(0L, startDuration)
-
-        withController { controller ->
+        Log.i(LOG_TAG, "playBook book=$bookId chapter=$chapterId")
+        val generation = queueGeneration.incrementAndGet()
+        withContext(Dispatchers.Main.immediate) {
+            connectedController?.pause()
+            chapterPreparationJob?.cancel()
             nextChapterJob?.cancel()
             prefetchedAfterChapterKey = null
-            controller.setMediaItems(mediaItems, startIndex, startPosition)
-            controller.prepare()
-            controller.play()
-            PlaybackMediaItems.descriptor(controller.currentMediaItem)?.let(::prefetchFollowingChapter)
+            preparationProgress.value = null
         }
+        val firstQueueReady = CompletableDeferred<Unit>()
+        chapterPreparationJob = continuationScope.launch {
+            try {
+                queueSource.loadProgressively(bookId, chapterId) { queue, completed, total ->
+                    if (generation != queueGeneration.get()) return@loadProgressively
+                    val progressChapterId = queue?.chapterId ?: chapterId
+                    if (progressChapterId != null) {
+                        preparationProgress.value = PlaybackPreparationProgress(
+                            bookId = bookId,
+                            chapterId = progressChapterId,
+                            completedSegments = completed,
+                            totalSegments = total,
+                        )
+                    }
+                    if (queue != null) {
+                        applyProgressiveQueue(generation, queue, firstQueueReady)
+                    }
+                }.getOrThrow()
+                if (!firstQueueReady.isCompleted) {
+                    firstQueueReady.completeExceptionally(
+                        IllegalStateException("This chapter did not produce playable audio"),
+                    )
+                }
+                if (generation == queueGeneration.get()) {
+                    preparationProgress.value = null
+                    PlaybackMediaItems.descriptor(connectedController?.currentMediaItem)
+                        ?.let(::prefetchFollowingChapter)
+                }
+            } catch (cancellation: CancellationException) {
+                if (!firstQueueReady.isCompleted) firstQueueReady.complete(Unit)
+                throw cancellation
+            } catch (failure: Throwable) {
+                if (!firstQueueReady.isCompleted) firstQueueReady.completeExceptionally(failure)
+                if (generation == queueGeneration.get()) preparationProgress.value = null
+            }
+        }
+        try {
+            firstQueueReady.await()
+        } catch (cancellation: CancellationException) {
+            if (generation == queueGeneration.get()) {
+                chapterPreparationJob?.cancel()
+                preparationProgress.value = null
+            }
+            throw cancellation
+        }
+        coroutineContext.ensureActive()
     }
 
     override suspend fun play() = withController { controller ->
@@ -100,7 +149,10 @@ class ControllerBackedPlaybackGateway(
         controller.play()
     }
 
-    override suspend fun pause() = withController(MediaController::pause)
+    override suspend fun pause() = withController { controller ->
+        Log.i(LOG_TAG, "pause requested by gateway")
+        controller.pause()
+    }
 
     override suspend fun seekBy(deltaMs: Long) = withController { controller ->
         val descriptor = PlaybackMediaItems.descriptor(controller.currentMediaItem) ?: return@withController
@@ -146,8 +198,31 @@ class ControllerBackedPlaybackGateway(
         }
     }
 
+    override suspend fun invalidateQueuedChapters(bookId: String, chapterIds: Set<String>) {
+        if (chapterIds.isEmpty()) return
+        withController { controller ->
+            nextChapterJob?.cancel()
+            nextChapterJob = null
+            prefetchedAfterChapterKey = null
+
+            val current = PlaybackMediaItems.descriptor(controller.currentMediaItem)
+            val currentChapterId = current?.takeIf { it.bookId == bookId }?.chapterId
+            val removableIndices = (0 until controller.mediaItemCount).filter { index ->
+                val descriptor = PlaybackMediaItems.descriptor(controller.getMediaItemAt(index))
+                    ?: return@filter false
+                descriptor.bookId == bookId &&
+                    descriptor.chapterId in chapterIds &&
+                    descriptor.chapterId != currentChapterId
+            }
+            removableIndices.asReversed().forEach(controller::removeMediaItem)
+        }
+    }
+
     override fun close() {
+        queueGeneration.incrementAndGet()
+        chapterPreparationJob?.cancel()
         nextChapterJob?.cancel()
+        preparationProgress.value = null
         connectedController = null
         continuationScope.cancel()
         if (Looper.myLooper() == Looper.getMainLooper()) {
@@ -162,6 +237,8 @@ class ControllerBackedPlaybackGateway(
     private fun prefetchFollowingChapter(current: PlaybackMediaDescriptor) {
         val controller = connectedController ?: return
         val chapterKey = "${current.bookId}\u0000${current.chapterId}"
+        val activePreparation = preparationProgress.value
+        if (activePreparation?.bookId == current.bookId && activePreparation.chapterId == current.chapterId) return
         if (prefetchedAfterChapterKey == chapterKey) return
         if (controller.hasChapterAfter(current.chapterId)) {
             prefetchedAfterChapterKey = chapterKey
@@ -170,9 +247,13 @@ class ControllerBackedPlaybackGateway(
 
         nextChapterJob?.cancel()
         prefetchedAfterChapterKey = chapterKey
+        val generation = queueGeneration.get()
         nextChapterJob = continuationScope.launch {
             val nextQueue = queueSource.loadNext(current.bookId, current.chapterId).getOrNull() ?: return@launch
-            val nextItems = runCatching { PlaybackMediaItems.create(nextQueue) }.getOrNull() ?: return@launch
+            if (generation != queueGeneration.get()) return@launch
+            val nextItems = withContext(Dispatchers.Default) {
+                runCatching { PlaybackMediaItems.create(nextQueue) }.getOrNull()
+            } ?: return@launch
             if (nextItems.isEmpty()) return@launch
 
             val latest = PlaybackMediaItems.descriptor(controller.currentMediaItem) ?: return@launch
@@ -180,9 +261,48 @@ class ControllerBackedPlaybackGateway(
             if (controller.hasChapter(nextQueue.chapterId)) return@launch
 
             val firstNextIndex = controller.mediaItemCount
+            val wasWaitingForNextChapter =
+                controller.playbackState == Player.STATE_ENDED && latest.chapterId == current.chapterId
             controller.addMediaItems(nextItems)
-            if (controller.playbackState == Player.STATE_ENDED && latest.chapterId == current.chapterId) {
+            if (wasWaitingForNextChapter) {
                 controller.seekTo(firstNextIndex, 0L)
+                controller.prepare()
+                controller.play()
+            }
+        }
+    }
+
+    private suspend fun applyProgressiveQueue(
+        generation: Long,
+        queue: PlaybackChapterQueue,
+        firstQueueReady: CompletableDeferred<Unit>,
+    ) {
+        val mediaItems = withContext(Dispatchers.Default) { PlaybackMediaItems.create(queue) }
+        withController { controller ->
+            if (generation != queueGeneration.get()) return@withController
+            if (!firstQueueReady.isCompleted) {
+                val startIndex = queue.startPassageId
+                    ?.let { passageId ->
+                        mediaItems.indexOfFirst { PlaybackMediaItems.descriptor(it)?.passageId == passageId }
+                    }
+                    ?.takeIf { it >= 0 }
+                    ?: 0
+                val startDuration = PlaybackMediaItems.descriptor(mediaItems[startIndex])?.segmentDurationMs ?: 0L
+                val startPosition = queue.startSegmentPositionMs.coerceIn(0L, startDuration)
+                controller.setMediaItems(mediaItems, startIndex, startPosition)
+                controller.prepare()
+                controller.play()
+                firstQueueReady.complete(Unit)
+                return@withController
+            }
+
+            val existingCount = controller.mediaItemCount
+            if (mediaItems.size <= existingCount) return@withController
+            val resumeFromIndex = existingCount
+            val wasWaitingForAudio = controller.playbackState == Player.STATE_ENDED
+            controller.addMediaItems(mediaItems.drop(existingCount))
+            if (wasWaitingForAudio) {
+                controller.seekTo(resumeFromIndex, 0L)
                 controller.prepare()
                 controller.play()
             }
@@ -243,6 +363,7 @@ class ControllerBackedPlaybackGateway(
         const val SEEK_INCREMENT_MS = 15_000L
         const val MIN_SPEED = 0.5f
         const val MAX_SPEED = 3f
+        const val LOG_TAG = "WhisperPlayback"
     }
 }
 

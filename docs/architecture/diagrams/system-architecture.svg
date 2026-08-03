@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="760" viewBox="0 0 1200 760" role="img" aria-labelledby="title desc">
+  <title id="title">Whisperbook system architecture</title>
+  <desc id="desc">Layered architecture showing Compose UI, application orchestration, offline processing engines, persistence, and Media3 playback inside the Android device trust boundary.</desc>
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0L10 5L0 10Z" fill="#526174"/>
+    </marker>
+    <style>
+      .title{font:700 34px Georgia,serif;fill:#10253D}.subtitle{font:500 16px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;fill:#526174}.layer{font:700 14px ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:1.6px;fill:#245D88}.h{font:700 18px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;fill:#10253D}.b{font:500 14px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;fill:#526174}.edge{fill:none;stroke:#526174;stroke-width:2.2;marker-end:url(#arrow)}
+    </style>
+  </defs>
+  <rect width="1200" height="760" rx="28" fill="#F7EDD7"/>
+  <text x="56" y="61" class="title">System architecture</text>
+  <text x="56" y="90" class="subtitle">Every runtime dependency remains inside the Android device boundary.</text>
+  <rect x="40" y="116" width="1120" height="604" rx="22" fill="#FFF8E8" stroke="#10253D" stroke-width="3" stroke-dasharray="10 7"/>
+  <rect x="73" y="101" width="242" height="31" rx="15" fill="#10253D"/>
+  <text x="194" y="122" text-anchor="middle" fill="#F7EDD7" font-family="ui-monospace,SFMono-Regular,Menlo,monospace" font-size="13" font-weight="700">ANDROID DEVICE · NO NETWORK</text>
+
+  <text x="72" y="168" class="layer">PRESENTATION</text>
+  <rect x="72" y="184" width="1056" height="92" rx="16" fill="#E5EFF5" stroke="#245D88" stroke-width="2"/>
+  <text x="100" y="220" class="h">Jetpack Compose UI</text>
+  <text x="100" y="247" class="b">Navigation · Library · Processing · Player · Read-along · Voice cast · Settings</text>
+  <rect x="859" y="204" width="231" height="50" rx="12" fill="#245D88"/>
+  <text x="974" y="226" text-anchor="middle" fill="#FFF8E8" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="15" font-weight="700">WhisperbookAppState</text>
+  <text x="974" y="245" text-anchor="middle" fill="#D8E6EF" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="12">immutable screen state</text>
+
+  <text x="72" y="315" class="layer">APPLICATION</text>
+  <rect x="72" y="330" width="322" height="100" rx="16" fill="#F2E2C5" stroke="#9A7A47" stroke-width="2"/>
+  <text x="96" y="366" class="h">WhisperbookViewModel</text>
+  <text x="96" y="393" class="b">User actions, state flows, navigation intent</text>
+  <rect x="438" y="330" width="322" height="100" rx="16" fill="#F2E2C5" stroke="#9A7A47" stroke-width="2"/>
+  <text x="462" y="366" class="h">WhisperbookAppContainer</text>
+  <text x="462" y="393" class="b">Process-scoped dependency graph</text>
+  <rect x="804" y="330" width="324" height="100" rx="16" fill="#F2E2C5" stroke="#9A7A47" stroke-width="2"/>
+  <text x="828" y="366" class="h">Domain ports &amp; models</text>
+  <text x="828" y="393" class="b">Stable interfaces around storage and engines</text>
+
+  <text x="72" y="470" class="layer">OFFLINE ENGINES</text>
+  <rect x="72" y="486" width="202" height="112" rx="16" fill="#F9E2DB" stroke="#C8674B" stroke-width="2"/>
+  <text x="94" y="520" class="h">Document engine</text>
+  <text x="94" y="545" class="b">SAF · EPUB · PDF</text>
+  <text x="94" y="568" class="b">ML Kit OCR</text>
+  <rect x="296" y="486" width="202" height="112" rx="16" fill="#F9E2DB" stroke="#C8674B" stroke-width="2"/>
+  <text x="318" y="520" class="h">Attribution</text>
+  <text x="318" y="545" class="b">Dialogue heuristics</text>
+  <text x="318" y="568" class="b">Stable voice mapping</text>
+  <rect x="520" y="486" width="202" height="112" rx="16" fill="#F9E2DB" stroke="#C8674B" stroke-width="2"/>
+  <text x="542" y="520" class="h">Preparation</text>
+  <text x="542" y="545" class="b">WorkManager stages</text>
+  <text x="542" y="568" class="b">Resume &amp; prefetch</text>
+  <rect x="744" y="486" width="202" height="112" rx="16" fill="#F9E2DB" stroke="#C8674B" stroke-width="2"/>
+  <text x="766" y="520" class="h">Speech</text>
+  <text x="766" y="545" class="b">Supertonic 3 INT8</text>
+  <text x="766" y="568" class="b">sherpa-onnx · WAV</text>
+  <rect x="968" y="486" width="160" height="112" rx="16" fill="#DCE8ED" stroke="#245D88" stroke-width="2"/>
+  <text x="990" y="520" class="h">Playback</text>
+  <text x="990" y="545" class="b">Media3 service</text>
+  <text x="990" y="568" class="b">queue + session</text>
+
+  <text x="72" y="638" class="layer">PRIVATE DATA</text>
+  <rect x="72" y="652" width="322" height="48" rx="13" fill="#10253D"/>
+  <text x="233" y="682" text-anchor="middle" fill="#F7EDD7" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="15" font-weight="700">Room · library, passages, checkpoints</text>
+  <rect x="438" y="652" width="322" height="48" rx="13" fill="#10253D"/>
+  <text x="599" y="682" text-anchor="middle" fill="#F7EDD7" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="15" font-weight="700">DataStore · preferences</text>
+  <rect x="804" y="652" width="324" height="48" rx="13" fill="#10253D"/>
+  <text x="966" y="682" text-anchor="middle" fill="#F7EDD7" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="15" font-weight="700">App files · books, previews, WAV</text>
+
+  <path class="edge" d="M600 276V319"/>
+  <path class="edge" d="M394 380H427"/>
+  <path class="edge" d="M760 380H793"/>
+  <path class="edge" d="M599 430V474"/>
+  <path class="edge" d="M274 542H285"/>
+  <path class="edge" d="M498 542H509"/>
+  <path class="edge" d="M722 542H733"/>
+  <path class="edge" d="M946 542H957"/>
+  <path class="edge" d="M173 598V641"/>
+  <path class="edge" d="M621 598V618H233V641"/>
+  <path class="edge" d="M845 598V641"/>
+  <path class="edge" d="M1048 598V641"/>
+</svg>

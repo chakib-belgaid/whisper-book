@@ -4,7 +4,6 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -14,7 +13,6 @@ import androidx.compose.foundation.layout.IntrinsicSize
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
@@ -28,10 +26,16 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.VolumeUp
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.SkipNext
+import androidx.compose.material.icons.filled.SkipPrevious
 import androidx.compose.material.icons.outlined.GraphicEq
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -40,7 +44,6 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.input.pointer.pointerInput
@@ -53,7 +56,6 @@ import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.semantics.stateDescription
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -77,7 +79,7 @@ fun SpeakerPassageCard(
     Box(
         modifier = modifier
             .fillMaxWidth()
-            .clickable(role = Role.Button, onClick = onClick)
+            .paperClickable(onClick = onClick, role = Role.Button, fold = PaperFold.Card)
             .semantics(mergeDescendants = true) {
                 contentDescription = "$speakerName. $passage"
                 stateDescription = semanticState
@@ -173,8 +175,10 @@ fun FloatingMiniPlayer(
     isPlaying: Boolean,
     progress: Float,
     onPlayPause: () -> Unit,
-    onRewind: () -> Unit,
-    onForward: () -> Unit,
+    onPreviousChapter: () -> Unit,
+    onNextChapter: () -> Unit,
+    hasPreviousChapter: Boolean,
+    hasNextChapter: Boolean,
     onSeek: (Float) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -199,8 +203,18 @@ fun FloatingMiniPlayer(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceEvenly,
             ) {
-                FifteenSecondButton(onRewind, "Rewind 15 seconds", forward = false)
-                FifteenSecondButton(onForward, "Forward 15 seconds", forward = true)
+                ChapterNavigationButton(
+                    onPreviousChapter,
+                    "Previous chapter",
+                    forward = false,
+                    enabled = hasPreviousChapter,
+                )
+                ChapterNavigationButton(
+                    onNextChapter,
+                    "Next chapter",
+                    forward = true,
+                    enabled = hasNextChapter,
+                )
             }
         } else {
             Row(
@@ -210,9 +224,19 @@ fun FloatingMiniPlayer(
             ) {
                 MiniPlayerPortrait(speakerName, portraitRes, accentColor)
                 MiniPlayerMetadata(speakerName, voiceName, positionText, durationText, accentColor, Modifier.weight(1f))
-                FifteenSecondButton(onRewind, "Rewind 15 seconds", forward = false)
+                ChapterNavigationButton(
+                    onPreviousChapter,
+                    "Previous chapter",
+                    forward = false,
+                    enabled = hasPreviousChapter,
+                )
                 MiniPlayPauseButton(isPlaying, accentColor, onPlayPause)
-                FifteenSecondButton(onForward, "Forward 15 seconds", forward = true)
+                ChapterNavigationButton(
+                    onNextChapter,
+                    "Next chapter",
+                    forward = true,
+                    enabled = hasNextChapter,
+                )
             }
         }
         PaperProgressBar(
@@ -307,44 +331,28 @@ private fun MiniPlayPauseButton(
 }
 
 @Composable
-fun FifteenSecondButton(
+fun ChapterNavigationButton(
     onClick: () -> Unit,
     description: String,
     forward: Boolean,
+    enabled: Boolean,
     modifier: Modifier = Modifier,
 ) {
-    val ink = WhisperbookTheme.colors.ink
-    Box(
-        modifier = modifier
-            .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
-            .clip(CircleShape)
-            .clickable(role = Role.Button, onClick = onClick)
-            .semantics { contentDescription = description },
-        contentAlignment = Alignment.Center,
+    EmbossedCircularButton(
+        onClick = onClick,
+        contentDescription = description,
+        enabled = enabled,
+        size = 48.dp,
+        backgroundColor = WhisperbookTheme.colors.paper,
+        contentColor = if (enabled) WhisperbookTheme.colors.ink else WhisperbookTheme.colors.inkMuted,
+        borderColor = WhisperbookTheme.colors.outline,
+        modifier = modifier,
     ) {
-        Canvas(Modifier.size(40.dp)) {
-            val stroke = 2.1.dp.toPx()
-            drawArc(
-                color = ink,
-                startAngle = if (forward) -70f else 110f,
-                sweepAngle = if (forward) 280f else -280f,
-                useCenter = false,
-                style = Stroke(width = stroke, cap = StrokeCap.Round),
-            )
-            val arrow = Path()
-            if (forward) {
-                arrow.moveTo(size.width * .76f, size.height * .06f)
-                arrow.lineTo(size.width * .93f, size.height * .16f)
-                arrow.lineTo(size.width * .75f, size.height * .24f)
-            } else {
-                arrow.moveTo(size.width * .24f, size.height * .06f)
-                arrow.lineTo(size.width * .07f, size.height * .16f)
-                arrow.lineTo(size.width * .25f, size.height * .24f)
-            }
-            arrow.close()
-            drawPath(arrow, ink)
-        }
-        Text("15", color = WhisperbookTheme.colors.ink, style = WhisperbookTheme.typography.body.copy(fontSize = 14.sp, fontWeight = FontWeight.Bold))
+        Icon(
+            imageVector = if (forward) Icons.Filled.SkipNext else Icons.Filled.SkipPrevious,
+            contentDescription = null,
+            modifier = Modifier.size(26.dp),
+        )
     }
 }
 
@@ -358,21 +366,42 @@ fun PaperProgressBar(
 ) {
     val fraction = value.coerceIn(0f, 1f)
     val colors = WhisperbookTheme.colors
+    var isPressed by remember { mutableStateOf(false) }
+    var isDragging by remember { mutableStateOf(false) }
     Canvas(
         modifier = modifier
+            .paperFold(
+                engaged = isPressed || isDragging,
+                fold = PaperFold.Toggle,
+            )
             .semantics {
                 contentDescription = description
                 progressBarRangeInfo = ProgressBarRangeInfo(fraction, 0f..1f)
                 setProgress { requested -> onValueChange(requested.coerceIn(0f, 1f)); true }
             }
             .pointerInput(onValueChange) {
-                detectTapGestures { point -> onValueChange((point.x / size.width).coerceIn(0f, 1f)) }
+                detectTapGestures(
+                    onPress = {
+                        isPressed = true
+                        try {
+                            tryAwaitRelease()
+                        } finally {
+                            isPressed = false
+                        }
+                    },
+                    onTap = { point -> onValueChange((point.x / size.width).coerceIn(0f, 1f)) },
+                )
             }
             .pointerInput(onValueChange) {
-                detectDragGestures { change, _ ->
-                    change.consume()
-                    onValueChange((change.position.x / size.width).coerceIn(0f, 1f))
-                }
+                detectDragGestures(
+                    onDragStart = { isDragging = true },
+                    onDragEnd = { isDragging = false },
+                    onDragCancel = { isDragging = false },
+                    onDrag = { change, _ ->
+                        change.consume()
+                        onValueChange((change.position.x / size.width).coerceIn(0f, 1f))
+                    },
+                )
             },
     ) {
         val center = size.height / 2f

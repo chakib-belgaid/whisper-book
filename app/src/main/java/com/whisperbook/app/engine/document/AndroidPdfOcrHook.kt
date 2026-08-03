@@ -59,7 +59,12 @@ class AndroidPdfOcrHook private constructor(
         @Suppress("UNUSED_PARAMETER") testing: Unit = Unit,
     ) : this(pageSourceFactory, recognizerFactory)
 
-    override suspend fun extractText(file: File): String = withContext(Dispatchers.Default) {
+    override suspend fun extractText(file: File): String = extractText(file) { _, _ -> }
+
+    override suspend fun extractText(
+        file: File,
+        onProgress: suspend (completedUnits: Int, totalUnits: Int) -> Unit,
+    ): String = withContext(Dispatchers.Default) {
         val source = openSource(file)
         source.use {
             if (source.pageCount <= 0) throw EmptyPdfException("The PDF contains no pages.")
@@ -77,6 +82,7 @@ class AndroidPdfOcrHook private constructor(
                         }
                         results += IndexedValue(pageIndex, text)
                     }
+                    onProgress(pageIndex + 1, source.pageCount)
                 }
                 OcrPageTextAssembler.assemble(results)
                     .takeIf(String::isNotBlank)

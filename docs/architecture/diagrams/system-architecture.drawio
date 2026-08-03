@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="app.diagrams.net" modified="2026-08-03T00:00:00.000Z" agent="Codex" version="28.0.6" type="device">
+  <diagram id="whisperbook-system" name="System architecture">
+    <mxGraphModel dx="1422" dy="794" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1169" pageHeight="827" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <mxCell id="device" value="ANDROID DEVICE · NO NETWORK" style="swimlane;html=1;startSize=36;rounded=1;strokeWidth=3;strokeColor=#10253D;fillColor=#FFF8E8;fontColor=#10253D;fontStyle=1;fontFamily=Helvetica;fontSize=14;dashed=1;dashPattern=8 6;" vertex="1" parent="1">
+          <mxGeometry x="30" y="40" width="1100" height="690" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="presentation" value="PRESENTATION" style="swimlane;html=1;startSize=28;rounded=1;strokeWidth=2;strokeColor=#245D88;fillColor=#E5EFF5;swimlaneFillColor=#245D88;fontColor=#F7EDD7;fontStyle=1;fontFamily=Courier New;fontSize=13;" vertex="1" parent="device">
+          <mxGeometry x="30" y="60" width="1040" height="105" as="geometry"/>
+        </mxCell>
+        <mxCell id="compose" value="Jetpack Compose UI&#xa;Navigation · Library · Processing · Player · Read-along · Voice cast · Settings" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=18;strokeColor=#245D88;fillColor=#F7EDD7;fontColor=#10253D;fontStyle=1;fontSize=15;" vertex="1" parent="presentation">
+          <mxGeometry x="20" y="42" width="705" height="46" as="geometry"/>
+        </mxCell>
+        <mxCell id="uistate" value="WhisperbookAppState&#xa;immutable screen state" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#245D88;fillColor=#245D88;fontColor=#FFFFFF;fontStyle=1;fontSize=14;" vertex="1" parent="presentation">
+          <mxGeometry x="760" y="42" width="250" height="46" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="application" value="APPLICATION" style="swimlane;html=1;startSize=28;rounded=1;strokeWidth=2;strokeColor=#9A7A47;fillColor=#F2E2C5;swimlaneFillColor=#9A7A47;fontColor=#FFFFFF;fontStyle=1;fontFamily=Courier New;fontSize=13;" vertex="1" parent="device">
+          <mxGeometry x="30" y="190" width="1040" height="130" as="geometry"/>
+        </mxCell>
+        <mxCell id="viewmodel" value="WhisperbookViewModel&#xa;Actions, state flows, navigation intent" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#9A7A47;fillColor=#FFF8E8;fontColor=#10253D;fontStyle=1;fontSize=14;" vertex="1" parent="application"><mxGeometry x="20" y="48" width="310" height="58" as="geometry"/></mxCell>
+        <mxCell id="container" value="WhisperbookAppContainer&#xa;Process-scoped dependency graph" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#9A7A47;fillColor=#FFF8E8;fontColor=#10253D;fontStyle=1;fontSize=14;" vertex="1" parent="application"><mxGeometry x="365" y="48" width="310" height="58" as="geometry"/></mxCell>
+        <mxCell id="domain" value="Domain ports &amp; models&#xa;Stable interfaces around storage and engines" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#9A7A47;fillColor=#FFF8E8;fontColor=#10253D;fontStyle=1;fontSize=14;" vertex="1" parent="application"><mxGeometry x="710" y="48" width="310" height="58" as="geometry"/></mxCell>
+
+        <mxCell id="engines" value="OFFLINE ENGINES" style="swimlane;html=1;startSize=28;rounded=1;strokeWidth=2;strokeColor=#C8674B;fillColor=#F9E2DB;swimlaneFillColor=#C8674B;fontColor=#FFFFFF;fontStyle=1;fontFamily=Courier New;fontSize=13;" vertex="1" parent="device">
+          <mxGeometry x="30" y="345" width="1040" height="155" as="geometry"/>
+        </mxCell>
+        <mxCell id="document" value="Document engine&#xa;SAF · EPUB · PDF&#xa;ML Kit OCR" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#C8674B;fillColor=#FFF8E8;fontColor=#10253D;fontStyle=1;fontSize=14;" vertex="1" parent="engines"><mxGeometry x="20" y="48" width="184" height="82" as="geometry"/></mxCell>
+        <mxCell id="attribution" value="Attribution&#xa;Dialogue heuristics&#xa;Stable voice mapping" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#C8674B;fillColor=#FFF8E8;fontColor=#10253D;fontStyle=1;fontSize=14;" vertex="1" parent="engines"><mxGeometry x="224" y="48" width="184" height="82" as="geometry"/></mxCell>
+        <mxCell id="preparation" value="Preparation&#xa;WorkManager stages&#xa;Resume + prefetch" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#C8674B;fillColor=#FFF8E8;fontColor=#10253D;fontStyle=1;fontSize=14;" vertex="1" parent="engines"><mxGeometry x="428" y="48" width="184" height="82" as="geometry"/></mxCell>
+        <mxCell id="speech" value="Speech&#xa;Supertonic 3 INT8&#xa;sherpa-onnx · WAV" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#C8674B;fillColor=#FFF8E8;fontColor=#10253D;fontStyle=1;fontSize=14;" vertex="1" parent="engines"><mxGeometry x="632" y="48" width="184" height="82" as="geometry"/></mxCell>
+        <mxCell id="playback" value="Playback&#xa;Media3 service&#xa;Queue + session" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#245D88;fillColor=#E5EFF5;fontColor=#10253D;fontStyle=1;fontSize=14;" vertex="1" parent="engines"><mxGeometry x="836" y="48" width="184" height="82" as="geometry"/></mxCell>
+
+        <mxCell id="data" value="PRIVATE DATA" style="swimlane;html=1;startSize=28;rounded=1;strokeWidth=2;strokeColor=#10253D;fillColor=#10253D;swimlaneFillColor=#10253D;fontColor=#F7EDD7;fontStyle=1;fontFamily=Courier New;fontSize=13;" vertex="1" parent="device">
+          <mxGeometry x="30" y="525" width="1040" height="105" as="geometry"/>
+        </mxCell>
+        <mxCell id="room" value="Room&#xa;library · passages · checkpoints" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#C8A56A;fillColor=#183A59;fontColor=#F7EDD7;fontStyle=1;fontSize=14;" vertex="1" parent="data"><mxGeometry x="20" y="43" width="310" height="45" as="geometry"/></mxCell>
+        <mxCell id="datastore" value="DataStore&#xa;preferences" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#C8A56A;fillColor=#183A59;fontColor=#F7EDD7;fontStyle=1;fontSize=14;" vertex="1" parent="data"><mxGeometry x="365" y="43" width="310" height="45" as="geometry"/></mxCell>
+        <mxCell id="files" value="App files&#xa;books · previews · WAV" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#C8A56A;fillColor=#183A59;fontColor=#F7EDD7;fontStyle=1;fontSize=14;" vertex="1" parent="data"><mxGeometry x="710" y="43" width="310" height="45" as="geometry"/></mxCell>
+
+        <mxCell id="e1" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#526174;endArrow=block;endFill=1;" edge="1" parent="device" source="compose" target="viewmodel"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e2" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#526174;endArrow=block;endFill=1;" edge="1" parent="application" source="viewmodel" target="container"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e3" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#526174;endArrow=block;endFill=1;" edge="1" parent="application" source="container" target="domain"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e4" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#526174;endArrow=block;endFill=1;" edge="1" parent="device" source="container" target="preparation"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e5" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#C8674B;endArrow=block;endFill=1;" edge="1" parent="engines" source="document" target="attribution"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e6" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#C8674B;endArrow=block;endFill=1;" edge="1" parent="engines" source="attribution" target="preparation"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e7" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#C8674B;endArrow=block;endFill=1;" edge="1" parent="engines" source="preparation" target="speech"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e8" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#C8674B;endArrow=block;endFill=1;" edge="1" parent="engines" source="speech" target="playback"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e9" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#526174;endArrow=block;endFill=1;" edge="1" parent="device" source="preparation" target="room"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e10" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#526174;endArrow=block;endFill=1;" edge="1" parent="device" source="speech" target="files"><mxGeometry relative="1" as="geometry"/></mxCell>
+        <mxCell id="e11" style="edgeStyle=orthogonalEdgeStyle;rounded=0;orthogonalLoop=1;jettySize=auto;html=1;strokeWidth=2;strokeColor=#526174;endArrow=block;endFill=1;" edge="1" parent="device" source="playback" target="files"><mxGeometry relative="1" as="geometry"/></mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

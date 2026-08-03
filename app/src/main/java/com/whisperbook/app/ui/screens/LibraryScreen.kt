@@ -1,6 +1,5 @@
 package com.whisperbook.app.ui.screens
 
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -21,9 +20,14 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.outlined.AutoStories
 import androidx.compose.material.icons.outlined.CloudOff
+import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -37,8 +41,10 @@ import com.whisperbook.app.ui.components.EmbossedCircularButton
 import com.whisperbook.app.ui.components.OfflineBadge
 import com.whisperbook.app.ui.components.PapercraftButton
 import com.whisperbook.app.ui.components.PapercraftButtonVariant
+import com.whisperbook.app.ui.components.PaperFold
 import com.whisperbook.app.ui.components.ParchmentPanel
 import com.whisperbook.app.ui.components.StorySlider
+import com.whisperbook.app.ui.components.paperClickable
 import com.whisperbook.app.ui.theme.WhisperbookTheme
 
 @Composable
@@ -48,8 +54,20 @@ fun LibraryScreen(
     onImport: () -> Unit,
     onBook: (String) -> Unit,
     onResume: () -> Unit,
+    onRemoveBook: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var pendingRemoveBookId by rememberSaveable { mutableStateOf<String?>(null) }
+    appState.books.firstOrNull { it.id == pendingRemoveBookId }?.let { pendingBook ->
+        RemoveBookDialog(
+            bookTitle = pendingBook.title,
+            onConfirm = {
+                pendingRemoveBookId = null
+                onRemoveBook(pendingBook.id)
+            },
+            onDismiss = { pendingRemoveBookId = null },
+        )
+    }
     Column(
         modifier = modifier.fillMaxSize().padding(contentPadding).padding(horizontal = 12.dp, vertical = 5.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -84,10 +102,32 @@ fun LibraryScreen(
                     )
                     Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text(current.title, color = WhisperbookTheme.colors.ink, style = WhisperbookTheme.typography.title)
-                        Text("Chapter ${current.chapter}", color = WhisperbookTheme.colors.elara, style = WhisperbookTheme.typography.label)
+                        Text(
+                            text = current.libraryProgressLabel(),
+                            color = WhisperbookTheme.colors.elara,
+                            style = WhisperbookTheme.typography.label,
+                        )
                         StorySlider(current.progress, {}, enabled = false, modifier = Modifier.fillMaxWidth())
-                        EmbossedCircularButton(onClick = onResume, contentDescription = "Resume ${current.title}", size = 52.dp) {
-                            Icon(Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(30.dp))
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            EmbossedCircularButton(
+                                onClick = onResume,
+                                contentDescription = if (current.totalChapters > 0) {
+                                    "Resume ${current.title}"
+                                } else {
+                                    "${current.title} is still finding chapters"
+                                },
+                                enabled = current.totalChapters > 0,
+                                size = 52.dp,
+                            ) {
+                                Icon(Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(30.dp))
+                            }
+                            EmbossedCircularButton(
+                                onClick = { pendingRemoveBookId = current.id },
+                                contentDescription = "Remove ${current.title} from library",
+                                size = 52.dp,
+                            ) {
+                                Icon(Icons.Outlined.DeleteOutline, contentDescription = null, tint = WhisperbookTheme.colors.error)
+                            }
                         }
                     }
                 }
@@ -102,13 +142,30 @@ fun LibraryScreen(
                         modifier = Modifier
                             .width(154.dp)
                             .height(142.dp)
+                            .paperClickable(
+                                onClick = { onBook(book.id) },
+                                role = Role.Button,
+                                fold = PaperFold.Card,
+                            )
                             .clip(RoundedCornerShape(14.dp))
-                            .clickable(role = Role.Button) { onBook(book.id) }
                             .semantics { contentDescription = "Open ${book.title}" },
                         contentPadding = PaddingValues(12.dp),
                     ) {
-                        Icon(Icons.Outlined.AutoStories, contentDescription = null, tint = WhisperbookTheme.colors.action, modifier = Modifier.size(34.dp))
-                        Spacer(Modifier.height(8.dp))
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(Icons.Outlined.AutoStories, contentDescription = null, tint = WhisperbookTheme.colors.action, modifier = Modifier.size(34.dp))
+                            EmbossedCircularButton(
+                                onClick = { pendingRemoveBookId = book.id },
+                                contentDescription = "Remove ${book.title} from library",
+                                size = 44.dp,
+                            ) {
+                                Icon(Icons.Outlined.DeleteOutline, contentDescription = null, tint = WhisperbookTheme.colors.error)
+                            }
+                        }
+                        Spacer(Modifier.height(4.dp))
                         Text(book.title, color = WhisperbookTheme.colors.ink, style = WhisperbookTheme.typography.title, maxLines = 2)
                         Text(book.author, color = WhisperbookTheme.colors.inkMuted, style = WhisperbookTheme.typography.label, maxLines = 1)
                     }
@@ -116,6 +173,18 @@ fun LibraryScreen(
             }
         }
     }
+}
+
+internal fun LibraryBookUi.libraryProgressLabel(): String = when {
+    preparation.stage == com.whisperbook.app.domain.model.PreparationStage.FAILED ->
+        "Preparation needs attention"
+    preparation.stage == com.whisperbook.app.domain.model.PreparationStage.PREPARING_AUDIO &&
+        preparation.totalUnits > 0 ->
+        "${preparation.completedUnits.coerceIn(0, preparation.totalUnits)} of ${preparation.totalUnits} chapters recorded"
+    totalChapters <= 0 -> "Finding chapters…"
+    preparation.stage != com.whisperbook.app.domain.model.PreparationStage.READY ->
+        "$totalChapters chapters found · preparing audio"
+    else -> "Chapter ${chapter.coerceIn(1, totalChapters)} of $totalChapters"
 }
 
 @Composable

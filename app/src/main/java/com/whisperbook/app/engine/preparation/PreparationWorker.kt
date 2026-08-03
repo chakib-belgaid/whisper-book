@@ -1,20 +1,32 @@
 package com.whisperbook.app.engine.preparation
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.database.sqlite.SQLiteException
+import android.os.Build
+import androidx.core.app.NotificationCompat
 import androidx.room.withTransaction
 import androidx.work.CoroutineWorker
+import androidx.work.ForegroundInfo
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
+import com.whisperbook.app.MainActivity
+import com.whisperbook.app.R
 import com.whisperbook.app.data.local.db.AudioSegmentEntity
 import com.whisperbook.app.data.local.db.ChapterEntity
 import com.whisperbook.app.data.local.db.PassageEntity
 import com.whisperbook.app.data.local.db.PreparationJobEntity
 import com.whisperbook.app.data.local.db.toAliasEntities
+import com.whisperbook.app.data.local.db.toDomain
 import com.whisperbook.app.data.local.db.toEntity
 import com.whisperbook.app.domain.ExtractedChapter
 import com.whisperbook.app.domain.ExtractedPublication
 import com.whisperbook.app.domain.ImportedBook
+import com.whisperbook.app.domain.PassageTextChunker
 import com.whisperbook.app.domain.SynthesisRequest
 import com.whisperbook.app.domain.model.AudioSegmentState
 import com.whisperbook.app.domain.model.BookFormat
@@ -25,6 +37,7 @@ import com.whisperbook.app.domain.model.Passage
 import com.whisperbook.app.domain.model.PreparationStage
 import com.whisperbook.app.domain.model.PreparationState
 import com.whisperbook.app.engine.audio.AudioCacheKey
+import com.whisperbook.app.engine.audio.LocalAudioGenerationCoordinator
 import com.whisperbook.app.engine.document.PdfImportException
 import com.whisperbook.app.engine.document.SignatureBookFormatDetector
 import com.whisperbook.app.engine.document.UnsupportedPublicationException
@@ -47,10 +60,22 @@ class PreparationWorker @JvmOverloads constructor(
             ?.let { encoded -> PreparationStage.entries.firstOrNull { it.name == encoded } }
             ?.takeIf { it in PreparationWorkPlan.stages }
             ?: return invalidInput("Missing or invalid preparation stage")
-        val runner = PreparationStageRunner(dependencies)
+        val fromChapterOrdinal = inputData
+            .getInt(PreparationWorkPlan.KEY_FROM_CHAPTER_ORDINAL, 0)
+            .takeIf { it >= 0 }
+            ?: return invalidInput("Starting chapter ordinal must not be negative")
+        val runner = PreparationStageRunner(dependencies) { state ->
+            setForeground(createForegroundInfo(bookId, state))
+        }
 
         return try {
-            runner.run(bookId, stage, runAttemptCount)
+            setForeground(
+                createForegroundInfo(
+                    bookId,
+                    PreparationState(stage, message = stage.notificationMessage()),
+                ),
+            )
+            runner.run(bookId, stage, runAttemptCount, fromChapterOrdinal)
             Result.success()
         } catch (cancellation: CancellationException) {
             throw cancellation
@@ -83,24 +108,80 @@ class PreparationWorker @JvmOverloads constructor(
         ),
     )
 
+    private fun createForegroundInfo(bookId: String, state: PreparationState): ForegroundInfo {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                PREPARATION_CHANNEL_ID,
+                "Audiobook preparation",
+                NotificationManager.IMPORTANCE_LOW,
+            ).apply {
+                description = "Progress while books are prepared privately on this device"
+                setShowBadge(false)
+            }
+            applicationContext.getSystemService(NotificationManager::class.java)
+                .createNotificationChannel(channel)
+        }
+        val hasProgress = state.totalUnits > 0
+        val progress = if (hasProgress) {
+            (state.progressFraction.coerceIn(0f, 1f) * NOTIFICATION_PROGRESS_MAX).toInt()
+        } else {
+            0
+        }
+        val contentText = preparationNotificationText(state)
+        val openApp = PendingIntent.getActivity(
+            applicationContext,
+            bookId.hashCode(),
+            Intent(applicationContext, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+            },
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        val notification = NotificationCompat.Builder(applicationContext, PREPARATION_CHANNEL_ID)
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentTitle("Recording your audiobook")
+            .setContentText(contentText)
+            .setSubText(state.message?.takeIf { it != contentText })
+            .setContentIntent(openApp)
+            .setCategory(NotificationCompat.CATEGORY_PROGRESS)
+            .setOngoing(true)
+            .setOnlyAlertOnce(true)
+            .setProgress(NOTIFICATION_PROGRESS_MAX, progress, !hasProgress)
+            .build()
+        val notificationId = PREPARATION_NOTIFICATION_ID_BASE + (bookId.hashCode() and 0x0fff)
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ForegroundInfo(notificationId, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        } else {
+            ForegroundInfo(notificationId, notification)
+        }
+    }
+
     private companion object {
         const val MAX_AUTOMATIC_ATTEMPTS = 3
+        const val NOTIFICATION_PROGRESS_MAX = 1_000
+        const val PREPARATION_CHANNEL_ID = "audiobook-preparation"
+        const val PREPARATION_NOTIFICATION_ID_BASE = 22_000
     }
 }
 
 internal class PreparationStageRunner(
     private val dependencies: PreparationDependencies,
     private val nowEpochMs: () -> Long = System::currentTimeMillis,
+    private val onStateCheckpoint: suspend (PreparationState) -> Unit = {},
 ) {
     private val database get() = dependencies.database
 
-    suspend fun run(bookId: String, stage: PreparationStage, attemptCount: Int) {
+    suspend fun run(
+        bookId: String,
+        stage: PreparationStage,
+        attemptCount: Int,
+        fromChapterOrdinal: Int = 0,
+    ) {
         when (stage) {
             PreparationStage.COPY_AND_VALIDATE -> validatePrivateCopy(bookId, attemptCount)
             PreparationStage.READING_CHAPTERS -> extractChapters(bookId, attemptCount)
             PreparationStage.FINDING_CHARACTERS -> attributeSpeakers(bookId, attemptCount)
             PreparationStage.ASSIGNING_VOICES -> assignVoices(bookId, attemptCount)
-            PreparationStage.PREPARING_AUDIO -> prepareAudio(bookId, attemptCount)
+            PreparationStage.PREPARING_AUDIO -> prepareAudio(bookId, attemptCount, fromChapterOrdinal)
             PreparationStage.READY,
             PreparationStage.FAILED,
             -> throw PreparationPipelineException(
@@ -194,7 +275,21 @@ internal class PreparationStageRunner(
             privateFile = file,
             sha256 = book.sourceSha256.orEmpty().ifBlank { file.sha256() },
         )
-        val publication = dependencies.publicationExtractor.extract(imported).getOrThrow()
+        val publication = dependencies.publicationExtractor.extract(imported) { completed, total ->
+            val safeTotal = total.coerceAtLeast(1)
+            val safeCompleted = completed.coerceIn(0, safeTotal)
+            checkpoint(
+                bookId,
+                PreparationState(
+                    stage = PreparationStage.READING_CHAPTERS,
+                    completedUnits = safeCompleted,
+                    totalUnits = safeTotal,
+                    progressFraction = safeCompleted.toFloat() / safeTotal,
+                    message = "Reading page $safeCompleted of $safeTotal",
+                ),
+                attemptCount,
+            )
+        }.getOrThrow()
         if (publication.chapters.isEmpty()) {
             throw PreparationPipelineException("empty-publication", "No readable chapters were found", false)
         }
@@ -209,7 +304,8 @@ internal class PreparationStageRunner(
         }
         val passages = publication.chapters.flatMapIndexed { chapterIndex, chapter ->
             val chapterId = chapterId(bookId, chapterIndex)
-            chapter.paragraphs.filter(String::isNotBlank).mapIndexed { passageIndex, text ->
+            val boundedParagraphs = chapter.paragraphs.flatMap(PassageTextChunker::split)
+            boundedParagraphs.mapIndexed { passageIndex, text ->
                 PassageEntity(
                     id = passageId(chapterId, passageIndex),
                     chapterId = chapterId,
@@ -416,66 +512,97 @@ internal class PreparationStageRunner(
         }
     }
 
-    private suspend fun prepareAudio(bookId: String, attemptCount: Int) {
+    private suspend fun prepareAudio(
+        bookId: String,
+        attemptCount: Int,
+        fromChapterOrdinal: Int,
+    ) {
         val chapters = database.chapterDao().observeForBook(bookId).first()
-        val passages = chapters
-            .sortedBy { it.chapter.ordinal }
-            .flatMap { chapter -> chapter.passages.sortedBy { it.ordinal } }
-        if (passages.isEmpty()) {
+        val allBatches = orderedChapterAudioBatches(chapters, fromChapterOrdinal = 0)
+        if (allBatches.isEmpty()) {
             throw PreparationPipelineException("passages-missing", "Passages must exist before audio is prepared", false)
         }
-        if (database.preparationJobDao().getForBook(bookId).stage() == PreparationStage.READY &&
-            firstPassageHasDurableAudio(passages.first())
-        ) {
+        val targets = allBatches.filter { it.chapterOrdinal >= fromChapterOrdinal }
+        if (targets.isEmpty()) {
+            checkpoint(bookId, PreparationState.Ready, attemptCount)
             return
         }
 
-        val targets = passages.take(dependencies.audioPrefetchPassageCount)
+        val completedBeforeStart = allBatches.size - targets.size
         checkpoint(
             bookId,
             PreparationState(
                 PreparationStage.PREPARING_AUDIO,
-                totalUnits = targets.size,
-                message = "Preparing the opening passages",
+                completedUnits = completedBeforeStart,
+                totalUnits = allBatches.size,
+                progressFraction = completedBeforeStart.toFloat() / allBatches.size,
+                message = chapterPreparationMessage(targets.first(), allBatches.size),
             ),
             attemptCount,
         )
         val engine = dependencies.ttsEngineFactory.create()
         try {
-            engine.warmUp().getOrThrow()
+            LocalAudioGenerationCoordinator.runBackground { engine.warmUp().getOrThrow() }
             val voices = engine.voices()
             if (voices.isEmpty()) {
                 throw PreparationPipelineException("voices-unavailable", "No local story voices are available", false)
             }
-            targets.forEachIndexed { index, passage ->
-                synthesizePassage(engine, passage, voices)
-                checkpoint(
-                    bookId,
-                    PreparationState(
-                        stage = PreparationStage.PREPARING_AUDIO,
-                        completedUnits = index + 1,
-                        totalUnits = targets.size,
-                        progressFraction = (index + 1).toFloat() / targets.size,
-                        message = "Prepared ${index + 1} of ${targets.size} opening passages",
-                    ),
-                    attemptCount,
+            val synthesisBatches = targets.map { chapter ->
+                ChapterAudioBatch(
+                    chapterId = chapter.chapterId,
+                    chapterOrdinal = chapter.chapterOrdinal,
+                    chapterTitle = chapter.chapterTitle,
+                    passages = chapter.passages.map { passage -> synthesisTask(passage, voices) },
                 )
             }
+            SequentialChapterAudioPreparer(
+                isPassageReady = ::isPassageAudioDurable,
+                preparePassage = { task -> synthesizePassage(engine, task) },
+            ).prepare(
+                chapters = synthesisBatches,
+                onChapterStarted = { targetIndex, chapter ->
+                    val completedChapters = completedBeforeStart + targetIndex
+                    checkpoint(
+                        bookId,
+                        PreparationState(
+                            stage = PreparationStage.PREPARING_AUDIO,
+                            completedUnits = completedChapters,
+                            totalUnits = allBatches.size,
+                            progressFraction = completedChapters.toFloat() / allBatches.size,
+                            message = chapterPreparationMessage(chapter, allBatches.size),
+                        ),
+                        attemptCount,
+                    )
+                },
+                onChapterReady = { targetIndex, chapter ->
+                    val completedChapters = completedBeforeStart + targetIndex + 1
+                    checkpoint(
+                        bookId,
+                        PreparationState(
+                            stage = PreparationStage.PREPARING_AUDIO,
+                            completedUnits = completedChapters,
+                            totalUnits = allBatches.size,
+                            progressFraction = completedChapters.toFloat() / allBatches.size,
+                            message = "${chapter.chapterTitle} is ready to listen",
+                        ),
+                        attemptCount,
+                    )
+                },
+            )
         } finally {
             engine.close()
-        }
-        if (!firstPassageHasDurableAudio(passages.first())) {
-            throw PreparationPipelineException("audio-not-durable", "The first passage audio could not be saved", true)
         }
         checkpoint(bookId, PreparationState.Ready, attemptCount)
     }
 
-    private suspend fun synthesizePassage(
-        engine: com.whisperbook.app.domain.LocalTtsEngine,
+    private suspend fun synthesisTask(
         passage: PassageEntity,
         voices: List<com.whisperbook.app.domain.model.VoiceDescriptor>,
-    ) {
-        val assignment = database.voiceAssignmentDao().getForCharacter(passage.speakerId)
+    ): PassageSynthesisTask {
+        val assignment = database.chapterVoiceAssignmentDao()
+            .getForChapterAndCharacter(passage.chapterId, passage.speakerId)
+            ?.toDomain()
+            ?: database.voiceAssignmentDao().getForCharacter(passage.speakerId)?.toDomain()
             ?: throw PreparationPipelineException(
                 "voice-assignment-missing",
                 "A character is missing its local voice assignment",
@@ -493,52 +620,90 @@ internal class PreparationStageRunner(
             speed = assignment.speed,
             cacheKey = "pending",
         )
-        // The schema owns segments by passage. Keep repeated prose as independent Room rows while
-        // retaining a stable waveform fingerprint in the passage-scoped key.
         val cacheKey = AudioCacheKey.forPassage(
             passageId = passage.id,
             request = baseRequest,
             modelVersion = assignment.modelVersion,
             sampleRate = dependencies.expectedSampleRate,
         )
-        val request = baseRequest.copy(cacheKey = cacheKey)
-        val cached = dependencies.audioSegmentStore.find(cacheKey)
-        val segment = if (cached != null && cached.path?.let(::File)?.isFile == true) {
-            cached
-        } else {
-            database.audioSegmentDao().upsert(
-                AudioSegmentEntity(
-                    id = cacheKey,
-                    passageId = passage.id,
-                    cacheKey = cacheKey,
-                    state = AudioSegmentState.GENERATING.name,
-                    path = null,
-                    durationMs = 0L,
-                    sampleRate = dependencies.expectedSampleRate,
-                ),
-            )
-            try {
-                val result = engine.synthesize(request).getOrThrow()
-                if (result.sampleRate != dependencies.expectedSampleRate) {
-                    throw PreparationPipelineException(
-                        "sample-rate-mismatch",
-                        "The local model returned an unexpected sample rate",
-                        false,
+        return PassageSynthesisTask(
+            passage = passage,
+            request = baseRequest.copy(cacheKey = cacheKey),
+        )
+    }
+
+    private suspend fun synthesizePassage(
+        engine: com.whisperbook.app.domain.LocalTtsEngine,
+        task: PassageSynthesisTask,
+    ) {
+        val passage = task.passage
+        val request = task.request
+        val segment = LocalAudioGenerationCoordinator.runBackground {
+            durablePassageAudio(task) ?: run {
+                database.audioSegmentDao().upsert(
+                    AudioSegmentEntity(
+                        id = request.cacheKey,
+                        passageId = passage.id,
+                        cacheKey = request.cacheKey,
+                        state = AudioSegmentState.GENERATING.name,
+                        path = null,
+                        durationMs = 0L,
+                        sampleRate = dependencies.expectedSampleRate,
+                    ),
+                )
+                try {
+                    val result = engine.synthesize(request).getOrThrow()
+                    if (result.sampleRate != dependencies.expectedSampleRate) {
+                        throw PreparationPipelineException(
+                            "sample-rate-mismatch",
+                            "The local model returned an unexpected sample rate",
+                            false,
+                        )
+                    }
+                    dependencies.audioSegmentStore.writeForPassage(
+                        passage.id,
+                        passage.speakerId,
+                        request,
+                        result,
                     )
+                } catch (cancellation: CancellationException) {
+                    throw cancellation
+                } catch (failure: Throwable) {
+                    database.audioSegmentDao().updateState(
+                        request.cacheKey,
+                        AudioSegmentState.FAILED.name,
+                        null,
+                    )
+                    throw failure
                 }
-                dependencies.audioSegmentStore.writeForPassage(passage.id, passage.speakerId, request, result)
-            } catch (failure: Throwable) {
-                database.audioSegmentDao().updateState(cacheKey, AudioSegmentState.FAILED.name, null)
-                throw failure
             }
         }
         database.audioSegmentDao().upsert(segment.toEntity())
     }
 
-    private suspend fun firstPassageHasDurableAudio(passage: PassageEntity): Boolean =
-        database.audioSegmentDao().observeForPassage(passage.id).first().any { segment ->
-            segment.state == AudioSegmentState.READY.name && segment.path?.let(::File)?.isFile == true
-        }
+    private suspend fun isPassageAudioDurable(task: PassageSynthesisTask): Boolean {
+        val segment = durablePassageAudio(task) ?: return false
+        database.audioSegmentDao().upsert(segment.toEntity())
+        return true
+    }
+
+    private suspend fun durablePassageAudio(task: PassageSynthesisTask) =
+        database.audioSegmentDao().findByCacheKey(task.request.cacheKey)
+            ?.takeIf { it.state == AudioSegmentState.READY.name }
+            ?.toDomain()
+            ?.takeIf { it.path?.let(::File)?.isFile == true }
+            ?: dependencies.audioSegmentStore.find(task.request.cacheKey)
+                ?.takeIf { it.path?.let(::File)?.isFile == true }
+
+    private fun chapterPreparationMessage(
+        chapter: ChapterAudioBatch<*>,
+        totalChapters: Int,
+    ): String = "Preparing chapter ${chapter.chapterOrdinal + 1} of $totalChapters: ${chapter.chapterTitle}"
+
+    private data class PassageSynthesisTask(
+        val passage: PassageEntity,
+        val request: SynthesisRequest,
+    )
 
     private suspend fun requireBook(bookId: String) =
         database.bookDao().observeById(bookId).first()?.book
@@ -546,6 +711,7 @@ internal class PreparationStageRunner(
 
     private suspend fun checkpoint(bookId: String, state: PreparationState, attemptCount: Int) {
         database.preparationJobDao().upsert(stateEntity(bookId, state, attemptCount))
+        onStateCheckpoint(state)
     }
 
     private fun stateEntity(
@@ -639,3 +805,21 @@ private fun File.sha256(): String {
 
 private fun String?.safeMessage(fallback: String = "Preparation could not finish"): String =
     this?.trim()?.takeIf(String::isNotBlank)?.take(300) ?: fallback
+
+private fun PreparationStage.notificationMessage(): String = when (this) {
+    PreparationStage.COPY_AND_VALIDATE -> "Checking the private book copy"
+    PreparationStage.READING_CHAPTERS -> "Reading chapters on this device"
+    PreparationStage.FINDING_CHARACTERS -> "Finding the voices in this story"
+    PreparationStage.ASSIGNING_VOICES -> "Casting local voices"
+    PreparationStage.PREPARING_AUDIO -> "Preparing the opening passages"
+    PreparationStage.READY -> "Ready to listen"
+    PreparationStage.FAILED -> "Preparation needs attention"
+}
+
+internal fun preparationNotificationText(state: PreparationState): String = when {
+    state.stage == PreparationStage.PREPARING_AUDIO && state.totalUnits > 0 -> {
+        val completed = state.completedUnits.coerceIn(0, state.totalUnits)
+        "Recorded $completed of ${state.totalUnits} chapters"
+    }
+    else -> state.message ?: state.stage.notificationMessage()
+}

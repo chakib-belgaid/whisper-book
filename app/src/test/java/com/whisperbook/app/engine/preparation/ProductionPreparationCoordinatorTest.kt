@@ -47,6 +47,25 @@ class ProductionPreparationCoordinatorTest {
     }
 
     @Test
+    fun `audio regeneration replaces preparation with an audio only restart point`() {
+        val scheduler = RecordingScheduler()
+        val coordinator = ProductionPreparationCoordinator(scheduler, FakePreparationJobDao())
+
+        coordinator.regenerateAudio("book-42", fromChapterOrdinal = 3)
+
+        assertEquals(
+            listOf(RecordingScheduler.AudioRestart("prepare-book-book-42", "book-42", 3)),
+            scheduler.audioRestarts,
+        )
+        assertEquals(ExistingWorkPolicy.REPLACE, PreparationWorkPlan.regenerationWorkPolicy)
+        assertEquals(
+            3,
+            PreparationWorkPlan.input("book-42", PreparationStage.PREPARING_AUDIO, 3)
+                .getInt(PreparationWorkPlan.KEY_FROM_CHAPTER_ORDINAL, -1),
+        )
+    }
+
+    @Test
     fun `room job is mapped into observable domain progress`() = runTest {
         val jobs = FakePreparationJobDao()
         val coordinator = ProductionPreparationCoordinator(RecordingScheduler(), jobs)
@@ -97,6 +116,7 @@ private class RecordingScheduler : PreparationWorkScheduler {
     val enqueuedNames = mutableListOf<String>()
     val enqueuedBookIds = mutableListOf<String>()
     val cancelledNames = mutableListOf<String>()
+    val audioRestarts = mutableListOf<AudioRestart>()
 
     override fun enqueueUniqueChain(uniqueName: String, bookId: String) {
         enqueuedNames += uniqueName
@@ -106,6 +126,20 @@ private class RecordingScheduler : PreparationWorkScheduler {
     override fun cancelUnique(uniqueName: String) {
         cancelledNames += uniqueName
     }
+
+    override fun replaceWithAudioGeneration(
+        uniqueName: String,
+        bookId: String,
+        fromChapterOrdinal: Int,
+    ) {
+        audioRestarts += AudioRestart(uniqueName, bookId, fromChapterOrdinal)
+    }
+
+    data class AudioRestart(
+        val uniqueName: String,
+        val bookId: String,
+        val fromChapterOrdinal: Int,
+    )
 }
 
 private class FakePreparationJobDao : PreparationJobDao {

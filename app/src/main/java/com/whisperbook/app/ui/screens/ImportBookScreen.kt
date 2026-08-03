@@ -7,7 +7,6 @@ import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -53,7 +52,9 @@ import androidx.compose.ui.unit.sp
 import com.whisperbook.app.R
 import com.whisperbook.app.ui.components.LeafDivider
 import com.whisperbook.app.ui.components.PapercraftButton
+import com.whisperbook.app.ui.components.PaperFold
 import com.whisperbook.app.ui.components.ParchmentPanel
+import com.whisperbook.app.ui.components.paperClickable
 import com.whisperbook.app.ui.theme.WhisperbookTheme
 
 private val AcceptedBookTypes = arrayOf(
@@ -306,7 +307,12 @@ private fun RecentFile(
             .fillMaxWidth()
             .padding(horizontal = 30.dp)
             .heightIn(min = 47.dp)
-            .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+            .paperClickable(
+                onClick = onClick,
+                enabled = enabled,
+                role = Role.Button,
+                fold = PaperFold.Card,
+            )
             .semantics(mergeDescendants = true) {
                 contentDescription = "$title, $metadata. Choose this file"
             },

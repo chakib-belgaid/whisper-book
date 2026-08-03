@@ -2,6 +2,7 @@ package com.whisperbook.app.engine.attribution
 
 import com.whisperbook.app.domain.AttributedPublication
 import com.whisperbook.app.domain.ExtractedPublication
+import com.whisperbook.app.domain.PassageTextChunker
 import com.whisperbook.app.domain.SpeakerAttributor
 import com.whisperbook.app.domain.model.BuiltInCharacters
 import com.whisperbook.app.domain.model.Chapter
@@ -54,10 +55,10 @@ class HeuristicSpeakerAttributor(
                 if (paragraph.isBlank()) return@forEachIndexed
                 val spans = DialogueScanner.scan(paragraph)
                 if (spans.isEmpty()) {
-                    passages += passage(
+                    addPassages(
+                        passages = passages,
                         chapterId = chapterId,
-                        ordinal = passages.size,
-                        text = paragraph,
+                        rawText = paragraph,
                         speaker = narratorNarration(),
                     )
                     return@forEachIndexed
@@ -76,7 +77,7 @@ class HeuristicSpeakerAttributor(
                     val evidence = explicit ?: scene.carryOver(paragraphIndex) ?: narratorFallback()
                     val dialogue = span.content(paragraph).trim()
                     if (dialogue.isNotBlank()) {
-                        passages += passage(chapterId, passages.size, dialogue, evidence)
+                        addPassages(passages, chapterId, dialogue, evidence)
                         registry.incrementDialogue(evidence.speakerId)
                         scene.onDialogue(paragraphIndex, evidence)
                     }
@@ -103,23 +104,28 @@ class HeuristicSpeakerAttributor(
         rawText: String,
     ) {
         val text = rawText.trim().trimStart(',', ';').trim()
-        if (text.isNotBlank()) passages += passage(chapterId, passages.size, text, narratorNarration())
+        if (text.isNotBlank()) addPassages(passages, chapterId, text, narratorNarration())
     }
 
-    private fun passage(
+    private fun addPassages(
+        passages: MutableList<Passage>,
         chapterId: String,
-        ordinal: Int,
-        text: String,
+        rawText: String,
         speaker: SpeakerEvidence,
-    ) = Passage(
-        id = "$chapterId-passage-${ordinal + 1}",
-        chapterId = chapterId,
-        ordinal = ordinal,
-        text = text,
-        speakerId = speaker.speakerId,
-        confidence = speaker.confidence.coerceIn(0f, 1f),
-        attributionRule = speaker.serializedRule(),
-    )
+    ) {
+        PassageTextChunker.split(rawText).forEach { text ->
+            val ordinal = passages.size
+            passages += Passage(
+                id = "$chapterId-passage-${ordinal + 1}",
+                chapterId = chapterId,
+                ordinal = ordinal,
+                text = text,
+                speakerId = speaker.speakerId,
+                confidence = speaker.confidence.coerceIn(0f, 1f),
+                attributionRule = speaker.serializedRule(),
+            )
+        }
+    }
 
     private fun narratorNarration() = SpeakerEvidence(
         speakerId = BuiltInCharacters.NARRATOR_ID,

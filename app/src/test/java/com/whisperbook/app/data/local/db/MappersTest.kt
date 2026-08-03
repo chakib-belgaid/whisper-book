@@ -38,6 +38,8 @@ class MappersTest {
                     updatedAtEpochMs = 42L,
                 ),
             ),
+            chapterCount = 42,
+            currentChapterOrdinal = 6,
         )
 
         val mapped = aggregate.toDomain()
@@ -46,6 +48,8 @@ class MappersTest {
         assertEquals(1f, mapped.progressFraction)
         assertEquals(PreparationStage.FINDING_CHARACTERS, mapped.preparation.stage)
         assertEquals(3, mapped.preparation.completedUnits)
+        assertEquals(42, mapped.chapterCount)
+        assertEquals(6, mapped.currentChapterOrdinal)
         assertNull(mapped.sourceUri)
         assertEquals("abc123", mapped.toEntity(sourceSha256 = "abc123").sourceSha256)
     }

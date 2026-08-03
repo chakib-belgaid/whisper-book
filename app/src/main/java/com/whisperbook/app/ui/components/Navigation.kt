@@ -14,7 +14,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -86,10 +85,11 @@ private fun RowScope.StorybookDestinationItem(
         modifier = Modifier
             .weight(1f)
             .fillMaxHeight()
-            .selectable(
+            .paperSelectable(
                 selected = selected,
                 onClick = onClick,
                 role = Role.Tab,
+                fold = PaperFold.Tab,
             )
             .semantics {
                 contentDescription = destination.label

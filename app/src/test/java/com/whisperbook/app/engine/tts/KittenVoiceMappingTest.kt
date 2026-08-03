@@ -6,15 +6,15 @@ import org.junit.Test
 
 class KittenVoiceMappingTest {
     @Test
-    fun `kitten voices keep stable ids names and speaker indices`() {
+    fun `friendly voices map to gender and age appropriate supertonic presets`() {
         val expected = listOf(
-            Triple("bella", "Bella", 0),
-            Triple("jasper", "Jasper", 1),
-            Triple("luna", "Luna", 2),
-            Triple("bruno", "Bruno", 3),
-            Triple("rosie", "Rosie", 4),
-            Triple("hugo", "Hugo", 5),
-            Triple("kiki", "Kiki", 6),
+            Triple("bella", "Bella", 4), // F5: mature, calm
+            Triple("jasper", "Jasper", 9), // M5: older, measured
+            Triple("luna", "Luna", 1), // F2: young, lively
+            Triple("bruno", "Bruno", 8), // M4: warm, mature
+            Triple("rosie", "Rosie", 2), // F3: older, measured
+            Triple("hugo", "Hugo", 6), // M2: grounded adult
+            Triple("kiki", "Kiki", 3), // F4: youthful, energetic
             Triple("leo", "Leo", 7),
         )
 
@@ -23,9 +23,21 @@ class KittenVoiceMappingTest {
         })
         assertTrue(SherpaKittenTtsEngine.KITTEN_VOICES.all { it.embedded && it.localeTag == "en-US" })
         assertEquals(
-            "kitten-nano-en-v0_8-int8+sherpa-onnx-1.13.4",
+            setOf("bella", "luna", "rosie", "kiki"),
+            SherpaKittenTtsEngine.KITTEN_VOICES
+                .filter { it.speakerIndex in 0..4 }
+                .mapTo(linkedSetOf()) { it.id },
+        )
+        assertEquals(
+            setOf("jasper", "bruno", "hugo", "leo"),
+            SherpaKittenTtsEngine.KITTEN_VOICES
+                .filter { it.speakerIndex in 5..9 }
+                .mapTo(linkedSetOf()) { it.id },
+        )
+        assertEquals(
+            "supertonic-3-int8-2026-05-11+sherpa-onnx-1.13.4",
             SherpaKittenTtsEngine.MODEL_VERSION,
         )
-        assertEquals(24_000, SherpaKittenTtsEngine.EXPECTED_SAMPLE_RATE)
+        assertEquals(44_100, SherpaKittenTtsEngine.EXPECTED_SAMPLE_RATE)
     }
 }

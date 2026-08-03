@@ -14,10 +14,13 @@ import com.whisperbook.app.domain.model.Chapter
 import com.whisperbook.app.domain.model.CharacterVoiceAssignment
 import com.whisperbook.app.domain.model.PreparationStage
 import com.whisperbook.app.domain.model.StoryCharacter
+import java.io.File
 import java.util.UUID
 import java.util.concurrent.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withContext
 
 class RoomLibraryRepository(
     private val database: WhisperBookDatabase,
@@ -48,12 +51,15 @@ class RoomLibraryRepository(
             return Result.failure(error)
         }
         return try {
-            val bookId = idGenerator()
             val now = clockEpochMs()
-            database.withTransaction {
+            val bookId = database.withTransaction {
+                imported.sha256.takeIf(String::isNotBlank)
+                    ?.let { database.bookDao().findIdBySourceSha256(it) }
+                    ?.let { return@withTransaction it }
+                val newBookId = idGenerator()
                 database.bookDao().insert(
                     BookEntity(
-                        id = bookId,
+                        id = newBookId,
                         title = imported.title.ifBlank { "Untitled book" },
                         author = imported.author,
                         format = imported.format.name,
@@ -69,7 +75,7 @@ class RoomLibraryRepository(
                 )
                 database.preparationJobDao().upsert(
                     PreparationJobEntity(
-                        bookId = bookId,
+                        bookId = newBookId,
                         stage = PreparationStage.COPY_AND_VALIDATE.name,
                         completedUnits = 1,
                         totalUnits = 1,
@@ -80,6 +86,7 @@ class RoomLibraryRepository(
                         updatedAtEpochMs = now,
                     ),
                 )
+                newBookId
             }
             Result.success(bookId)
         } catch (cancellation: CancellationException) {
@@ -94,6 +101,23 @@ class RoomLibraryRepository(
     }
 
     override suspend fun deleteBook(bookId: String) {
-        database.bookDao().deleteById(bookId)
+        val artifacts = database.withTransaction {
+            val book = database.bookDao().getById(bookId) ?: return@withTransaction null
+            val audioPaths = database.audioSegmentDao().getPathsForBook(bookId).distinct()
+            database.bookDao().deleteById(bookId)
+            val privateSourcePath = book.privateSourcePath
+                ?.takeIf { database.bookDao().countByPrivateSourcePath(it) == 0 }
+            val unreferencedAudioPaths = audioPaths.filter { database.audioSegmentDao().countByPath(it) == 0 }
+            DeletedBookArtifacts(privateSourcePath, unreferencedAudioPaths)
+        } ?: return
+        withContext(Dispatchers.IO) {
+            artifacts.privateSourcePath?.let(::File)?.delete()
+            artifacts.audioPaths.map(::File).forEach(File::delete)
+        }
     }
 }
+
+private data class DeletedBookArtifacts(
+    val privateSourcePath: String?,
+    val audioPaths: List<String>,
+)

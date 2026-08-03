@@ -18,6 +18,10 @@ import androidx.compose.material.icons.outlined.Speed
 import androidx.compose.material.icons.outlined.WbSunny
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
@@ -32,6 +36,7 @@ fun SettingsScreen(
     onManageVoices: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var showNarratorPicker by rememberSaveable { mutableStateOf(false) }
     LazyColumn(
         modifier = modifier.fillMaxSize().padding(contentPadding),
         contentPadding = PaddingValues(horizontal = 13.dp, vertical = 5.dp),
@@ -46,7 +51,7 @@ fun SettingsScreen(
                     "Default narrator",
                     value = appState.defaultNarratorVoice,
                     icon = Icons.Outlined.RecordVoiceOver,
-                    onClick = appState::cycleDefaultNarratorVoice,
+                    onClick = { showNarratorPicker = true },
                 )
                 CompactDivider()
                 GoldenSettingsRow("Speaking speed", value = "${appState.speed}×", icon = Icons.Outlined.Speed, onClick = appState::cycleSpeed)
@@ -112,6 +117,20 @@ fun SettingsScreen(
                 )
             }
         }
+    }
+
+    if (showNarratorPicker) {
+        VoicePickerSheet(
+            characterName = "Narrator",
+            voices = appState.voiceOptions,
+            selectedVoiceName = appState.defaultNarratorVoice,
+            onDismiss = { showNarratorPicker = false },
+            onPreviewVoice = { voice -> appState.previewVoice(voice.id, "Narrator") },
+            onVoiceSelected = { voice ->
+                appState.chooseDefaultNarratorVoice(voice.id)
+                showNarratorPicker = false
+            },
+        )
     }
 }
 

@@ -43,6 +43,7 @@ fun WhisperbookTheme(
         LocalWhisperbookElevations provides WhisperbookElevations(),
         LocalWhisperbookShapes provides WhisperbookShapes(),
         LocalWhisperbookComponents provides WhisperbookComponentTokens(),
+        LocalWhisperbookMotion provides WhisperbookMotion(),
         LocalWhisperbookTypography provides type,
     ) {
         MaterialTheme(
@@ -68,6 +69,9 @@ object WhisperbookTheme {
 
     val components: WhisperbookComponentTokens
         @Composable @ReadOnlyComposable get() = LocalWhisperbookComponents.current
+
+    val motion: WhisperbookMotion
+        @Composable @ReadOnlyComposable get() = LocalWhisperbookMotion.current
 
     val typography: WhisperbookTypography
         @Composable @ReadOnlyComposable get() = LocalWhisperbookTypography.current

@@ -1,40 +1,121 @@
-# Whisperbook for Android
+<p align="center">
+  <img src="./assets/readme/hero.svg" width="100%" alt="Whisperbook turns local EPUB and PDF books into synchronized multi-voice audiobooks entirely on Android">
+</p>
 
-Whisperbook turns a local PDF or EPUB into a chapter-based audiobook without an account, upload, or network connection. It extracts the publication on-device, finds quoted dialogue with deterministic heuristics, assigns stable character colors and embedded voices, synthesizes local WAV segments, and keeps the active passage synchronized with Media3 playback.
+<p align="center">
+  <strong>Android 8.0+</strong> · <strong>arm64</strong> · <strong>offline runtime</strong> · <strong>no account</strong> · <strong>no cloud upload</strong>
+</p>
 
-![Whisperbook welcome screen](design-system/screens/01-welcome.png)
+Whisperbook is an offline-first Android reader that converts a local EPUB or PDF into a chapter-based audiobook. It extracts text, identifies dialogue, assigns stable character voices, synthesizes speech, and keeps the visible passage synchronized with playback—without sending the book off the device.
 
-## What is implemented
+> [!IMPORTANT]
+> The app runtime deliberately has no `INTERNET` or `ACCESS_NETWORK_STATE` permission. A first development build still needs network access to resolve Gradle dependencies.
 
-- Private Storage Access Framework import with byte-signature validation and SHA-256 integrity checks.
-- EPUB metadata, reading-order, navigation, and chapter extraction.
-- Text-layer PDF extraction plus bundled ML Kit OCR for image-only PDFs.
-- Explainable regex/heuristic dialogue attribution with character aliases and confidence evidence.
-- Eight embedded KittenTTS Nano voices through sherpa-onnx; no model download is required.
-- WorkManager preparation chain that survives backgrounding and process restarts.
-- Room persistence for books, chapters, passages, characters, assignments, audio, jobs, and playback checkpoints.
-- App-private, bounded, atomic WAV cache and Media3 foreground playback.
-- Chapter picker, automatic next-chapter prefetch and continuation, 15-second transport, playback speed, sleep timer, audio focus, and headphone-disconnect handling.
-- Synchronized read-along with detected character names, color rails, an explicit “Now speaking” state, live passage progress, and optional auto-scroll.
-- Native Compose implementations of all nine screens in the blue Woodland Paper Theatre design.
-- No `INTERNET` or `ACCESS_NETWORK_STATE` permission in the built APK; backup and device transfer are disabled for private books and audio.
+## See it working
 
-The complete screen inventory and navigation artifact are in [design-system/IMPLEMENTATION_MAP.md](design-system/IMPLEMENTATION_MAP.md) and [design-system/navigation/navigation-graph.svg](design-system/navigation/navigation-graph.svg).
+<p align="center">
+  <img src="./art/qa/emulator/01-welcome-fidelity-final.png" width="30%" alt="Whisperbook welcome screen">
+  &nbsp;
+  <img src="./art/qa/emulator/05-now-playing-actual-live.png" width="30%" alt="Whisperbook now-playing screen with local audiobook playback">
+  &nbsp;
+  <img src="./art/qa/emulator/09-current-chapter-playing-final.png" width="30%" alt="Whisperbook synchronized chapter read-along screen">
+</p>
 
-## Build
+These are captured emulator builds, not design mockups. The full screen inventory lives in the [implementation map](design-system/IMPLEMENTATION_MAP.md).
 
-Requirements: Android Studio/SDK 36, Android build-tools 36, and JDK 17.
+## What it does
+
+| Capability | Implementation |
+| --- | --- |
+| Private import | Android Storage Access Framework, byte-signature validation, SHA-256 duplicate detection, and an app-private source copy |
+| Publication extraction | EPUB metadata/reading-order parsing, PDF text extraction, and bundled ML Kit OCR for image-only pages |
+| Character voices | Explainable dialogue heuristics, aliases, confidence evidence, eight embedded Supertonic 3 voice presets, and per-character overrides |
+| Durable preparation | A staged WorkManager pipeline with persisted progress, restart recovery, opening-audio priority, and next-chapter prefetch |
+| Local audio | sherpa-onnx inference, 44.1 kHz WAV output, atomic writes, cache validation, retention, and bounded cleanup |
+| Playback | Media3 foreground service, chapter queueing, automatic continuation, 15-second seek, speed control, sleep timer, and audio-focus handling |
+| Read-along | Active-passage tracking, speaker labels and portraits, live progress, optional auto-scroll, and playback checkpoints |
+| Privacy | No runtime networking permission, no accounts, no analytics, no cloud fallback, and Android backup/transfer disabled |
+
+## How a book becomes audio
+
+<p align="center">
+  <img src="./docs/architecture/diagrams/offline-pipeline.svg" width="100%" alt="Seven-stage offline pipeline from local book selection to checkpointed audiobook playback">
+</p>
+
+The opening chapter is prioritized so listening can start before the whole book is synthesized. Later chapters are generated on demand and prefetched sequentially. The editable diagrams.net source is [offline-pipeline.drawio](docs/architecture/diagrams/offline-pipeline.drawio).
+
+## Architecture
+
+<p align="center">
+  <img src="./docs/architecture/diagrams/system-architecture.svg" width="100%" alt="Whisperbook layered Android architecture and private data boundary">
+</p>
+
+The application uses one Android module with package boundaries for presentation, orchestration, domain contracts, processing engines, persistence, and playback. `WhisperbookAppContainer` is the process-scoped composition root; `WhisperbookViewModel` translates UI intent into repository, preparation, and playback operations.
+
+Read the [architecture guide](docs/architecture/README.md) for responsibilities, dependency direction, runtime flows, storage boundaries, and change guidance. The editable diagrams.net source is [system-architecture.drawio](docs/architecture/diagrams/system-architecture.drawio).
+
+## Repository map
+
+```text
+whisper-book/
+├── app/
+│   ├── schemas/                  Room schema history
+│   └── src/
+│       ├── main/
+│       │   ├── assets/tts/       Bundled Supertonic 3 model
+│       │   ├── java/.../data/    Room, DataStore, repositories
+│       │   ├── java/.../domain/  Models and ports
+│       │   ├── java/.../engine/  Import, extraction, attribution, TTS
+│       │   ├── java/.../playback/Media3 service and queue
+│       │   └── java/.../ui/      Compose screens and design system
+│       ├── test/                 JVM tests
+│       └── androidTest/          Device/emulator tests
+├── art/                          Source art and emulator evidence
+├── assets/readme/                README visual identity
+├── design-system/                Approved screens and navigation map
+├── docs/architecture/            Architecture guide and editable diagrams
+├── docs/licenses/                Third-party artifact records
+└── qa-fixtures/                  Deterministic EPUB test fixture
+```
+
+## Build and install
+
+### Requirements
+
+- JDK 17
+- Android SDK 36 and build-tools 36
+- An arm64 Android device or emulator running Android 8.0 / API 26 or newer
+
+The TTS runtime and model are committed under `app/libs/` and `app/src/main/assets/tts/`; no separate model download is required.
 
 ```bash
 ./gradlew :app:assembleDebug
-./gradlew :app:testDebugUnitTest :app:lintDebug
-./gradlew connectedDebugAndroidTest
-./gradlew :app:assembleRelease :app:bundleRelease
+adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
 
-The debug APK is written to `app/build/outputs/apk/debug/app-debug.apk`. Without release credentials, Gradle intentionally produces an unsigned release artifact.
+Open the app, choose a readable `.epub` or `.pdf` in the Android document picker, and wait for the opening audio to finish preparing.
 
-For a signed release, set all four variables before building:
+## Verification
+
+Run the local quality gate:
+
+```bash
+./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleRelease
+```
+
+Run connected tests with an arm64 device or emulator available:
+
+```bash
+./gradlew connectedDebugAndroidTest
+```
+
+JVM tests cover document parsing, attribution, persistence mapping, cache behavior, WAV generation, preparation, ViewModel actions, settings, navigation contracts, and playback utilities. Connected tests exercise real model loading/synthesis, Android EPUB/PDF extraction, local OCR, Compose semantics, navigation, voice preview, library persistence, and chapter continuation.
+
+CI runs unit tests, lint, and an unsigned release build on every push and pull request.
+
+## Release builds
+
+Release builds are minified and resource-shrunk. Provide all four signing values to generate a signed artifact:
 
 ```bash
 export WHISPERBOOK_KEYSTORE_PATH=/absolute/path/to/release.jks
@@ -44,24 +125,25 @@ export WHISPERBOOK_KEY_PASSWORD='...'
 ./gradlew :app:bundleRelease
 ```
 
-Secrets and keystores are never committed.
+Without these variables, Gradle intentionally creates an unsigned release artifact. Keystores and signing secrets are ignored by Git.
 
-## Test coverage
+## Supported input and boundaries
 
-JVM tests cover format signatures, EPUB parsing, chapter detection, paragraph normalization, dialogue attribution, voice mapping, PCM conversion, WAV integrity, cache invalidation/LRU behavior, preparation checkpoints, settings, persistence mapping, ViewModel actions, sleep timing, and navigation contracts.
+- EPUB and PDF are supported; corrupt, encrypted, password-protected, and DRM-protected publications are rejected.
+- Image-only PDF pages use bundled on-device OCR. Pages with no recognizable text remain an import error; there is no cloud fallback.
+- The current native runtime is packaged for `arm64-v8a` only.
+- Large books are prepared progressively; they are not fully synthesized before playback starts.
+- Imported sources, extracted content, generated audio, settings, and checkpoints live in app-private storage. Uninstalling the app or clearing its data removes that private library, not the user's original external file.
 
-Connected Android tests cover:
+## Project documents
 
-- Native KittenTTS model loading and real PCM synthesis on arm64.
-- EPUB parsing with Android's platform XML implementation.
-- Text-layer PDF extraction.
-- Image-only PDF recognition with bundled offline OCR.
-- Compose navigation, semantics, minimum touch targets, and the read-along active state.
+- [Architecture](docs/architecture/README.md) — component responsibilities, flows, boundaries, and editable diagrams
+- [Product contract](PRODUCT.md) — product goals, non-goals, and acceptance criteria
+- [Design system](DESIGN.md) — Woodland Paper Theatre principles and UI tokens
+- [Implementation map](design-system/IMPLEMENTATION_MAP.md) — screen-by-screen source and asset mapping
+- [Privacy](PRIVACY.md) — on-device data handling and permission policy
+- [TTS artifacts](docs/licenses/TTS_ARTIFACTS.md) — bundled runtime/model provenance and checksums
 
-An end-to-end emulator run also imports `qa-fixtures/tiny-story.epub`, prepares all five worker stages, synthesizes opening passages, plays the chapter through the foreground Media3 service, and displays the attributed Elara/Rowan/Narrator passages.
+## Licensing
 
-## Supported input
-
-Whisperbook accepts valid, readable PDF and EPUB documents. Password-protected/encrypted, corrupt, DRM-protected, or textless pages that cannot be recognized are reported as local import errors; no cloud fallback is attempted. Very large books are prepared progressively, and chapter audio beyond the opening prefetch is synthesized locally on demand.
-
-See [PRIVACY.md](PRIVACY.md) and [docs/licenses/TTS_ARTIFACTS.md](docs/licenses/TTS_ARTIFACTS.md) for the privacy and third-party artifact record.
+Third-party runtimes, model assets, and fonts retain their own licenses under [docs/licenses](docs/licenses). This repository does not currently declare a top-level license for the Whisperbook application source; add one before distributing or accepting external contributions.

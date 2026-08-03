@@ -35,4 +35,31 @@ class SherpaKittenTtsEngineTest {
             engine.close()
         }
     }
+
+    @Test
+    fun brunoAndJasperUseReachableMasculinePresets() = runBlocking {
+        val engine = SherpaKittenTtsEngine(ApplicationProvider.getApplicationContext())
+        try {
+            engine.warmUp().getOrThrow()
+            val voices = engine.voices().associateBy { it.id }
+
+            listOf("bruno", "jasper").forEach { voiceId ->
+                val voice = requireNotNull(voices[voiceId])
+                assertTrue("$voiceId should use an M1-M5 preset", voice.speakerIndex in 5..9)
+                val audio = engine.synthesize(
+                    SynthesisRequest(
+                        text = "The lantern is ready.",
+                        voice = voice,
+                        speed = 1f,
+                        cacheKey = "instrumented-$voiceId-voice-test",
+                    ),
+                ).getOrThrow()
+
+                assertEquals(SherpaKittenTtsEngine.EXPECTED_SAMPLE_RATE, audio.sampleRate)
+                assertTrue(audio.pcm16.isNotEmpty())
+            }
+        } finally {
+            engine.close()
+        }
+    }
 }

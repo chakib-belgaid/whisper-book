@@ -179,6 +179,44 @@ data class VoiceAssignmentEntity(
     val speed: Float,
 )
 
+/** A chapter-specific voice kept when a later voice change starts partway through a book. */
+@Entity(
+    tableName = "chapter_voice_assignments",
+    primaryKeys = ["chapter_id", "character_id"],
+    foreignKeys = [
+        ForeignKey(
+            entity = ChapterEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["chapter_id"],
+            onDelete = ForeignKey.CASCADE,
+            onUpdate = ForeignKey.CASCADE,
+        ),
+        ForeignKey(
+            entity = StoryCharacterEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["character_id"],
+            onDelete = ForeignKey.CASCADE,
+            onUpdate = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [
+        Index(value = ["chapter_id"]),
+        Index(value = ["character_id"]),
+    ],
+)
+data class ChapterVoiceAssignmentEntity(
+    @ColumnInfo(name = "chapter_id")
+    val chapterId: String,
+    @ColumnInfo(name = "character_id")
+    val characterId: String,
+    @ColumnInfo(name = "voice_id")
+    val voiceId: String,
+    @ColumnInfo(name = "model_version")
+    val modelVersion: String,
+    @ColumnInfo(name = "speed")
+    val speed: Float,
+)
+
 @Entity(
     tableName = "audio_segments",
     primaryKeys = ["id"],

@@ -13,7 +13,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.semantics.heading
@@ -26,6 +32,12 @@ import com.whisperbook.app.ui.components.PapercraftButton
 import com.whisperbook.app.ui.components.ParchmentPanel
 import com.whisperbook.app.ui.theme.WhisperbookTheme
 
+private data class PendingVoiceChange(
+    val characterId: String,
+    val characterName: String,
+    val voice: VoiceOptionUi,
+)
+
 @Composable
 fun VoiceCastScreen(
     contentPadding: PaddingValues,
@@ -34,6 +46,8 @@ fun VoiceCastScreen(
     onApply: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var choosingVoiceFor by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingVoiceChange by remember { mutableStateOf<PendingVoiceChange?>(null) }
     Column(
         modifier = modifier.fillMaxSize().padding(contentPadding).padding(horizontal = 10.dp, vertical = 5.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -48,6 +62,29 @@ fun VoiceCastScreen(
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth(),
             )
+            val status = when {
+                appState.isBusy -> appState.statusMessage ?: "Preparing your voice preview…"
+                appState.importError != null -> appState.importError
+                else -> appState.statusMessage
+            }
+            status?.let { message ->
+                Spacer(Modifier.height(4.dp))
+                Text(
+                    text = message,
+                    color = if (appState.importError != null) WhisperbookTheme.colors.action else WhisperbookTheme.colors.inkMuted,
+                    style = WhisperbookTheme.typography.label.copy(fontSize = 10.sp, lineHeight = 13.sp),
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+            if (appState.canRevertVoiceChange) {
+                TextButton(
+                    onClick = appState::revertVoiceChange,
+                    modifier = Modifier.align(Alignment.CenterHorizontally),
+                ) {
+                    Text("Revert voice change")
+                }
+            }
         }
         if (appState.cast.isEmpty()) {
             ParchmentPanel(
@@ -85,7 +122,7 @@ fun VoiceCastScreen(
                 GoldenVoiceCastCard(
                     member = member,
                     onPreviewVoice = { appState.previewCharacter(member.id) },
-                    onChangeVoice = { appState.cycleVoice(member.id) },
+                    onChangeVoice = { choosingVoiceFor = member.id },
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
@@ -93,6 +130,39 @@ fun VoiceCastScreen(
         OnDeviceVoiceNotice()
         Spacer(Modifier.height(4.dp))
         PapercraftButton("Apply to book", onApply, modifier = Modifier.fillMaxWidth())
+    }
+
+    choosingVoiceFor?.let { characterId ->
+        appState.cast.firstOrNull { it.id == characterId }?.let { member ->
+            VoicePickerSheet(
+                characterName = member.character,
+                voices = appState.voiceOptions,
+                selectedVoiceName = member.voice,
+                onDismiss = { choosingVoiceFor = null },
+                onPreviewVoice = { voice ->
+                    appState.previewVoice(voice.id, member.character)
+                },
+                onVoiceSelected = { voice ->
+                    choosingVoiceFor = null
+                    if (voice.displayName != member.voice) {
+                        pendingVoiceChange = PendingVoiceChange(member.id, member.character, voice)
+                    }
+                },
+            )
+        }
+    }
+
+    pendingVoiceChange?.let { pending ->
+        VoiceRegenerationDialog(
+            characterName = pending.characterName,
+            voiceName = pending.voice.displayName,
+            canStartFromNextChapter = appState.hasNextChapter,
+            onConfirm = { scope ->
+                pendingVoiceChange = null
+                appState.assignVoice(pending.characterId, pending.voice.id, scope)
+            },
+            onDismiss = { pendingVoiceChange = null },
+        )
     }
 }
 

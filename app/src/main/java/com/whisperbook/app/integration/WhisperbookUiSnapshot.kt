@@ -23,10 +23,13 @@ data class WhisperbookUiSnapshot(
     val preparation: PreparationState? = null,
     val settings: AppSettings = AppSettings(),
     val playback: PlaybackCursor? = null,
+    val loadingChapterId: String? = null,
     val isBusy: Boolean = false,
     val statusMessage: String? = null,
+    val backgroundProgressFraction: Float? = null,
     val errorMessage: String? = null,
     val localStorageBytes: Long = 0L,
+    val canRevertVoiceChange: Boolean = false,
 ) {
     val hasBooks: Boolean get() = books.isNotEmpty()
     val isPlaying: Boolean get() = playback?.isPlaying == true

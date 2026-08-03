@@ -9,10 +9,15 @@ import com.whisperbook.app.domain.model.Book
 import com.whisperbook.app.domain.model.Chapter
 import com.whisperbook.app.domain.model.CharacterVoiceAssignment
 import com.whisperbook.app.domain.model.PlaybackCursor
+import com.whisperbook.app.domain.model.PlaybackPreparationProgress
 import com.whisperbook.app.domain.model.PreparationState
+import com.whisperbook.app.domain.model.RevertibleVoiceChange
 import com.whisperbook.app.domain.model.StoryCharacter
+import com.whisperbook.app.domain.model.VoiceRegenerationRequest
+import com.whisperbook.app.domain.model.VoiceRegenerationScope
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -21,6 +26,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
@@ -30,12 +36,18 @@ class WhisperbookViewModel(
 ) : ViewModel() {
     private val selectedBookId = MutableStateFlow<String?>(null)
     private val selectedChapterId = MutableStateFlow<String?>(null)
+    private val loadingChapterId = MutableStateFlow<String?>(null)
     private val operation = MutableStateFlow(OperationState())
+    private val storageRefreshVersion = MutableStateFlow(0L)
+    private val voiceRetentionRefreshVersion = MutableStateFlow(0L)
+    private var voicePreviewJob: Job? = null
+    private var chapterSelectionJob: Job? = null
+    private var chapterSelectionRequest = 0L
 
     private val books = services.libraryRepository.observeBooks()
-    private val selectedBook: Flow<Book?> = selectedBookId.flatMapLatest { bookId ->
-        if (bookId == null) flowOf(null) else services.libraryRepository.observeBook(bookId)
-    }
+    private val selectedBook: Flow<Book?> = combine(books, selectedBookId) { allBooks, bookId ->
+        bookId?.let { id -> allBooks.firstOrNull { it.id == id } }
+    }.distinctUntilChanged()
     private val chapters: Flow<List<Chapter>> = selectedBookId.flatMapLatest { bookId ->
         if (bookId == null) flowOf(emptyList()) else services.libraryRepository.observeChapters(bookId)
     }
@@ -50,9 +62,30 @@ class WhisperbookViewModel(
     }
     private val voiceAssignments: Flow<Map<String, CharacterVoiceAssignment>> = characters
         .flatMapLatest { cast -> services.observeVoiceAssignments(cast.map(StoryCharacter::id)) }
-    private val storageBytes: Flow<Long> = combine(books, preparation) { _, _ ->
-        runCatching { services.localStorageBytes() }.getOrDefault(0L)
-    }.distinctUntilChanged()
+    private val revertibleVoiceChange: Flow<RevertibleVoiceChange?> = combine(
+        selectedBookId,
+        characters,
+        voiceRetentionRefreshVersion,
+    ) { bookId, cast, revision ->
+        VoiceRetentionLookup(bookId, cast.map(StoryCharacter::id), revision)
+    }
+        .mapLatest { lookup ->
+            val bookId = lookup.bookId ?: return@mapLatest null
+            services.retainedVoiceChanges(bookId, lookup.characterIds)
+                .maxByOrNull(RevertibleVoiceChange::expiresAtEpochMs)
+        }
+        .distinctUntilChanged()
+    private val storageBytes: Flow<Long> = combine(books, storageRefreshVersion) { allBooks, revision ->
+        StorageRefreshRequest(
+            books = allBooks.map { book ->
+                BookStorageState(book.id, book.privateSourcePath, book.preparation.stage)
+            },
+            revision = revision,
+        )
+    }
+        .distinctUntilChanged()
+        .mapLatest { runCatching { services.localStorageBytes() }.getOrDefault(0L) }
+        .distinctUntilChanged()
 
     private val libraryState = combine(
         books,
@@ -63,14 +96,24 @@ class WhisperbookViewModel(
     ) { allBooks, book, allChapters, chapter, cast ->
         LibraryState(allBooks, book, allChapters, chapter, cast)
     }
+    private val operationState = combine(
+        operation,
+        loadingChapterId,
+        services.playbackGateway.preparationProgress,
+    ) { operationState, chapterId, audioProgress ->
+        PendingOperationState(operationState, chapterId, audioProgress)
+    }
+    private val voiceState = combine(voiceAssignments, revertibleVoiceChange) { assignments, change ->
+        VoiceState(assignments, change)
+    }
     private val sessionState = combine(
         preparation,
         services.settingsRepository.settings,
         services.playbackGateway.cursor,
-        voiceAssignments,
-        operation,
-    ) { prep, settings, playback, assignments, operationState ->
-        SessionState(prep, settings, playback, assignments, operationState)
+        voiceState,
+        operationState,
+    ) { prep, settings, playback, voice, pendingOperation ->
+        SessionState(prep, settings, playback, voice.assignments, voice.revertibleChange, pendingOperation)
     }
 
     val uiState: StateFlow<WhisperbookUiSnapshot> = combine(libraryState, sessionState, storageBytes) { library, session, bytes ->
@@ -85,10 +128,16 @@ class WhisperbookViewModel(
             preparation = session.preparation,
             settings = session.settings,
             playback = session.playback,
-            isBusy = session.operation.isBusy,
-            statusMessage = session.operation.statusMessage,
-            errorMessage = session.operation.errorMessage,
+            loadingChapterId = session.pendingOperation.chapterId,
+            isBusy = session.pendingOperation.operation.isBusy ||
+                session.pendingOperation.audioProgress != null,
+            statusMessage = session.pendingOperation.audioProgress?.let { progress ->
+                progress.statusMessage(library.chapters, session.playback)
+            } ?: session.pendingOperation.operation.statusMessage,
+            backgroundProgressFraction = session.pendingOperation.audioProgress?.progressFraction,
+            errorMessage = session.pendingOperation.operation.errorMessage,
             localStorageBytes = bytes,
+            canRevertVoiceChange = session.revertibleVoiceChange != null,
         )
     }.stateIn(
         scope = viewModelScope,
@@ -118,6 +167,12 @@ class WhisperbookViewModel(
         viewModelScope.launch {
             services.playbackGateway.cursor.collect { cursor ->
                 cursor ?: return@collect
+                loadingChapterId.value?.let { pendingChapterId ->
+                    if (cursor.bookId != selectedBookId.value || cursor.chapterId != pendingChapterId) {
+                        return@collect
+                    }
+                    loadingChapterId.value = null
+                }
                 if (selectedBookId.value != cursor.bookId) selectedBookId.value = cursor.bookId
                 if (selectedChapterId.value != cursor.chapterId) selectedChapterId.value = cursor.chapterId
             }
@@ -126,6 +181,7 @@ class WhisperbookViewModel(
 
     fun selectBook(bookId: String) {
         if (bookId.isBlank() || selectedBookId.value == bookId) return
+        cancelChapterSelection()
         selectedBookId.value = bookId
         selectedChapterId.value = null
     }
@@ -135,11 +191,12 @@ class WhisperbookViewModel(
         val bookId = selectedBookId.value ?: return
         if (uiState.value.chapters.none { it.id == chapterId }) return
         selectedChapterId.value = chapterId
-        launchOperation("Opening chapter") {
-            services.playbackGateway.playBook(bookId, chapterId)
-            null
-        }
+        openChapter(bookId, chapterId)
     }
+
+    fun playPreviousChapter() = playAdjacentChapter(-1)
+
+    fun playNextChapter() = playAdjacentChapter(1)
 
     fun importBook(uri: Uri) = launchOperation("Importing your book") {
         services.libraryRepository.importBook(uri).getOrThrow().also { bookId ->
@@ -160,6 +217,9 @@ class WhisperbookViewModel(
 
     fun deleteSelectedBook() = launchOperation("Removing book") {
         val bookId = selectedBookId.value ?: return@launchOperation null
+        if (uiState.value.playback?.bookId == bookId) {
+            services.playbackGateway.pause()
+        }
         services.preparationCoordinator.cancel(bookId)
         services.libraryRepository.deleteBook(bookId)
         selectedBookId.value = null
@@ -167,34 +227,68 @@ class WhisperbookViewModel(
         "Book removed from this device."
     }
 
-    fun playOrPause() = launchOperation {
+    fun playOrPause(): Job {
         val cursor = uiState.value.playback
-        val selectedBook = uiState.value.selectedBook ?: error("Choose a book to listen to")
-        when {
-            cursor?.bookId != selectedBook.id -> services.playbackGateway.playBook(
-                selectedBook.id,
-                uiState.value.selectedChapter?.id,
-            )
-            cursor.isPlaying -> services.playbackGateway.pause()
-            else -> services.playbackGateway.play()
+        val selectedBook = uiState.value.selectedBook
+            ?: return launchOperation { error("Choose a book to listen to") }
+        return if (cursor?.bookId != selectedBook.id) {
+            val chapterId = uiState.value.selectedChapter?.id
+                ?: return launchOperation { error("Choose a chapter to listen to") }
+            openChapter(selectedBook.id, chapterId)
+        } else {
+            launchOperation {
+                if (cursor.isPlaying) services.playbackGateway.pause() else services.playbackGateway.play()
+                null
+            }
         }
-        null
     }
 
-    fun playSelectedChapter() = launchOperation("Preparing this chapter") {
-        val book = uiState.value.selectedBook ?: error("Choose a book to listen to")
-        services.playbackGateway.playBook(book.id, uiState.value.selectedChapter?.id)
-        null
+    fun playSelectedChapter() {
+        val book = uiState.value.selectedBook
+        val chapter = uiState.value.selectedChapter
+        if (book == null || chapter == null) {
+            launchOperation { error("Choose a book to listen to") }
+            return
+        }
+        openChapter(book.id, chapter.id)
     }
 
-    fun previewCharacter(characterId: String) = launchOperation("Preparing voice preview") {
-        val book = uiState.value.selectedBook ?: error("Choose a book first")
-        val chapter = uiState.value.selectedChapter ?: error("Choose a chapter first")
-        val passage = chapter.passages.firstOrNull { it.speakerId == characterId }
-            ?: error("This character has no passage in the selected chapter")
-        services.playbackGateway.playBook(book.id, chapter.id)
-        services.playbackGateway.seekToPassage(passage.id)
-        "Playing ${uiState.value.characters.firstOrNull { it.id == characterId }?.displayName ?: "voice"}"
+    fun previewCharacter(characterId: String): Job {
+        stopVoicePreview()
+        return launchOperation("Preparing voice preview") {
+            val snapshot = uiState.value
+            val character = snapshot.characters.firstOrNull { it.id == characterId }
+                ?: error("That character is no longer available")
+            val voices = services.availableVoices
+            val assignedVoiceId = snapshot.voiceAssignments[characterId]?.voiceId
+            val fallbackIndex = snapshot.characters.indexOf(character).coerceAtLeast(0)
+            val voice = voices.firstOrNull { it.id == assignedVoiceId }
+                ?: voices.getOrNull(fallbackIndex % voices.size.coerceAtLeast(1))
+                ?: error("No embedded voices are available")
+            if (snapshot.playback?.isPlaying == true) services.playbackGateway.pause()
+            services.voicePreviewPlayer.play(
+                text = voicePreviewText(character.displayName),
+                voice = voice,
+                speed = snapshot.settings.speakingSpeed,
+            ).getOrThrow()
+            "Played ${voice.displayName} for ${character.displayName}."
+        }.also { voicePreviewJob = it }
+    }
+
+    fun previewVoice(voiceId: String, characterName: String): Job {
+        stopVoicePreview()
+        return launchOperation("Preparing voice preview") {
+            val snapshot = uiState.value
+            val voice = services.availableVoices.firstOrNull { it.id == voiceId }
+                ?: error("That embedded voice is no longer available")
+            if (snapshot.playback?.isPlaying == true) services.playbackGateway.pause()
+            services.voicePreviewPlayer.play(
+                text = voicePreviewText(characterName),
+                voice = voice,
+                speed = snapshot.settings.speakingSpeed,
+            ).getOrThrow()
+            "Played ${voice.displayName} preview."
+        }.also { voicePreviewJob = it }
     }
 
     fun seekBy(deltaMs: Long) = launchOperation {
@@ -237,6 +331,11 @@ class WhisperbookViewModel(
         updateSettings { it.copy(defaultNarratorVoiceId = next.id) }
     }
 
+    fun chooseDefaultNarratorVoice(voiceId: String) {
+        if (services.availableVoices.none { it.id == voiceId }) return
+        updateSettings { it.copy(defaultNarratorVoiceId = voiceId) }
+    }
+
     fun cycleSleepTimer() {
         val current = uiState.value.settings.sleepTimerMinutes
         val timers = listOf(15, 30, 45, 60, 0)
@@ -251,16 +350,65 @@ class WhisperbookViewModel(
         null
     }
 
-    fun assignVoice(characterId: String, voiceId: String) = launchOperation("Updating the cast") {
-        val voice = services.availableVoices.firstOrNull { it.id == voiceId }
-            ?: error("That embedded voice is unavailable")
-        val speed = uiState.value.settings.speakingSpeed
-        services.audioSegmentStore.invalidateForCharacter(characterId)
-        services.deletePersistedAudioForCharacter(characterId)
-        services.libraryRepository.updateVoiceAssignment(
-            CharacterVoiceAssignment(characterId, voice.id, services.ttsModelVersion, speed),
-        )
-        "${voice.displayName} is ready for the next passage."
+    fun assignVoice(
+        characterId: String,
+        voiceId: String,
+        regenerationScope: VoiceRegenerationScope = VoiceRegenerationScope.WHOLE_BOOK,
+    ): Job {
+        stopVoicePreview()
+        return launchOperation("Updating the cast") {
+            val snapshot = uiState.value
+            val voice = services.availableVoices.firstOrNull { it.id == voiceId }
+                ?: error("That embedded voice is unavailable")
+            val previous = snapshot.voiceAssignments[characterId]
+                ?: error("The current voice assignment is unavailable")
+            if (previous.voiceId == voice.id) return@launchOperation null
+            val book = snapshot.selectedBook ?: error("Choose a book before changing its cast")
+            val currentChapter = snapshot.selectedChapter ?: snapshot.chapters.firstOrNull()
+                ?: error("This book has no prepared chapters")
+            val fromChapterOrdinal = when (regenerationScope) {
+                VoiceRegenerationScope.WHOLE_BOOK -> 0
+                VoiceRegenerationScope.FROM_NEXT_CHAPTER -> currentChapter.ordinal + 1
+            }
+            if (fromChapterOrdinal !in snapshot.chapters.indices) {
+                error("There is no next chapter to regenerate")
+            }
+            val speed = snapshot.settings.speakingSpeed
+            services.applyVoiceRegeneration(
+                VoiceRegenerationRequest(
+                    bookId = book.id,
+                    characterId = characterId,
+                    assignment = CharacterVoiceAssignment(
+                        characterId = characterId,
+                        voiceId = voice.id,
+                        modelVersion = services.ttsModelVersion,
+                        speed = speed,
+                    ),
+                    scope = regenerationScope,
+                    fromChapterOrdinal = fromChapterOrdinal,
+                ),
+            )
+            voiceRetentionRefreshVersion.value += 1L
+            refreshStorageUsage()
+            val boundary = if (regenerationScope == VoiceRegenerationScope.WHOLE_BOOK) {
+                "the whole book"
+            } else {
+                "Chapter ${fromChapterOrdinal + 1}"
+            }
+            "${voice.displayName} will narrate from $boundary. The previous audio is kept for 24 hours."
+        }
+    }
+
+    fun revertVoiceChange(): Job = launchOperation("Restoring the previous voice") {
+        val snapshot = uiState.value
+        val book = snapshot.selectedBook ?: error("Choose a book before reverting its cast")
+        val change = services.retainedVoiceChanges(book.id, snapshot.characters.map(StoryCharacter::id))
+            .maxByOrNull(RevertibleVoiceChange::expiresAtEpochMs)
+            ?: error("The previous voice is no longer available")
+        check(services.revertVoiceChange(change)) { "The previous voice is no longer available" }
+        voiceRetentionRefreshVersion.value += 1L
+        refreshStorageUsage()
+        "Previous narration restored. Missing chapters will finish in the background."
     }
 
     fun cycleVoice(characterId: String) {
@@ -276,14 +424,83 @@ class WhisperbookViewModel(
     fun setKeepScreenAwake(enabled: Boolean) = updateSettings { it.copy(keepScreenAwake = enabled) }
     fun setLargerText(enabled: Boolean) = updateSettings { it.copy(largerText = enabled) }
 
-    fun setAudioCacheLimit(bytes: Long) = launchOperation {
+    fun setAudioCacheLimit(bytes: Long) = launchOperation("Optimizing local audio storage") {
         services.settingsRepository.update { it.copy(audioCacheLimitBytes = bytes) }
         services.audioSegmentStore.trimTo(bytes)
+        refreshStorageUsage()
         null
     }
 
     fun clearMessage() {
         operation.value = OperationState()
+    }
+
+    override fun onCleared() {
+        cancelChapterSelection()
+        stopVoicePreview()
+        super.onCleared()
+    }
+
+    private fun openChapter(bookId: String, chapterId: String): Job {
+        val chapterNumber = uiState.value.chapters.indexOfFirst { it.id == chapterId }
+            .takeIf { it >= 0 }
+            ?.plus(1)
+        val status = chapterNumber
+            ?.let { "Preparing Chapter $it audio on this device. You can keep using Whisperbook." }
+            ?: "Preparing chapter audio on this device. You can keep using Whisperbook."
+        val request = ++chapterSelectionRequest
+        chapterSelectionJob?.cancel()
+        loadingChapterId.value = chapterId
+        return viewModelScope.launch {
+            operation.value = OperationState(isBusy = true, statusMessage = status)
+            try {
+                services.playbackGateway.playBook(bookId, chapterId)
+                if (request == chapterSelectionRequest) {
+                    refreshStorageUsage()
+                    operation.value = OperationState()
+                }
+            } catch (cancellation: CancellationException) {
+                if (request == chapterSelectionRequest) {
+                    loadingChapterId.value = null
+                    operation.value = OperationState()
+                }
+                throw cancellation
+            } catch (failure: Throwable) {
+                if (request == chapterSelectionRequest) {
+                    loadingChapterId.value = null
+                    operation.value = OperationState(
+                        errorMessage = failure.message?.trim()?.takeIf(String::isNotBlank)
+                            ?: "This chapter could not be prepared.",
+                    )
+                }
+            }
+        }.also { chapterSelectionJob = it }
+    }
+
+    private fun playAdjacentChapter(offset: Int) {
+        val snapshot = uiState.value
+        val currentChapterId = selectedChapterId.value ?: snapshot.selectedChapter?.id ?: return
+        val currentIndex = snapshot.chapters.indexOfFirst { it.id == currentChapterId }
+        val targetChapter = snapshot.chapters.getOrNull(currentIndex + offset) ?: return
+        selectChapter(targetChapter.id)
+    }
+
+    private fun cancelChapterSelection() {
+        chapterSelectionRequest += 1
+        chapterSelectionJob?.cancel()
+        chapterSelectionJob = null
+        loadingChapterId.value = null
+        operation.value = OperationState()
+    }
+
+    private fun stopVoicePreview() {
+        voicePreviewJob?.cancel()
+        voicePreviewJob = null
+        services.voicePreviewPlayer.stop()
+    }
+
+    private fun refreshStorageUsage() {
+        storageRefreshVersion.value += 1L
     }
 
     private fun updateSettings(transform: (AppSettings) -> AppSettings) = launchOperation {
@@ -295,9 +512,15 @@ class WhisperbookViewModel(
         status: String? = null,
         block: suspend () -> String?,
     ) = viewModelScope.launch {
-        operation.value = OperationState(isBusy = true, statusMessage = status)
+        val isUserVisibleWork = status != null
+        if (isUserVisibleWork) {
+            operation.value = OperationState(isBusy = true, statusMessage = status)
+        }
         try {
-            operation.value = OperationState(statusMessage = block())
+            val resultMessage = block()
+            if (isUserVisibleWork || resultMessage != null) {
+                operation.value = OperationState(statusMessage = resultMessage)
+            }
         } catch (cancellation: CancellationException) {
             throw cancellation
         } catch (failure: Throwable) {
@@ -317,6 +540,15 @@ class WhisperbookViewModel(
     }
 }
 
+internal fun voicePreviewText(characterName: String): String {
+    val name = characterName.trim().take(48).ifBlank { "this character" }
+    return if (name.equals("Narrator", ignoreCase = true)) {
+        "Once upon a time, every story began with a voice."
+    } else {
+        "Hello, I am $name. This is how I will sound in your story."
+    }
+}
+
 private data class LibraryState(
     val books: List<Book>,
     val selectedBook: Book?,
@@ -330,11 +562,60 @@ private data class SessionState(
     val settings: AppSettings,
     val playback: PlaybackCursor?,
     val voiceAssignments: Map<String, CharacterVoiceAssignment>,
+    val revertibleVoiceChange: RevertibleVoiceChange?,
+    val pendingOperation: PendingOperationState,
+)
+
+private data class VoiceState(
+    val assignments: Map<String, CharacterVoiceAssignment>,
+    val revertibleChange: RevertibleVoiceChange?,
+)
+
+private data class VoiceRetentionLookup(
+    val bookId: String?,
+    val characterIds: List<String>,
+    val revision: Long,
+)
+
+private data class PendingOperationState(
     val operation: OperationState,
+    val chapterId: String?,
+    val audioProgress: PlaybackPreparationProgress?,
 )
 
 private data class OperationState(
     val isBusy: Boolean = false,
     val statusMessage: String? = null,
     val errorMessage: String? = null,
+)
+
+private fun PlaybackPreparationProgress.statusMessage(
+    chapters: List<Chapter>,
+    playback: PlaybackCursor?,
+): String {
+    val chapterNumber = chapters.indexOfFirst { it.id == chapterId }
+        .takeIf { it >= 0 }
+        ?.plus(1)
+    val chapterLabel = chapterNumber?.let { "Chapter $it" } ?: "this chapter"
+    val nextSegment = (completedSegments + 1).coerceAtMost(totalSegments)
+    return if (
+        playback?.isPlaying == true &&
+        playback.bookId == bookId &&
+        playback.chapterId == chapterId
+    ) {
+        "Playing $chapterLabel now. Preparing passage $nextSegment of $totalSegments in the background."
+    } else {
+        "Preparing passage $nextSegment of $totalSegments for $chapterLabel on this device."
+    }
+}
+
+private data class StorageRefreshRequest(
+    val books: List<BookStorageState>,
+    val revision: Long,
+)
+
+private data class BookStorageState(
+    val id: String,
+    val privateSourcePath: String?,
+    val preparationStage: com.whisperbook.app.domain.model.PreparationStage,
 )

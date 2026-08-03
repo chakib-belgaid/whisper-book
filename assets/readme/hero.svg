@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="380" viewBox="0 0 1200 380" role="img" aria-labelledby="title desc">
+  <title id="title">Whisperbook for Android</title>
+  <desc id="desc">An offline-first Android app that turns local EPUB and PDF books into synchronized, multi-voice audiobooks entirely on device.</desc>
+  <defs>
+    <linearGradient id="stage" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#10253D"/>
+      <stop offset="1" stop-color="#183A59"/>
+    </linearGradient>
+    <linearGradient id="paper" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FFF8E8"/>
+      <stop offset="1" stop-color="#E7D4B2"/>
+    </linearGradient>
+    <clipPath id="stageClip"><rect width="1200" height="380" rx="28"/></clipPath>
+  </defs>
+
+  <g clip-path="url(#stageClip)">
+    <rect width="1200" height="380" fill="url(#stage)"/>
+    <path d="M0 322C170 292 330 356 492 326C646 298 764 258 924 281C1058 300 1127 334 1200 311V380H0Z" fill="#0A1A2B" opacity=".58"/>
+    <path d="M0 43C142 84 252 7 402 43C554 79 663 77 804 35C929-2 1068 80 1200 39" fill="none" stroke="#C8A56A" stroke-width="2" opacity=".38"/>
+
+    <g transform="translate(60 52)">
+      <text x="0" y="0" fill="#C8A56A" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15" font-weight="700" letter-spacing="2.2">ANDROID · OFFLINE-FIRST · ARM64</text>
+      <text x="0" y="82" fill="#F7EDD7" font-family="Georgia, serif" font-size="72" font-weight="700">Whisperbook</text>
+      <text x="2" y="126" fill="#E1CBAA" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="25">Your books, performed on device.</text>
+      <text x="2" y="164" fill="#AEBFD2" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="18">Import a PDF or EPUB. Listen with distinct voices.</text>
+      <text x="2" y="190" fill="#AEBFD2" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="18">Read along in sync. Nothing leaves the phone.</text>
+
+      <g transform="translate(0 226)" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="15" font-weight="700">
+        <rect width="116" height="38" rx="19" fill="#F7EDD7"/>
+        <text x="58" y="25" text-anchor="middle" fill="#10253D">PDF + EPUB</text>
+        <rect x="128" width="102" height="38" rx="19" fill="#C8674B"/>
+        <text x="179" y="25" text-anchor="middle" fill="#FFF8E8">8 voices</text>
+        <rect x="242" width="198" height="38" rx="19" fill="none" stroke="#C8A56A" stroke-width="2"/>
+        <text x="341" y="25" text-anchor="middle" fill="#F7EDD7">No network permission</text>
+      </g>
+    </g>
+
+    <g transform="translate(700 46)">
+      <rect x="21" y="24" width="438" height="286" rx="24" fill="#081624" opacity=".42"/>
+      <rect width="438" height="286" rx="24" fill="#F7EDD7" stroke="#C8A56A" stroke-width="3"/>
+
+      <g transform="translate(34 28)" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" font-weight="700">
+        <rect width="92" height="31" rx="8" fill="#245D88"/>
+        <text x="46" y="20" text-anchor="middle" fill="#FFF8E8">EPUB / PDF</text>
+        <path d="M99 15H133" stroke="#C8674B" stroke-width="3"/>
+        <path d="m129 10 7 5-7 5" fill="none" stroke="#C8674B" stroke-width="3"/>
+        <rect x="142" width="100" height="31" rx="8" fill="#E1CBAA"/>
+        <text x="192" y="20" text-anchor="middle" fill="#10253D">CHAPTERS</text>
+        <path d="M249 15H283" stroke="#C8674B" stroke-width="3"/>
+        <path d="m279 10 7 5-7 5" fill="none" stroke="#C8674B" stroke-width="3"/>
+        <rect x="292" width="78" height="31" rx="8" fill="#C8674B"/>
+        <text x="331" y="20" text-anchor="middle" fill="#FFF8E8">VOICE</text>
+      </g>
+
+      <g transform="translate(45 88)">
+        <path d="M0 8Q82-8 164 22V174Q82 145 0 160Z" fill="url(#paper)" stroke="#9A7A47" stroke-width="2"/>
+        <path d="M328 8Q246-8 164 22V174Q246 145 328 160Z" fill="url(#paper)" stroke="#9A7A47" stroke-width="2"/>
+        <path d="M164 22V174" stroke="#9A7A47" stroke-width="2"/>
+        <path d="M25 43H135M25 65H123M25 87H140M25 109H112" stroke="#526174" stroke-width="4" stroke-linecap="round" opacity=".62"/>
+
+        <g transform="translate(192 55)" fill="none" stroke="#C8674B" stroke-width="5" stroke-linecap="round">
+          <path d="M0 40V57"/>
+          <path d="M14 24V73"/>
+          <path d="M28 34V63"/>
+          <path d="M42 10V87"/>
+          <path d="M56 28V69"/>
+          <path d="M70 17V80"/>
+          <path d="M84 34V63"/>
+          <path d="M98 25V72"/>
+        </g>
+      </g>
+
+      <text x="219" y="266" text-anchor="middle" fill="#526174" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" font-weight="700" letter-spacing="1">SUPER­TONIC 3 · MEDIA3 · PRIVATE STORAGE</text>
+    </g>
+  </g>
+</svg>

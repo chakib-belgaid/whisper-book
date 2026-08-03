@@ -2,6 +2,7 @@ package com.whisperbook.app.engine.attribution
 
 import com.whisperbook.app.domain.ExtractedChapter
 import com.whisperbook.app.domain.ExtractedPublication
+import com.whisperbook.app.domain.PassageTextChunker
 import com.whisperbook.app.domain.model.BuiltInCharacters
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
@@ -78,5 +79,21 @@ class HeuristicSpeakerAttributorTest {
 
         assertEquals(rowan.id, dialogue.speakerId)
         assertTrue(dialogue.attributionRule.startsWith("explicit-em-dash-tag"))
+    }
+
+    @Test
+    fun `bounds oversized narration before it becomes a persisted passage`() = runTest {
+        val oversized = "The forest continued beyond the ridge. ".repeat(200)
+
+        val result = HeuristicSpeakerAttributor().attribute(
+            "book",
+            ExtractedPublication("Story", null, listOf(ExtractedChapter("One", listOf(oversized)))),
+        )
+        val passages = result.chapters.single().passages
+
+        assertTrue(passages.size > 1)
+        assertTrue(passages.all { it.text.length <= PassageTextChunker.MAX_CHARS })
+        assertEquals(oversized.trim(), passages.joinToString(" ") { it.text })
+        assertEquals(passages.indices.toList(), passages.map { it.ordinal })
     }
 }

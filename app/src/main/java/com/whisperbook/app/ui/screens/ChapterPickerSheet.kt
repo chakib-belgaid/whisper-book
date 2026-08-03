@@ -21,6 +21,7 @@ import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.whisperbook.app.ui.theme.WhisperbookTheme
+import com.whisperbook.app.ui.components.OrigamiSheet
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -46,27 +47,29 @@ internal fun ChapterPickerSheet(
         },
         modifier = Modifier.testTag("chapter-picker"),
     ) {
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            Text(
-                text = "Choose a chapter",
-                color = colors.ink,
-                style = WhisperbookTheme.typography.title,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
-            )
-            LazyColumn(
-                modifier = Modifier.fillMaxWidth().heightIn(max = 500.dp),
-                contentPadding = PaddingValues(bottom = 28.dp),
+        OrigamiSheet(Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                items(chapters, key = ChapterUi::id) { chapter ->
-                    CompactChapterRow(
-                        chapter = chapter,
-                        onClick = { onChapterSelected(chapter) },
-                        modifier = Modifier.padding(vertical = 3.dp),
-                    )
+                Text(
+                    text = "Choose a chapter",
+                    color = colors.ink,
+                    style = WhisperbookTheme.typography.title,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                )
+                LazyColumn(
+                    modifier = Modifier.fillMaxWidth().heightIn(max = 500.dp),
+                    contentPadding = PaddingValues(bottom = 28.dp),
+                ) {
+                    items(chapters, key = ChapterUi::id) { chapter ->
+                        CompactChapterRow(
+                            chapter = chapter,
+                            onClick = { onChapterSelected(chapter) },
+                            modifier = Modifier.padding(vertical = 3.dp),
+                        )
+                    }
                 }
             }
         }

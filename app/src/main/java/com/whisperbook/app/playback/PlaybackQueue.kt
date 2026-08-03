@@ -7,6 +7,26 @@ import com.whisperbook.app.domain.model.AudioSegmentState
 fun interface PlaybackQueueSource {
     suspend fun load(bookId: String, chapterId: String?): Result<PlaybackChapterQueue>
 
+    /**
+     * Emits each ready prefix of a chapter queue. Consumers can start the first item immediately
+     * and append later items instead of waiting for the entire chapter to be synthesized.
+     */
+    suspend fun loadProgressively(
+        bookId: String,
+        chapterId: String?,
+        onProgress: suspend (
+            readyQueue: PlaybackChapterQueue?,
+            completedSegments: Int,
+            totalSegments: Int,
+        ) -> Unit,
+    ): Result<PlaybackChapterQueue> {
+        val result = load(bookId, chapterId)
+        result.getOrNull()?.let { queue ->
+            onProgress(queue, queue.segments.size, queue.segments.size)
+        }
+        return result
+    }
+
     /** Resolves the chapter immediately after [chapterId], or null at the end of the book. */
     suspend fun loadNext(bookId: String, chapterId: String): Result<PlaybackChapterQueue?> =
         Result.success(null)

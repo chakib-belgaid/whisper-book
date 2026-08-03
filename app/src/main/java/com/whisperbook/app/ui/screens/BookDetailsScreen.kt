@@ -14,11 +14,16 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.outlined.AutoStories
+import androidx.compose.material.icons.outlined.DeleteOutline
 import androidx.compose.material.icons.outlined.Groups
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
@@ -39,8 +44,20 @@ fun BookDetailsScreen(
     onListen: () -> Unit,
     onVoiceCast: () -> Unit,
     onSettings: () -> Unit,
+    onRemove: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var showRemoveConfirmation by rememberSaveable { mutableStateOf(false) }
+    if (showRemoveConfirmation) {
+        RemoveBookDialog(
+            bookTitle = appState.currentBookTitle,
+            onConfirm = {
+                showRemoveConfirmation = false
+                onRemove()
+            },
+            onDismiss = { showRemoveConfirmation = false },
+        )
+    }
     if (appState.isProductionBacked && appState.books.isEmpty()) {
         Column(
             modifier = modifier.fillMaxSize().padding(contentPadding).padding(16.dp),
@@ -62,7 +79,18 @@ fun BookDetailsScreen(
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         StageTopBar("Book details", onBack = onBack, trailing = {
-            EmbossedCircularButton(onClick = onSettings, contentDescription = "Settings", size = 44.dp) { Icon(Icons.Outlined.Settings, null) }
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                EmbossedCircularButton(
+                    onClick = { showRemoveConfirmation = true },
+                    contentDescription = "Remove ${appState.currentBookTitle} from library",
+                    size = 44.dp,
+                ) {
+                    Icon(Icons.Outlined.DeleteOutline, contentDescription = null, tint = WhisperbookTheme.colors.error)
+                }
+                EmbossedCircularButton(onClick = onSettings, contentDescription = "Settings", size = 44.dp) {
+                    Icon(Icons.Outlined.Settings, null)
+                }
+            }
         })
         BookTheatreHero(
             title = appState.currentBookTitle,
@@ -71,9 +99,25 @@ fun BookDetailsScreen(
         )
         ParchmentPanel(modifier = Modifier.fillMaxWidth(), contentPadding = PaddingValues(horizontal = 10.dp, vertical = 7.dp)) {
             Text(appState.currentAuthor, color = WhisperbookTheme.colors.ink, style = WhisperbookTheme.typography.title.copy(fontSize = 18.sp, lineHeight = 22.sp), textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
-            Text("Chapter ${appState.currentChapterNumber} of ${appState.totalChapters}", color = WhisperbookTheme.colors.action, style = WhisperbookTheme.typography.label, textAlign = TextAlign.Center, modifier = Modifier.fillMaxWidth())
+            Text(
+                text = if (appState.totalChapters > 0) {
+                    "Chapter ${appState.currentChapterNumber.coerceAtLeast(1)} of ${appState.totalChapters}"
+                } else {
+                    "Finding chapters on this device…"
+                },
+                color = WhisperbookTheme.colors.action,
+                style = WhisperbookTheme.typography.label,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth(),
+            )
             StorySlider(appState.chapterProgress, {}, enabled = false, modifier = Modifier.fillMaxWidth())
-            PapercraftButton("Continue listening", onListen, modifier = Modifier.fillMaxWidth(), trailingIcon = { Icon(Icons.Filled.PlayArrow, null) })
+            PapercraftButton(
+                text = if (appState.totalChapters > 0) "Continue listening" else "Preparing chapters…",
+                onClick = onListen,
+                enabled = appState.totalChapters > 0,
+                modifier = Modifier.fillMaxWidth(),
+                trailingIcon = { Icon(Icons.Filled.PlayArrow, null) },
+            )
             Spacer(Modifier.height(4.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -96,6 +140,14 @@ fun BookDetailsScreen(
             }
             Spacer(Modifier.height(4.dp))
             SectionHeading("Chapters")
+            if (appState.chapters.isEmpty()) {
+                Text(
+                    text = "Chapters will appear here as soon as the private book scan finishes.",
+                    color = WhisperbookTheme.colors.inkMuted,
+                    style = WhisperbookTheme.typography.body,
+                    modifier = Modifier.padding(vertical = 10.dp),
+                )
+            }
             appState.chapters.forEach { chapter ->
                 CompactChapterRow(
                     chapter = chapter,

@@ -4,8 +4,6 @@ import androidx.annotation.DrawableRes
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
-import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,6 +25,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Switch
 import androidx.compose.material3.SwitchDefaults
@@ -41,6 +40,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -57,8 +57,12 @@ import com.whisperbook.app.R
 import com.whisperbook.app.ui.components.EmbossedCircularButton
 import com.whisperbook.app.ui.components.LeafDivider
 import com.whisperbook.app.ui.components.LeafOrnament
+import com.whisperbook.app.ui.components.PaperFold
 import com.whisperbook.app.ui.components.ParchmentPanel
 import com.whisperbook.app.ui.components.RibbonTitle
+import com.whisperbook.app.ui.components.paperClickable
+import com.whisperbook.app.ui.components.paperSelectable
+import com.whisperbook.app.ui.components.paperToggleable
 import com.whisperbook.app.ui.theme.WhisperbookTheme
 
 /** Screen-local high-fidelity pieces shared only by Book details, Voice cast, and Settings. */
@@ -134,13 +138,17 @@ internal fun CompactChapterRow(
         modifier = modifier
             .fillMaxWidth()
             .heightIn(min = 48.dp)
+            .paperClickable(onClick = onClick, role = Role.Button, fold = PaperFold.Card)
             .clip(shape)
             .background(background)
             .border(1.dp, if (selected) colors.ornament else colors.outline.copy(alpha = .65f), shape)
-            .clickable(role = Role.Button, onClick = onClick)
             .padding(horizontal = 9.dp, vertical = 5.dp)
             .semantics(mergeDescendants = true) {
-                contentDescription = "Chapter ${chapter.number}, ${chapter.title}${if (selected) ", current chapter" else ""}"
+                contentDescription = buildString {
+                    append("Chapter ${chapter.number}, ${chapter.title}")
+                    if (selected) append(", current chapter")
+                    if (chapter.isLoading) append(", preparing audio")
+                }
             },
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -164,7 +172,13 @@ internal fun CompactChapterRow(
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        Icon(
+        if (chapter.isLoading) {
+            CircularProgressIndicator(
+                modifier = Modifier.size(20.dp).testTag("chapter-${chapter.id}-loading"),
+                color = foreground,
+                strokeWidth = 2.dp,
+            )
+        } else Icon(
             imageVector = Icons.AutoMirrored.Outlined.KeyboardArrowRight,
             contentDescription = null,
             tint = if (selected) colors.ornament else colors.ink,
@@ -182,7 +196,16 @@ internal fun DetailTab(
     modifier: Modifier = Modifier,
 ) {
     val shape = RoundedCornerShape(9.dp)
-    val interaction = if (onClick != null) Modifier.clickable(role = Role.Tab, onClick = onClick) else Modifier
+    val interaction = if (onClick != null) {
+        Modifier.paperSelectable(
+            selected = selected,
+            onClick = onClick,
+            role = Role.Tab,
+            fold = PaperFold.Tab,
+        )
+    } else {
+        Modifier
+    }
     Row(
         modifier = modifier
             .heightIn(min = 48.dp)
@@ -336,11 +359,11 @@ private fun ChangeVoiceButton(member: CastMemberUi, onClick: () -> Unit) {
         modifier = Modifier
             .width(84.dp)
             .heightIn(min = 48.dp)
+            .paperClickable(onClick = onClick, role = Role.Button, fold = PaperFold.Control)
             .shadow(WhisperbookTheme.elevations.paperContact, shape)
             .clip(shape)
             .background(WhisperbookTheme.colors.paperHighlight.copy(alpha = .44f))
             .border(1.dp, WhisperbookTheme.colors.outline, shape)
-            .clickable(role = Role.Button, onClick = onClick)
             .semantics { contentDescription = "Change voice for ${member.character}" }
             .padding(horizontal = 6.dp, vertical = 5.dp),
         contentAlignment = Alignment.Center,
@@ -449,7 +472,11 @@ internal fun GoldenSettingsRow(
     installed: Boolean = false,
     trailingContent: (@Composable RowScope.() -> Unit)? = null,
 ) {
-    val interaction = if (onClick != null) Modifier.clickable(role = Role.Button, onClick = onClick) else Modifier
+    val interaction = if (onClick != null) {
+        Modifier.paperClickable(onClick = onClick, role = Role.Button, fold = PaperFold.Card)
+    } else {
+        Modifier
+    }
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -506,10 +533,11 @@ internal fun GoldenSettingsToggleRow(
         title = title,
         icon = icon,
         leadingText = leadingText,
-        modifier = Modifier.toggleable(
+        modifier = Modifier.paperToggleable(
             value = checked,
             role = Role.Switch,
             onValueChange = onCheckedChange,
+            fold = PaperFold.Toggle,
         ),
         trailingContent = {
             Switch(

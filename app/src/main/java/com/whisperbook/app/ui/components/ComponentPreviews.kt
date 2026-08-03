@@ -91,8 +91,10 @@ private fun ReaderComponentsPreview() {
                     isPlaying = true,
                     progress = 0.63f,
                     onPlayPause = {},
-                    onRewind = {},
-                    onForward = {},
+                    onPreviousChapter = {},
+                    onNextChapter = {},
+                    hasPreviousChapter = true,
+                    hasNextChapter = true,
                     onSeek = {},
                     modifier = Modifier.fillMaxWidth(),
                 )

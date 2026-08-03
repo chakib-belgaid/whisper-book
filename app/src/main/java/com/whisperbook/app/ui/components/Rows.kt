@@ -2,7 +2,6 @@ package com.whisperbook.app.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -49,10 +48,10 @@ fun ChapterRow(
         modifier = modifier
             .fillMaxWidth()
             .defaultMinSize(minHeight = 72.dp)
+            .paperClickable(onClick = onClick, role = Role.Button, fold = PaperFold.Card)
             .clip(shape)
             .background(background)
             .border(1.dp, if (selected) colors.ornament else colors.outline.copy(alpha = 0.7f), shape)
-            .clickable(role = Role.Button, onClick = onClick)
             .semantics { this.selected = selected }
             .padding(horizontal = 14.dp, vertical = 10.dp),
         verticalArrangement = Arrangement.Center,
@@ -135,7 +134,7 @@ fun SettingsRow(
 ) {
     val colors = WhisperbookTheme.colors
     val interactionModifier = if (onClick != null) {
-        Modifier.clickable(role = Role.Button, onClick = onClick)
+        Modifier.paperClickable(onClick = onClick, role = Role.Button, fold = PaperFold.Card)
     } else {
         Modifier
     }

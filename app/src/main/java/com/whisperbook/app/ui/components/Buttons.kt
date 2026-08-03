@@ -56,6 +56,7 @@ fun PapercraftButton(
     trailingIcon: (@Composable RowScope.() -> Unit)? = null,
 ) {
     val colors = WhisperbookTheme.colors
+    val interactionSource = remember { MutableInteractionSource() }
     val background = when (variant) {
         PapercraftButtonVariant.Primary -> colors.stageRaised
         PapercraftButtonVariant.Accent -> colors.accent
@@ -68,6 +69,7 @@ fun PapercraftButton(
     val shape = WhisperbookTheme.shapes.control
     Button(
         onClick = onClick,
+        interactionSource = interactionSource,
         enabled = enabled && !isLoading,
         shape = shape,
         colors = ButtonDefaults.buttonColors(
@@ -85,6 +87,11 @@ fun PapercraftButton(
         border = BorderStroke(1.dp, colors.ornament.copy(alpha = if (enabled) 0.9f else 0.45f)),
         contentPadding = PaddingValues(horizontal = 24.dp, vertical = 10.dp),
         modifier = modifier
+            .paperFold(
+                interactionSource = interactionSource,
+                enabled = enabled && !isLoading,
+                fold = PaperFold.Control,
+            )
             .defaultMinSize(
                 minWidth = WhisperbookTheme.components.minimumTouchTarget,
                 minHeight = WhisperbookTheme.components.buttonHeight,
@@ -134,6 +141,7 @@ fun EmbossedCircularButton(
     Box(
         modifier = modifier
             .size(size.coerceAtLeast(WhisperbookTheme.components.minimumTouchTarget))
+            .paperFold(interactionSource, enabled, PaperFold.Control)
             .shadow(
                 WhisperbookTheme.elevations.raisedControl,
                 CircleShape,
