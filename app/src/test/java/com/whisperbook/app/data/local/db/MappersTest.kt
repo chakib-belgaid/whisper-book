@@ -1,7 +1,10 @@
 package com.whisperbook.app.data.local.db
 
 import com.whisperbook.app.domain.model.BookFormat
+import com.whisperbook.app.domain.model.CharacterAgeGroup
 import com.whisperbook.app.domain.model.CharacterColorRole
+import com.whisperbook.app.domain.model.CharacterGender
+import com.whisperbook.app.domain.model.NarrationPerspective
 import com.whisperbook.app.domain.model.PreparationStage
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -76,6 +79,13 @@ class MappersTest {
                 displayName = "Elara",
                 colorRole = CharacterColorRole.ELARA_BURGUNDY.name,
                 dialogueLineCount = 12,
+                gender = CharacterGender.FEMALE.name,
+                genderConfidence = 0.91f,
+                ageGroup = CharacterAgeGroup.YOUNG_ADULT.name,
+                ageConfidence = 0.82f,
+                narrationPerspective = NarrationPerspective.FIRST_PERSON.name,
+                perspectiveConfidence = 0.94f,
+                narratorIdentity = "Elara",
             ),
             aliases = listOf(
                 CharacterAliasEntity("elara", "the traveller"),
@@ -88,5 +98,12 @@ class MappersTest {
 
         assertEquals(CharacterColorRole.ELARA_BURGUNDY, character.colorRole)
         assertEquals(listOf("El", "the traveller"), character.aliases.toList())
+        assertEquals(CharacterGender.FEMALE, character.gender)
+        assertEquals(0.91f, character.genderConfidence)
+        assertEquals(CharacterAgeGroup.YOUNG_ADULT, character.ageGroup)
+        assertEquals(0.82f, character.ageConfidence)
+        assertEquals(NarrationPerspective.FIRST_PERSON, character.narrationPerspective)
+        assertEquals("Elara", character.narratorIdentity)
+        assertEquals(CharacterGender.FEMALE.name, character.toEntity().gender)
     }
 }

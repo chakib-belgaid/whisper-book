@@ -66,6 +66,7 @@ internal fun ChapterPickerSheet(
                     items(chapters, key = ChapterUi::id) { chapter ->
                         CompactChapterRow(
                             chapter = chapter,
+                            enabled = chapter.isAvailable,
                             onClick = { onChapterSelected(chapter) },
                             modifier = Modifier.padding(vertical = 3.dp),
                         )

@@ -14,6 +14,10 @@ import kotlinx.coroutines.sync.withLock
 internal object LocalAudioGenerationCoordinator {
     private val gate = LocalAudioGenerationGate()
 
+    /** Prevents background work from claiming the model between consecutive playback segments. */
+    suspend fun <T> withOnDemandPriority(block: suspend () -> T): T =
+        gate.withOnDemandPriority(block)
+
     /** On-demand playback work is serialized and takes the next available generation slot. */
     suspend fun <T> run(block: suspend () -> T): T = gate.runOnDemand(block)
 
@@ -26,14 +30,17 @@ internal class LocalAudioGenerationGate {
     private val generationMutex = Mutex()
     private val onDemandWaiters = AtomicInteger(0)
 
-    suspend fun <T> runOnDemand(block: suspend () -> T): T {
+    suspend fun <T> withOnDemandPriority(block: suspend () -> T): T {
         onDemandWaiters.incrementAndGet()
         return try {
-            generationMutex.withLock { block() }
+            block()
         } finally {
             onDemandWaiters.decrementAndGet()
         }
     }
+
+    suspend fun <T> runOnDemand(block: suspend () -> T): T =
+        withOnDemandPriority { generationMutex.withLock { block() } }
 
     suspend fun <T> runBackground(block: suspend () -> T): T {
         while (true) {

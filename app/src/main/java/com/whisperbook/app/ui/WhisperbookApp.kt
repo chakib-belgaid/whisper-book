@@ -125,8 +125,7 @@ fun WhisperbookApp(
                                 }
                                 if (
                                     destination.route == WhisperbookDestination.NowPlaying.route &&
-                                    appState.chapters.isEmpty() &&
-                                    appState.isBookPreparing
+                                    !appState.canListen
                                 ) {
                                     navController.navigate(WhisperbookDestination.Processing.route)
                                 } else {
@@ -271,6 +270,7 @@ private class ViewModelUiActions(
     override fun selectChapter(chapterId: String) = viewModel.selectChapter(chapterId)
     override fun playPreviousChapter() = viewModel.playPreviousChapter()
     override fun playNextChapter() = viewModel.playNextChapter()
+    override fun playSelectedChapter() = viewModel.playSelectedChapter()
     override fun playOrPause() = viewModel.playOrPause().let { Unit }
     override fun seekByFraction(delta: Float) = viewModel.seekBy(if (delta < 0f) -15_000L else 15_000L).let { Unit }
     override fun seekToFraction(fraction: Float) = viewModel.seekToFraction(fraction).let { Unit }

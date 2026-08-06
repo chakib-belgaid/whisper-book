@@ -61,7 +61,7 @@ fun WhisperbookNavHost(
                     },
                     onResume = {
                         navController.navigate(
-                            if (appState.chapters.isEmpty() && appState.isBookPreparing) {
+                            if (!appState.canListen) {
                                 WhisperbookDestination.Processing.route
                             } else {
                                 WhisperbookDestination.NowPlaying.route
@@ -94,7 +94,10 @@ fun WhisperbookNavHost(
                     onContinueInBackground = {
                         navController.navigateToBottomDestination(WhisperbookDestination.Library.route)
                     },
-                    onReady = { navController.navigate(WhisperbookDestination.BookDetails.route()) },
+                    onReady = {
+                        appState.startPlayback()
+                        navController.navigate(WhisperbookDestination.NowPlaying.route)
+                    },
                     onRetry = appState::retryPreparation,
                     onBackToImport = {
                         navController.navigate(WhisperbookDestination.ImportBook.route) {
@@ -124,7 +127,7 @@ fun WhisperbookNavHost(
                     onBack = ::backOrLibrary,
                     onListen = {
                         navController.navigate(
-                            if (appState.chapters.isEmpty() && appState.isBookPreparing) {
+                            if (!appState.canListen) {
                                 WhisperbookDestination.Processing.route
                             } else {
                                 WhisperbookDestination.NowPlaying.route

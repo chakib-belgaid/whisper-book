@@ -111,12 +111,14 @@ fun LibraryScreen(
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             EmbossedCircularButton(
                                 onClick = onResume,
-                                contentDescription = if (current.totalChapters > 0) {
+                                contentDescription = if (current.canListen) {
                                     "Resume ${current.title}"
+                                } else if (current.totalChapters > 0) {
+                                    "${current.title} is still preparing voices"
                                 } else {
                                     "${current.title} is still finding chapters"
                                 },
-                                enabled = current.totalChapters > 0,
+                                enabled = current.canListen,
                                 size = 52.dp,
                             ) {
                                 Icon(Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(30.dp))

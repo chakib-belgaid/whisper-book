@@ -1,12 +1,14 @@
 package com.whisperbook.app.engine.attribution
 
 import com.whisperbook.app.domain.AttributedPublication
+import com.whisperbook.app.domain.ExtractedChapter
 import com.whisperbook.app.domain.ExtractedPublication
 import com.whisperbook.app.domain.PassageTextChunker
 import com.whisperbook.app.domain.SpeakerAttributor
 import com.whisperbook.app.domain.model.BuiltInCharacters
 import com.whisperbook.app.domain.model.Chapter
 import com.whisperbook.app.domain.model.Passage
+import com.whisperbook.app.domain.model.StoryCharacter
 
 enum class AttributionRule(val evidenceName: String) {
     NARRATION("narration-outside-dialogue"),
@@ -14,6 +16,7 @@ enum class AttributionRule(val evidenceName: String) {
     EXPLICIT_BEFORE("explicit-before-dialogue"),
     EXPLICIT_LABEL("explicit-speaker-label"),
     EXPLICIT_EM_DASH("explicit-em-dash-tag"),
+    FIRST_PERSON_NARRATOR("first-person-narrator-tag"),
     TWO_SPEAKER_CARRY_OVER("two-speaker-carry-over"),
     NARRATOR_FALLBACK("narrator-fallback"),
 }
@@ -40,71 +43,173 @@ class HeuristicSpeakerAttributor(
         publication: ExtractedPublication,
     ): AttributedPublication {
         val registry = KnownCharacterRegistry(bookId, seeds)
-        publication.chapters
+        val paragraphs = publication.chapters
             .asSequence()
             .flatMap { it.paragraphs.asSequence() }
-            .forEach { paragraph -> SpeechTagMatcher.discover(paragraph).forEach(registry::register) }
+            .toList()
+        val narration = prepareRegistry(registry, paragraphs)
 
         val chapters = publication.chapters.mapIndexed { chapterOrdinal, sourceChapter ->
-            val chapterId = "$bookId-chapter-${chapterOrdinal + 1}"
-            val scene = ChapterSceneState()
-            val passages = mutableListOf<Passage>()
-
-            sourceChapter.paragraphs.forEachIndexed { paragraphIndex, rawParagraph ->
-                val paragraph = rawParagraph.trim()
-                if (paragraph.isBlank()) return@forEachIndexed
-                val spans = DialogueScanner.scan(paragraph)
-                if (spans.isEmpty()) {
-                    addPassages(
-                        passages = passages,
-                        chapterId = chapterId,
-                        rawText = paragraph,
-                        speaker = narratorNarration(),
-                    )
-                    return@forEachIndexed
-                }
-
-                var cursor = 0
-                spans.forEach { span ->
-                    addNarrationIfPresent(passages, chapterId, paragraph.substring(cursor, span.startInclusive))
-                    val explicit = SpeechTagMatcher.attribute(
-                        before = paragraph.substring(0, span.startInclusive).takeLast(180),
-                        after = paragraph.substring(span.endExclusive).take(180),
-                        dialogue = span.content(paragraph),
-                        delimiter = span.delimiter,
-                        registry = registry,
-                    )
-                    val evidence = explicit ?: scene.carryOver(paragraphIndex) ?: narratorFallback()
-                    val dialogue = span.content(paragraph).trim()
-                    if (dialogue.isNotBlank()) {
-                        addPassages(passages, chapterId, dialogue, evidence)
-                        registry.incrementDialogue(evidence.speakerId)
-                        scene.onDialogue(paragraphIndex, evidence)
-                    }
-                    cursor = span.endExclusive
-                }
-                addNarrationIfPresent(passages, chapterId, paragraph.substring(cursor))
-            }
-
-            Chapter(
-                id = chapterId,
+            attributeChapter(
                 bookId = bookId,
-                ordinal = chapterOrdinal,
-                title = sourceChapter.title,
-                passages = passages,
+                chapterId = "$bookId-chapter-${chapterOrdinal + 1}",
+                chapterOrdinal = chapterOrdinal,
+                sourceChapter = sourceChapter,
+                registry = registry,
+                narration = narration,
             )
         }
 
         return AttributedPublication(chapters = chapters, characters = registry.characters())
     }
 
+    override suspend fun attributeChapter(
+        bookId: String,
+        chapterId: String,
+        chapterOrdinal: Int,
+        chapter: ExtractedChapter,
+        knownCharacters: List<StoryCharacter>,
+    ): AttributedPublication {
+        require(bookId.isNotBlank()) { "bookId must not be blank" }
+        require(chapterId.isNotBlank()) { "chapterId must not be blank" }
+        require(chapterOrdinal >= 0) { "chapterOrdinal must be non-negative" }
+
+        val persistedSeeds = knownCharacters
+            .asSequence()
+            .filter { it.bookId == bookId }
+            .sortedBy(StoryCharacter::id)
+            .map(KnownCharacterSeed::from)
+            .toList()
+        val registry = KnownCharacterRegistry(bookId, persistedSeeds + seeds)
+        val paragraphs = chapter.paragraphs.toList()
+        val narration = prepareRegistry(registry, paragraphs)
+        val attributedChapter = attributeChapter(
+            bookId = bookId,
+            chapterId = chapterId,
+            chapterOrdinal = chapterOrdinal,
+            sourceChapter = chapter,
+            registry = registry,
+            narration = narration,
+        )
+        return AttributedPublication(
+            chapters = listOf(attributedChapter),
+            characters = registry.characters(),
+        )
+    }
+
+    private fun prepareRegistry(
+        registry: KnownCharacterRegistry,
+        paragraphs: List<String>,
+    ): NarrationAnalysis {
+        val narration = CharacterProfileInferencer.analyzeNarration(paragraphs)
+        narration.narratorIdentity?.let(registry::addNarratorAlias)
+        paragraphs.forEach { paragraph ->
+            SpeechTagMatcher.discover(paragraph).forEach(registry::register)
+        }
+        val profileTargets = registry.profileTargets()
+        val inferenceTargets = if (registry.narratorId == BuiltInCharacters.NARRATOR_ID) {
+            profileTargets
+        } else {
+            profileTargets.map { target ->
+                if (target.id == registry.narratorId) {
+                    target.copy(id = BuiltInCharacters.NARRATOR_ID)
+                } else {
+                    target
+                }
+            }
+        }
+        CharacterProfileInferencer.infer(paragraphs, inferenceTargets, narration).forEach { (id, profile) ->
+            registry.applyProfile(
+                id = if (id == BuiltInCharacters.NARRATOR_ID) registry.narratorId else id,
+                profile = profile,
+            )
+        }
+        return narration
+    }
+
+    private fun attributeChapter(
+        bookId: String,
+        chapterId: String,
+        chapterOrdinal: Int,
+        sourceChapter: ExtractedChapter,
+        registry: KnownCharacterRegistry,
+        narration: NarrationAnalysis,
+    ): Chapter {
+        val scene = ChapterSceneState()
+        val passages = mutableListOf<Passage>()
+
+        sourceChapter.paragraphs.forEachIndexed { paragraphIndex, rawParagraph ->
+            val paragraph = rawParagraph.trim()
+            if (paragraph.isBlank()) return@forEachIndexed
+            val spans = DialogueScanner.scan(paragraph)
+            if (spans.isEmpty()) {
+                addPassages(
+                    passages = passages,
+                    chapterId = chapterId,
+                    rawText = paragraph,
+                    speaker = narratorNarration(registry.narratorId),
+                )
+                return@forEachIndexed
+            }
+
+            var cursor = 0
+            spans.forEachIndexed { dialogueIndex, span ->
+                addNarrationIfPresent(
+                    passages,
+                    chapterId,
+                    paragraph.substring(cursor, span.startInclusive),
+                    registry.narratorId,
+                )
+                val explicit = SpeechTagMatcher.attribute(
+                    before = paragraph.substring(0, span.startInclusive).takeLast(180),
+                    after = paragraph.substring(span.endExclusive).take(180),
+                    dialogue = span.content(paragraph),
+                    delimiter = span.delimiter,
+                    registry = registry,
+                    firstPersonNarrator = narration.perspective ==
+                        com.whisperbook.app.domain.model.NarrationPerspective.FIRST_PERSON,
+                )
+                val evidence = explicit ?: scene.carryOver(paragraphIndex)
+                    ?: narratorFallback(registry.narratorId)
+                val dialogue = span.content(paragraph).trim()
+                if (dialogue.isNotBlank()) {
+                    // One dialogue span can be split into several bounded passages. Persist a
+                    // shared deterministic unit marker so per-chapter metadata can recover the
+                    // original dialogue-line count without double-counting those chunks.
+                    val persistedEvidence = evidence.copy(
+                        evidence = "${evidence.evidence};dialogue-unit-$paragraphIndex-$dialogueIndex",
+                    )
+                    addPassages(passages, chapterId, dialogue, persistedEvidence)
+                    registry.incrementDialogue(evidence.speakerId)
+                    scene.onDialogue(paragraphIndex, evidence)
+                }
+                cursor = span.endExclusive
+            }
+            addNarrationIfPresent(
+                passages,
+                chapterId,
+                paragraph.substring(cursor),
+                registry.narratorId,
+            )
+        }
+
+        return Chapter(
+            id = chapterId,
+            bookId = bookId,
+            ordinal = chapterOrdinal,
+            title = sourceChapter.title,
+            passages = passages,
+        )
+    }
+
     private fun addNarrationIfPresent(
         passages: MutableList<Passage>,
         chapterId: String,
         rawText: String,
+        narratorId: String,
     ) {
         val text = rawText.trim().trimStart(',', ';').trim()
-        if (text.isNotBlank()) addPassages(passages, chapterId, text, narratorNarration())
+        if (text.isNotBlank()) addPassages(passages, chapterId, text, narratorNarration(narratorId))
     }
 
     private fun addPassages(
@@ -127,15 +232,15 @@ class HeuristicSpeakerAttributor(
         }
     }
 
-    private fun narratorNarration() = SpeakerEvidence(
-        speakerId = BuiltInCharacters.NARRATOR_ID,
+    private fun narratorNarration(narratorId: String) = SpeakerEvidence(
+        speakerId = narratorId,
         confidence = 1f,
         rule = AttributionRule.NARRATION,
         evidence = "prose",
     )
 
-    private fun narratorFallback() = SpeakerEvidence(
-        speakerId = BuiltInCharacters.NARRATOR_ID,
+    private fun narratorFallback(narratorId: String) = SpeakerEvidence(
+        speakerId = narratorId,
         confidence = 0.30f,
         rule = AttributionRule.NARRATOR_FALLBACK,
         evidence = "no-reliable-speaker",
@@ -173,6 +278,7 @@ private class ChapterSceneState {
             AttributionRule.EXPLICIT_BEFORE,
             AttributionRule.EXPLICIT_LABEL,
             AttributionRule.EXPLICIT_EM_DASH,
+            AttributionRule.FIRST_PERSON_NARRATOR,
         )
     }
 }
@@ -189,6 +295,10 @@ private object SpeechTagMatcher {
     private val leftNameVerb = Regex("($NAME)\\s+(?i:$VERB)\\s*[,;:]?\\s*$")
     private val leftVerbName = Regex("(?i:$VERB)\\s+($NAME)\\s*[,;:]?\\s*$")
     private val speakerLabel = Regex("($NAME)\\s*:\\s*$")
+    private val rightFirstPersonVerb = Regex("^\\s*[,;:.!?—-]*\\s*I\\s+(?i:$VERB)\\b")
+    private val rightVerbFirstPerson = Regex("^\\s*[,;:.!?—-]*\\s*(?i:$VERB)\\s+I\\b")
+    private val leftFirstPersonVerb = Regex("I\\s+(?i:$VERB)\\s*[,;:]?\\s*$")
+    private val leftVerbFirstPerson = Regex("(?i:$VERB)\\s+I\\s*[,;:]?\\s*$")
 
     fun discover(text: String): List<String> = buildList {
         afterVerb.findAll(text).forEach { add(it.groupValues[1]) }
@@ -201,7 +311,24 @@ private object SpeechTagMatcher {
         dialogue: String,
         delimiter: DialogueDelimiter,
         registry: KnownCharacterRegistry,
+        firstPersonNarrator: Boolean,
     ): SpeakerEvidence? {
+        if (
+            firstPersonNarrator &&
+            (
+                rightFirstPersonVerb.containsMatchIn(after) ||
+                    rightVerbFirstPerson.containsMatchIn(after) ||
+                    leftFirstPersonVerb.containsMatchIn(before) ||
+                    leftVerbFirstPerson.containsMatchIn(before)
+            )
+        ) {
+            return SpeakerEvidence(
+                speakerId = registry.narratorId,
+                confidence = 0.98f,
+                rule = AttributionRule.FIRST_PERSON_NARRATOR,
+                evidence = "first-person-speech-tag",
+            )
+        }
         resolveMatch(rightVerbName.find(after), registry)?.let { (id, mention) ->
             return explicit(id, AttributionRule.EXPLICIT_AFTER, "speech-verb-before-$mention")
         }

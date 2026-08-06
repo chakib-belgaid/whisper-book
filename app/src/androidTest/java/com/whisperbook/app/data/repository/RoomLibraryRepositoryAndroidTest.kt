@@ -13,6 +13,10 @@ import com.whisperbook.app.domain.BookImporter
 import com.whisperbook.app.domain.ImportedBook
 import com.whisperbook.app.domain.model.BookFormat
 import com.whisperbook.app.domain.model.PreparationStage
+import com.whisperbook.app.engine.metadata.AppPrivateCharacterMetadataCatalog
+import com.whisperbook.app.engine.metadata.ChapterCharacterMetadata
+import com.whisperbook.app.engine.metadata.CharacterMetadataChapterUpdate
+import com.whisperbook.app.engine.metadata.CharacterMetadataFingerprint
 import java.io.File
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.flow.first
@@ -127,6 +131,8 @@ class RoomLibraryRepositoryAndroidTest {
         val database = Room.inMemoryDatabaseBuilder(context, WhisperBookDatabase::class.java).build()
         val originalFile = File(context.cacheDir, "original-story.pdf").apply { writeText("original") }
         val privateFile = File(context.cacheDir, "private-story.pdf").apply { writeText("private") }
+        val metadataRoot = File(context.cacheDir, "character-metadata-${System.nanoTime()}")
+        val metadataCatalog = AppPrivateCharacterMetadataCatalog(metadataRoot)
         val importer = object : BookImporter {
             override suspend fun import(uri: Uri): Result<ImportedBook> = Result.success(
                 ImportedBook(
@@ -138,18 +144,42 @@ class RoomLibraryRepositoryAndroidTest {
                 ),
             )
         }
-        val repository = RoomLibraryRepository(database, importer, idGenerator = { "removable-book" })
+        val repository = RoomLibraryRepository(
+            database,
+            importer,
+            idGenerator = { "removable-book" },
+            characterMetadataCatalog = metadataCatalog,
+        )
 
         try {
             val bookId = repository.importBook(Uri.fromFile(originalFile)).getOrThrow()
+            metadataCatalog.recordChapter(
+                CharacterMetadataChapterUpdate(
+                    bookId = bookId,
+                    sourceSha256 = "removable-book-hash",
+                    analysisVersion = "test-analysis",
+                    chapter = ChapterCharacterMetadata(
+                        chapterId = "$bookId-chapter-1",
+                        ordinal = 0,
+                        textSha256 = CharacterMetadataFingerprint.sha256Utf8("chapter"),
+                        contributions = emptyList(),
+                    ),
+                    characters = emptyList(),
+                    complete = true,
+                ),
+            )
+            val metadataFile = metadataCatalog.metadataFile(bookId)
+            assertTrue(metadataFile.isFile)
             repository.deleteBook(bookId)
 
             assertEquals(0, database.bookDao().count())
             assertFalse(privateFile.exists())
             assertTrue(originalFile.exists())
+            assertFalse(metadataFile.exists())
         } finally {
             originalFile.delete()
             privateFile.delete()
+            metadataRoot.deleteRecursively()
             database.close()
         }
     }

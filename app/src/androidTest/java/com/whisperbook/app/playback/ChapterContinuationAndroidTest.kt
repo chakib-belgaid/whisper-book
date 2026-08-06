@@ -171,6 +171,64 @@ class ChapterContinuationAndroidTest {
     }
 
     @Test
+    fun unavailableNextChapterIsRetriedAfterAPlaybackCallback() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val testDirectory = File(context.cacheDir, "chapter-retry-prefetch-test").apply { mkdirs() }
+        val chapterOne = queue(testDirectory, "retry-chapter-1", 1_200)
+        val chapterTwo = queue(testDirectory, "retry-chapter-2", 900)
+        val firstUnavailableRequest = CompletableDeferred<Unit>()
+        val nextChapterAvailable = CompletableDeferred<Unit>()
+        var nextChapterRequests = 0
+        val source = object : PlaybackQueueSource {
+            override suspend fun load(bookId: String, chapterId: String?) = Result.success(chapterOne)
+
+            override suspend fun loadNext(
+                bookId: String,
+                chapterId: String,
+            ): Result<PlaybackChapterQueue?> {
+                if (chapterId != chapterOne.chapterId) return Result.success(null)
+                nextChapterRequests += 1
+                if (nextChapterRequests == 1) {
+                    firstUnavailableRequest.complete(Unit)
+                    return Result.failure(
+                        IllegalStateException("The next chapter is still being attributed"),
+                    )
+                }
+                return if (nextChapterAvailable.isCompleted) {
+                    Result.success(chapterTwo)
+                } else {
+                    Result.success(null)
+                }
+            }
+        }
+        PlaybackRuntime.installCheckpointSink(null)
+        val gateway = ControllerBackedPlaybackGateway(context, source)
+
+        try {
+            gateway.playBook(chapterOne.bookId, chapterOne.chapterId)
+            withTimeout(8_000L) { firstUnavailableRequest.await() }
+            nextChapterAvailable.complete(Unit)
+
+            withTimeout(8_000L) {
+                while (nextChapterRequests < 2) delay(20L)
+            }
+
+            val continuedCursor = withTimeout(8_000L) {
+                gateway.cursor.filterNotNull().first { it.chapterId == chapterTwo.chapterId }
+            }
+
+            assertEquals(chapterTwo.chapterId, continuedCursor.chapterId)
+            assertTrue(nextChapterRequests >= 2)
+        } finally {
+            nextChapterAvailable.complete(Unit)
+            runCatching { gateway.pause() }
+            gateway.close()
+            testDirectory.deleteRecursively()
+        }
+        Unit
+    }
+
+    @Test
     fun narratorChangeDropsAPrefetchedNextChapterWithoutInterruptingTheCurrentChapter() = runBlocking {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val testDirectory = File(context.cacheDir, "chapter-voice-change-prefetch-test").apply { mkdirs() }

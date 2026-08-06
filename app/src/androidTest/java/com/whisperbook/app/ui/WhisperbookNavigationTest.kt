@@ -149,6 +149,17 @@ class WhisperbookNavigationTest {
     }
 
     @Test
+    fun nowPlaying_currentPassageOpensReadAlong() {
+        setApp(WhisperbookDestination.NowPlaying.route)
+
+        composeRule.onNodeWithTag("current-passage-excerpt").assertIsDisplayed()
+        composeRule.onNodeWithText("We should turn back before the lantern fades.").assertExists()
+        composeRule.onNodeWithTag("current-passage-excerpt").performClick()
+
+        composeRule.onNodeWithTag("current-chapter-screen").assertIsDisplayed()
+    }
+
+    @Test
     fun bookDetails_removeFromLibraryRequiresConfirmation() {
         setApp(WhisperbookDestination.BookDetails.route())
 

@@ -112,9 +112,13 @@ fun BookDetailsScreen(
             )
             StorySlider(appState.chapterProgress, {}, enabled = false, modifier = Modifier.fillMaxWidth())
             PapercraftButton(
-                text = if (appState.totalChapters > 0) "Continue listening" else "Preparing chapters…",
+                text = when {
+                    appState.canListen -> "Continue listening"
+                    appState.totalChapters > 0 -> "Preparing voices…"
+                    else -> "Preparing chapters…"
+                },
                 onClick = onListen,
-                enabled = appState.totalChapters > 0,
+                enabled = appState.canListen,
                 modifier = Modifier.fillMaxWidth(),
                 trailingIcon = { Icon(Icons.Filled.PlayArrow, null) },
             )
@@ -151,6 +155,7 @@ fun BookDetailsScreen(
             appState.chapters.forEach { chapter ->
                 CompactChapterRow(
                     chapter = chapter,
+                    enabled = appState.canListen && chapter.isAvailable,
                     onClick = {
                         appState.selectChapter(chapter.id)
                         onListen()

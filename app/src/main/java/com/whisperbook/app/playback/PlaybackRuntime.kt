@@ -16,6 +16,9 @@ object PlaybackRuntime {
     val cursor: StateFlow<PlaybackCursor?> = mutableCursor.asStateFlow()
 
     @Volatile
+    private var preparingChapter: PreparingChapter? = null
+
+    @Volatile
     internal var checkpointSink: PlaybackCheckpointSink? = null
 
     fun installCheckpointSink(sink: PlaybackCheckpointSink?) {
@@ -25,4 +28,34 @@ object PlaybackRuntime {
     internal fun publish(cursor: PlaybackCursor?) {
         mutableCursor.value = cursor
     }
+
+    internal fun markChapterPreparing(
+        bookId: String,
+        chapterId: String,
+        generation: Long,
+    ) {
+        preparingChapter = PreparingChapter(bookId, chapterId, generation)
+    }
+
+    internal fun clearChapterPreparing(
+        bookId: String,
+        chapterId: String,
+        generation: Long,
+    ) {
+        val expected = PreparingChapter(bookId, chapterId, generation)
+        if (preparingChapter == expected) preparingChapter = null
+    }
+
+    internal fun clearChapterPreparing() {
+        preparingChapter = null
+    }
+
+    internal fun isChapterPreparing(bookId: String, chapterId: String): Boolean =
+        preparingChapter?.let { it.bookId == bookId && it.chapterId == chapterId } == true
+
+    private data class PreparingChapter(
+        val bookId: String,
+        val chapterId: String,
+        val generation: Long,
+    )
 }

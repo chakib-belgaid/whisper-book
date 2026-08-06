@@ -39,4 +39,25 @@ class PassageTextChunkerTest {
         assertTrue(first.all { it.id.startsWith("passage-7::chunk:") })
         assertTrue(first.all { it.text.length <= PassageTextChunker.MAX_CHARS })
     }
+
+    @Test
+    fun `narration chunks use short stable sentence bounded segments`() {
+        val source = List(80) { index -> "Sentence $index ends cleanly." }.joinToString(" ")
+
+        val first = NarrationTextChunker.chunks("passage-9", source)
+        val second = NarrationTextChunker.chunks("passage-9", source)
+
+        assertEquals(first, second)
+        assertTrue(first.size > 1)
+        assertTrue(first.all { it.text.length <= NarrationTextChunker.MAX_CHARS })
+        assertTrue(first.dropLast(1).all { it.text.endsWith('.') })
+        assertEquals(source, first.joinToString(" ") { it.text })
+    }
+
+    @Test
+    fun `short narration passage keeps its source id for existing cache reuse`() {
+        val chunks = NarrationTextChunker.chunks("passage-short", "A short opening line.")
+
+        assertEquals(listOf(PassageTextChunk("passage-short", "A short opening line.")), chunks)
+    }
 }

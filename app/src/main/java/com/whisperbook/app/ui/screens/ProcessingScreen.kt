@@ -153,7 +153,7 @@ fun ProcessingScreen(
         Spacer(Modifier.height(10.dp))
         PapercraftButton(
             text = if (appState.preparationStage >= 3) {
-                "Open audiobook"
+                "Listen now"
             } else {
                 "Continue in background"
             },
@@ -178,6 +178,15 @@ fun ProcessingScreen(
             isLoading = appState.isBusy,
             loadingDescription = appState.statusMessage ?: "Preparing your audiobook",
         )
+        if (appState.preparationStage >= 3) {
+            Text(
+                text = "Playback starts with the opening lines while the rest records in the background.",
+                color = WhisperbookTheme.colors.onStage,
+                style = WhisperbookTheme.typography.label,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp),
+            )
+        }
         Spacer(Modifier.height(8.dp))
         OnDevicePromise()
     }

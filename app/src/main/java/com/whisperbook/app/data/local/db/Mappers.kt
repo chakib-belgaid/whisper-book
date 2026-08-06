@@ -7,7 +7,10 @@ import com.whisperbook.app.domain.model.Book
 import com.whisperbook.app.domain.model.BookFormat
 import com.whisperbook.app.domain.model.Chapter
 import com.whisperbook.app.domain.model.CharacterColorRole
+import com.whisperbook.app.domain.model.CharacterAgeGroup
+import com.whisperbook.app.domain.model.CharacterGender
 import com.whisperbook.app.domain.model.CharacterVoiceAssignment
+import com.whisperbook.app.domain.model.NarrationPerspective
 import com.whisperbook.app.domain.model.Passage
 import com.whisperbook.app.domain.model.PlaybackCursor
 import com.whisperbook.app.domain.model.PreparationStage
@@ -113,13 +116,24 @@ fun Passage.toEntity(): PassageEntity = PassageEntity(
     attributionRule = attributionRule,
 )
 
-fun CharacterAggregate.toDomain(): StoryCharacter = StoryCharacter(
-    id = character.id,
-    bookId = character.bookId,
-    displayName = character.displayName,
+fun CharacterAggregate.toDomain(): StoryCharacter = character.toDomain(
     aliases = aliases.map(CharacterAliasEntity::alias).sorted().toSet(),
-    colorRole = enumValueOrDefault(character.colorRole, CharacterColorRole.BLUE),
-    dialogueLineCount = character.dialogueLineCount.coerceAtLeast(0),
+)
+
+fun StoryCharacterEntity.toDomain(aliases: Set<String> = emptySet()): StoryCharacter = StoryCharacter(
+    id = id,
+    bookId = bookId,
+    displayName = displayName,
+    aliases = aliases,
+    colorRole = enumValueOrDefault(colorRole, CharacterColorRole.BLUE),
+    dialogueLineCount = dialogueLineCount.coerceAtLeast(0),
+    gender = enumValueOrDefault(gender, CharacterGender.UNKNOWN),
+    genderConfidence = genderConfidence.normalized(default = 0f, minimum = 0f, maximum = 1f),
+    ageGroup = enumValueOrDefault(ageGroup, CharacterAgeGroup.UNKNOWN),
+    ageConfidence = ageConfidence.normalized(default = 0f, minimum = 0f, maximum = 1f),
+    narrationPerspective = enumValueOrDefault(narrationPerspective, NarrationPerspective.UNKNOWN),
+    perspectiveConfidence = perspectiveConfidence.normalized(default = 0f, minimum = 0f, maximum = 1f),
+    narratorIdentity = narratorIdentity?.trim()?.takeIf(String::isNotBlank),
 )
 
 fun StoryCharacter.toEntity(): StoryCharacterEntity = StoryCharacterEntity(
@@ -128,6 +142,13 @@ fun StoryCharacter.toEntity(): StoryCharacterEntity = StoryCharacterEntity(
     displayName = displayName,
     colorRole = colorRole.name,
     dialogueLineCount = dialogueLineCount.coerceAtLeast(0),
+    gender = gender.name,
+    genderConfidence = genderConfidence.normalized(default = 0f, minimum = 0f, maximum = 1f),
+    ageGroup = ageGroup.name,
+    ageConfidence = ageConfidence.normalized(default = 0f, minimum = 0f, maximum = 1f),
+    narrationPerspective = narrationPerspective.name,
+    perspectiveConfidence = perspectiveConfidence.normalized(default = 0f, minimum = 0f, maximum = 1f),
+    narratorIdentity = narratorIdentity?.trim()?.takeIf(String::isNotBlank),
 )
 
 fun StoryCharacter.toAliasEntities(): List<CharacterAliasEntity> = aliases

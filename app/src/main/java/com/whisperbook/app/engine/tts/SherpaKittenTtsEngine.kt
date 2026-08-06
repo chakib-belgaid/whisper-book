@@ -2,6 +2,8 @@ package com.whisperbook.app.engine.tts
 
 import android.content.Context
 import android.os.Process
+import android.os.SystemClock
+import android.util.Log
 import com.k2fsa.sherpa.onnx.OfflineTts
 import com.k2fsa.sherpa.onnx.OfflineTtsConfig
 import com.k2fsa.sherpa.onnx.OfflineTtsModelConfig
@@ -10,6 +12,8 @@ import com.k2fsa.sherpa.onnx.GenerationConfig
 import com.whisperbook.app.domain.LocalTtsEngine
 import com.whisperbook.app.domain.SynthesisRequest
 import com.whisperbook.app.domain.SynthesisResult
+import com.whisperbook.app.domain.model.CharacterGender
+import com.whisperbook.app.domain.model.VocalAge
 import com.whisperbook.app.domain.model.VoiceDescriptor
 import java.util.concurrent.locks.ReentrantLock
 import java.util.concurrent.Executors
@@ -52,23 +56,10 @@ class SherpaKittenTtsEngine(
             nativeLock.withLock {
                 val tts = requireRuntime()
                 if (!warmed) {
-                    val warmup = try {
-                        tts.generateWithConfig(
-                            WARMUP_TEXT,
-                            generationConfig(DEFAULT_SPEAKER_ID, 1f),
-                        )
-                    } catch (failure: Throwable) {
-                        throw TtsEngineException("The embedded TTS model failed during warm-up", failure)
-                    }
-                    if (warmup.samples.isEmpty()) {
-                        throw TtsEngineException("The embedded TTS model produced no audio during warm-up")
-                    }
-                    if (warmup.sampleRate != EXPECTED_SAMPLE_RATE) {
-                        throw TtsEngineException(
-                            "The embedded TTS warm-up returned ${warmup.sampleRate} Hz; " +
-                                "$EXPECTED_SAMPLE_RATE Hz is required",
-                        )
-                    }
+                    // Constructing and validating the native runtime is the cold-start work we
+                    // need here. A dummy utterance delayed the real opening line with a second
+                    // complete inference and provided no additional validation over synthesize().
+                    tts.sampleRate()
                     warmed = true
                 }
             }
@@ -87,10 +78,24 @@ class SherpaKittenTtsEngine(
                         "Voice '${request.voice.id}' is not available in the embedded Supertonic model",
                     )
                 val audio = try {
+                    val synthesisStartedAtMs = SystemClock.elapsedRealtime()
                     tts.generateWithConfig(
                         request.text.trim(),
                         generationConfig(speaker.speakerIndex, request.speed),
-                    )
+                    ).also { generated ->
+                        val elapsedMs = SystemClock.elapsedRealtime() - synthesisStartedAtMs
+                        val durationMs = pcmDurationMs(generated.samples.size, generated.sampleRate)
+                        val realTimeFactorMilli = if (durationMs > 0L) {
+                            elapsedMs * 1_000L / durationMs
+                        } else {
+                            0L
+                        }
+                        Log.i(
+                            LOG_TAG,
+                            "synthesis_ready chars=${request.text.length} elapsedMs=$elapsedMs " +
+                                "audioMs=$durationMs rtfMilli=$realTimeFactorMilli",
+                        )
+                    }
                 } catch (failure: Throwable) {
                     throw TtsEngineException(
                         "The embedded TTS model could not synthesize voice ${speaker.displayName}",
@@ -145,6 +150,7 @@ class SherpaKittenTtsEngine(
             debug = false,
             provider = "cpu",
         )
+        val runtimeStartedAtMs = SystemClock.elapsedRealtime()
         val created = try {
             OfflineTts(appContext.assets, OfflineTtsConfig(model = model))
         } catch (failure: Throwable) {
@@ -176,6 +182,11 @@ class SherpaKittenTtsEngine(
                 "The embedded Supertonic model reports $sampleRate Hz; $EXPECTED_SAMPLE_RATE Hz is required",
             )
         }
+        Log.i(
+            LOG_TAG,
+            "runtime_ready elapsedMs=${SystemClock.elapsedRealtime() - runtimeStartedAtMs} " +
+                "sampleRate=$sampleRate speakers=$speakerCount threads=$THREAD_COUNT",
+        )
         runtime = created
         return created
     }
@@ -202,9 +213,8 @@ class SherpaKittenTtsEngine(
         // A single low-priority inference lane leaves Media3 and Compose responsive on older
         // mobile CPUs. More ONNX threads improve synthesis throughput but can starve audio I/O.
         private const val THREAD_COUNT = 1
-        private const val WARMUP_TEXT = "Once."
-        private const val DEFAULT_SPEAKER_ID = 0
         private const val DEFAULT_LANGUAGE = "en"
+        private const val LOG_TAG = "WhisperbookTts"
 
         /**
          * The bundled voice.bin is ordered F1-F5, then M1-M5. Keep the friendly identities tied
@@ -213,14 +223,14 @@ class SherpaKittenTtsEngine(
          * corresponding portrait does the same.
          */
         val KITTEN_VOICES: List<VoiceDescriptor> = listOf(
-            VoiceDescriptor(id = "bella", displayName = "Bella", speakerIndex = 4), // F5: mature, calm
-            VoiceDescriptor(id = "jasper", displayName = "Jasper", speakerIndex = 9), // M5: older, measured
-            VoiceDescriptor(id = "luna", displayName = "Luna", speakerIndex = 1), // F2: young, lively
-            VoiceDescriptor(id = "bruno", displayName = "Bruno", speakerIndex = 8), // M4: warm, mature
-            VoiceDescriptor(id = "rosie", displayName = "Rosie", speakerIndex = 2), // F3: older, measured
-            VoiceDescriptor(id = "hugo", displayName = "Hugo", speakerIndex = 6), // M2: grounded adult
-            VoiceDescriptor(id = "kiki", displayName = "Kiki", speakerIndex = 3), // F4: youthful, energetic
-            VoiceDescriptor(id = "leo", displayName = "Leo", speakerIndex = 7), // M3: youthful, energetic
+            VoiceDescriptor("bella", "Bella", 4, gender = CharacterGender.FEMALE, vocalAge = VocalAge.ADULT),
+            VoiceDescriptor("jasper", "Jasper", 9, gender = CharacterGender.MALE, vocalAge = VocalAge.MATURE),
+            VoiceDescriptor("luna", "Luna", 1, gender = CharacterGender.FEMALE, vocalAge = VocalAge.YOUTHFUL),
+            VoiceDescriptor("bruno", "Bruno", 8, gender = CharacterGender.MALE, vocalAge = VocalAge.ADULT),
+            VoiceDescriptor("rosie", "Rosie", 2, gender = CharacterGender.FEMALE, vocalAge = VocalAge.MATURE),
+            VoiceDescriptor("hugo", "Hugo", 6, gender = CharacterGender.MALE, vocalAge = VocalAge.ADULT),
+            VoiceDescriptor("kiki", "Kiki", 3, gender = CharacterGender.FEMALE, vocalAge = VocalAge.YOUTHFUL),
+            VoiceDescriptor("leo", "Leo", 7, gender = CharacterGender.MALE, vocalAge = VocalAge.YOUTHFUL),
         )
     }
 }

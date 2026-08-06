@@ -1,20 +1,20 @@
 package com.whisperbook.app.integration
 
 import com.whisperbook.app.data.local.db.AudioSegmentEntity
+import com.whisperbook.app.data.local.db.StoryCharacterEntity
 import com.whisperbook.app.data.local.db.WhisperBookDatabase
 import com.whisperbook.app.data.local.db.toDomain
 import com.whisperbook.app.data.local.db.toEntity
 import com.whisperbook.app.domain.LocalTtsEngine
-import com.whisperbook.app.domain.PassageTextChunker
 import com.whisperbook.app.domain.SynthesisRequest
 import com.whisperbook.app.domain.model.AudioSegment
 import com.whisperbook.app.domain.model.AudioSegmentState
-import com.whisperbook.app.domain.model.BuiltInCharacters
 import com.whisperbook.app.domain.model.CharacterVoiceAssignment
 import com.whisperbook.app.domain.model.VoiceDescriptor
 import com.whisperbook.app.engine.audio.AppPrivateAudioSegmentStore
-import com.whisperbook.app.engine.audio.AudioCacheKey
 import com.whisperbook.app.engine.audio.LocalAudioGenerationCoordinator
+import com.whisperbook.app.engine.audio.NarrationSynthesisPlanner
+import com.whisperbook.app.engine.tts.CharacterVoiceCaster
 import com.whisperbook.app.engine.tts.SherpaKittenTtsEngine
 import com.whisperbook.app.playback.PlayableSegment
 import com.whisperbook.app.playback.PlaybackChapterQueue
@@ -22,7 +22,6 @@ import com.whisperbook.app.playback.PlaybackQueueSource
 import java.io.File
 import java.util.concurrent.CancellationException
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
 /**
@@ -58,7 +57,11 @@ class LocalPlaybackQueueSource(
         ) -> Unit,
     ): Result<PlaybackChapterQueue> = withContext(Dispatchers.IO) {
         try {
-            Result.success(buildQueue(bookId, chapterId, onProgress))
+            Result.success(
+                LocalAudioGenerationCoordinator.withOnDemandPriority {
+                    buildQueue(bookId, chapterId, onProgress)
+                },
+            )
         } catch (cancellation: CancellationException) {
             throw cancellation
         } catch (failure: Throwable) {
@@ -100,92 +103,94 @@ class LocalPlaybackQueueSource(
             ?: error("This chapter is no longer available")
         val passages = chapter.passages.sortedBy { it.ordinal }
         check(passages.isNotEmpty()) { "This chapter has no readable passages" }
+        check(passages.all { it.attributionRule != UNATTRIBUTED_RULE }) {
+            "This chapter's voices are still being prepared"
+        }
 
-        val characterNames = database.storyCharacterDao().getEntitiesForBook(bookId)
-            .associate { it.id to it.displayName }
-        val queuedPassages = passages.flatMap { passage ->
-            PassageTextChunker.chunks(passage.id, passage.text).map { chunk ->
-                QueuedPassage(
-                    sourcePassageId = passage.id,
-                    passageId = chunk.id,
-                    text = chunk.text,
-                    speakerId = passage.speakerId,
+        val characters = database.storyCharacterDao().getEntitiesForBook(bookId).associateBy { it.id }
+        check(passages.all { it.speakerId in characters }) {
+            "This chapter's character catalog is still being prepared"
+        }
+        val characterNames = characters.mapValues { it.value.displayName }
+        val sourcePassages = passages.map { passage ->
+            SourcePassage(
+                passageId = passage.id,
+                text = passage.text,
+                speakerId = passage.speakerId,
+            )
+        }
+        check(sourcePassages.isNotEmpty()) { "This chapter has no narratable passages" }
+        val resolvedVoices = resolveVoices(
+            chapterId = chapterHeader.id,
+            speakerIds = sourcePassages.map(SourcePassage::speakerId).distinct(),
+            characters = characters,
+        )
+        val resolvedPassages = sourcePassages.flatMap { passage ->
+            val resolvedVoice = resolvedVoices.getValue(passage.speakerId)
+            NarrationSynthesisPlanner.plan(
+                passageId = passage.passageId,
+                text = passage.text,
+                voice = resolvedVoice.voice,
+                speed = resolvedVoice.assignment.speed,
+                modelVersion = resolvedVoice.assignment.modelVersion,
+                sampleRate = expectedSampleRate,
+            ).map { unit ->
+                ResolvedPassage(
+                    queued = QueuedPassage(
+                        sourcePassageId = passage.passageId,
+                        passageId = unit.passageId,
+                        speakerId = passage.speakerId,
+                    ),
+                    request = unit.request,
                 )
             }
         }
-        check(queuedPassages.isNotEmpty()) { "This chapter has no narratable passages" }
-        val resolvedVoices = resolveVoices(
-            chapterId = chapterHeader.id,
-            speakerIds = queuedPassages.map(QueuedPassage::speakerId).distinct(),
-        )
-        val resolvedPassages = queuedPassages.map { passage ->
-            val resolvedVoice = resolvedVoices.getValue(passage.speakerId)
-            val provisional = SynthesisRequest(
-                text = passage.text.trim(),
-                voice = resolvedVoice.voice,
-                speed = resolvedVoice.assignment.speed,
-                cacheKey = "pending",
-            )
-            val waveformKey = AudioCacheKey.fromRequest(
-                provisional,
-                resolvedVoice.assignment.modelVersion,
-                expectedSampleRate,
-            )
-            val cacheKey = AudioCacheKey.create(
-                text = "${passage.passageId}\u0000$waveformKey",
-                voiceId = resolvedVoice.voice.id,
-                speakerIndex = resolvedVoice.voice.speakerIndex,
-                modelVersion = resolvedVoice.assignment.modelVersion,
-                speed = resolvedVoice.assignment.speed,
-                sampleRate = expectedSampleRate,
-            )
-            ResolvedPassage(passage, provisional.copy(cacheKey = cacheKey))
-        }
+        check(resolvedPassages.isNotEmpty()) { "This chapter has no narratable passages" }
         val persistedSegments = resolvedPassages
             .chunked(SQL_QUERY_BATCH_SIZE)
             .flatMap { batch -> database.audioSegmentDao().findByCacheKeys(batch.map { it.request.cacheKey }) }
             .associateBy(AudioSegmentEntity::cacheKey)
         val checkpoint = database.playbackCheckpointDao().getForBook(bookId)
             ?.takeIf { it.chapterId == chapterHeader.id }
-        val requestedStartPassageId = checkpoint?.passageId ?: book.currentPassageId
-        val resolvedStartPassageId = requestedStartPassageId?.let { passageId ->
-            queuedPassages.firstOrNull { queued ->
-                queued.passageId == passageId || queued.sourcePassageId == passageId
-            }?.passageId
-        }
+        val resumeTarget = resolvePlaybackResumeTarget(
+            checkpoint = checkpoint?.let { saved ->
+                SavedPlaybackResume(
+                    passageId = saved.passageId,
+                    segmentId = saved.segmentId,
+                    segmentPositionMs = saved.segmentPositionMs,
+                )
+            },
+            currentPassageId = book.currentPassageId,
+            plannedSegments = resolvedPassages.map { passage ->
+                PlannedPlaybackSegment(
+                    passageId = passage.queued.passageId,
+                    sourcePassageId = passage.queued.sourcePassageId,
+                    segmentId = passage.request.cacheKey,
+                )
+            },
+        )
         val queueSnapshot: (List<PlayableSegment>) -> PlaybackChapterQueue = { readySegments ->
+            val resumeSegment = readySegments.firstOrNull { segment ->
+                segment.passageId == resumeTarget.passageId &&
+                    segment.audioSegment.id == resumeTarget.segmentId
+            }
             PlaybackChapterQueue(
                 bookId = bookId,
                 chapterId = chapterHeader.id,
                 bookTitle = book.title,
                 chapterTitle = chapterHeader.title,
                 segments = readySegments,
-                startPassageId = resolvedStartPassageId,
-                startSegmentPositionMs = checkpoint?.segmentPositionMs ?: 0L,
+                startPassageId = resumeTarget.passageId,
+                // Reuse an offset only for the exact cached segment it was recorded against.
+                // Older checkpoints used larger chunks and must restart at the mapped microsegment.
+                startSegmentPositionMs = resumeSegment?.let { resumeTarget.segmentPositionMs } ?: 0L,
             )
         }
         onProgress?.invoke(null, 0, resolvedPassages.size)
         var engine: LocalTtsEngine? = null
-        var playbackBufferHeadStartGranted = false
         try {
             val segments = ArrayList<PlayableSegment>(resolvedPassages.size)
             resolvedPassages.forEachIndexed { passageOrdinal, passage ->
-                val persistedIsReady = persistedSegments[passage.request.cacheKey]
-                    ?.takeIf { it.state == AudioSegmentState.READY.name }
-                    ?.path
-                    ?.let(::File)
-                    ?.isFile == true
-                if (
-                    onProgress != null &&
-                    segments.isNotEmpty() &&
-                    !persistedIsReady &&
-                    !playbackBufferHeadStartGranted
-                ) {
-                    // Give Media3 time to read several already-cached local segments before the
-                    // CPU-intensive native model starts its next inference.
-                    delay(PLAYBACK_BUFFER_HEAD_START_MS)
-                    playbackBufferHeadStartGranted = true
-                }
                 val ready = resolvePassageAudio(
                     passage = passage,
                     persisted = persistedSegments[passage.request.cacheKey],
@@ -202,8 +207,8 @@ class LocalPlaybackQueueSource(
                     speakerName = characterNames[passage.queued.speakerId] ?: "Narrator",
                     audioSegment = ready,
                 )
-                val startPassageIsReady = resolvedStartPassageId == null ||
-                    segments.any { it.passageId == resolvedStartPassageId }
+                val startPassageIsReady = resumeTarget.passageId == null ||
+                    segments.any { it.passageId == resumeTarget.passageId }
                 onProgress?.invoke(
                     queueSnapshot(segments.toList()).takeIf { startPassageIsReady },
                     segments.size,
@@ -219,6 +224,7 @@ class LocalPlaybackQueueSource(
     private suspend fun resolveVoices(
         chapterId: String,
         speakerIds: List<String>,
+        characters: Map<String, StoryCharacterEntity>,
     ): Map<String, ResolvedVoice> {
         check(voices.isNotEmpty()) { "No embedded voices are available" }
         val storedAssignments = database.voiceAssignmentDao().getForCharacters(speakerIds)
@@ -230,7 +236,7 @@ class LocalPlaybackQueueSource(
         return speakerIds.associateWith { speakerId ->
             val stored = chapterAssignments[speakerId] ?: storedAssignments[speakerId]
             val voice = stored?.let { assignment -> voices.firstOrNull { it.id == assignment.voiceId } }
-                ?: defaultVoiceFor(speakerId)
+                ?: defaultVoiceFor(speakerId, characters[speakerId])
             val assignment = stored?.takeIf { it.voiceId == voice.id }
                 ?: CharacterVoiceAssignment(
                     characterId = speakerId,
@@ -302,6 +308,11 @@ class LocalPlaybackQueueSource(
     private data class QueuedPassage(
         val sourcePassageId: String,
         val passageId: String,
+        val speakerId: String,
+    )
+
+    private data class SourcePassage(
+        val passageId: String,
         val text: String,
         val speakerId: String,
     )
@@ -316,14 +327,17 @@ class LocalPlaybackQueueSource(
         val request: SynthesisRequest,
     )
 
-    private fun defaultVoiceFor(speakerId: String): VoiceDescriptor = if (speakerId == BuiltInCharacters.NARRATOR_ID) {
-        voices.firstOrNull { it.id == "bella" } ?: voices.first()
-    } else {
-        voices[Math.floorMod(speakerId.hashCode(), voices.size)]
-    }
+    private fun defaultVoiceFor(speakerId: String, character: StoryCharacterEntity?): VoiceDescriptor =
+        character?.let { storedCharacter ->
+            CharacterVoiceCaster.select(
+                character = storedCharacter.toDomain(),
+                voices = voices,
+                preferredNarrator = voices.firstOrNull { it.id == "bella" },
+            )
+        } ?: voices[Math.floorMod(speakerId.hashCode(), voices.size)]
 
     private companion object {
         const val SQL_QUERY_BATCH_SIZE = 900
-        const val PLAYBACK_BUFFER_HEAD_START_MS = 3_000L
+        const val UNATTRIBUTED_RULE = "preparation-unattributed"
     }
 }

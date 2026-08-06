@@ -101,6 +101,21 @@ interface PublicationExtractor {
 
 interface SpeakerAttributor {
     suspend fun attribute(bookId: String, publication: ExtractedPublication): AttributedPublication
+
+    /**
+     * Attributes one already-persisted chapter without deriving its identity from list position.
+     *
+     * [chapterId] and [chapterOrdinal] are authoritative database values. [knownCharacters] is the
+     * cumulative, book-scoped catalog discovered before this chapter, so implementations can keep
+     * character IDs, aliases, colors, and profile evidence stable across incremental calls.
+     */
+    suspend fun attributeChapter(
+        bookId: String,
+        chapterId: String,
+        chapterOrdinal: Int,
+        chapter: ExtractedChapter,
+        knownCharacters: List<StoryCharacter> = emptyList(),
+    ): AttributedPublication
 }
 
 interface LocalTtsEngine : AutoCloseable {

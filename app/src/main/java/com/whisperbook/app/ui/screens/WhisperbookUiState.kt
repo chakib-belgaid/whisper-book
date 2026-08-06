@@ -10,7 +10,7 @@ import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import com.whisperbook.app.domain.PassageTextChunker
+import com.whisperbook.app.domain.NarrationTextChunker
 import com.whisperbook.app.domain.model.Book
 import com.whisperbook.app.domain.model.Chapter
 import com.whisperbook.app.domain.model.CharacterColorRole
@@ -33,6 +33,7 @@ interface WhisperbookUiActions {
     fun selectChapter(chapterId: String)
     fun playPreviousChapter()
     fun playNextChapter()
+    fun playSelectedChapter()
     fun playOrPause()
     fun seekByFraction(delta: Float)
     fun seekToFraction(fraction: Float)
@@ -61,7 +62,10 @@ data class LibraryBookUi(
     val totalChapters: Int,
     val progress: Float,
     val preparation: PreparationState = PreparationState.Ready,
-)
+) {
+    val canListen: Boolean
+        get() = totalChapters > 0 && preparation.stage.isPlaybackSafeStage()
+}
 
 @Immutable
 data class ChapterUi(
@@ -70,6 +74,7 @@ data class ChapterUi(
     val selected: Boolean = false,
     val id: String = number.toString(),
     val isLoading: Boolean = false,
+    val isAvailable: Boolean = true,
 )
 
 @Immutable
@@ -119,6 +124,7 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
     private var synchronizedChapters: List<Chapter>? = null
     private var synchronizedChapterSelectionId: String? = null
     private var synchronizedLoadingChapterId: String? = null
+    private var synchronizedChapterAssignments: Map<String, CharacterVoiceAssignment>? = null
     private var chaptersSynchronized = false
     private var synchronizedCharacters: List<StoryCharacter>? = null
     private var synchronizedAssignments: Map<String, CharacterVoiceAssignment>? = null
@@ -232,12 +238,17 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
 
     val isProductionBacked: Boolean get() = productionActions != null
     val isChapterLoading: Boolean get() = chapters.any(ChapterUi::isLoading)
+    val currentPassage: PassageUi?
+        get() = passages.firstOrNull { it.id == activePassageId } ?: passages.firstOrNull()
     val isBookPreparing: Boolean
         get() = preparationStatus?.stage?.let { it != PreparationStage.READY && it != PreparationStage.FAILED } == true
+    val canListen: Boolean
+        get() = totalChapters > 0 &&
+            (preparationStatus?.stage?.isPlaybackSafeStage() ?: demoMode)
     val hasPreviousChapter: Boolean
-        get() = selectedChapterIndex() > 0
+        get() = chapters.getOrNull(selectedChapterIndex() - 1)?.isAvailable == true
     val hasNextChapter: Boolean
-        get() = selectedChapterIndex().let { it >= 0 && it < chapters.lastIndex }
+        get() = chapters.getOrNull(selectedChapterIndex() + 1)?.isAvailable == true
 
     suspend fun synchronizeAsync(
         snapshot: WhisperbookUiSnapshot,
@@ -302,21 +313,27 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
             !chaptersSynchronized ||
             snapshot.chapters !== synchronizedChapters ||
             selectedChapterId != synchronizedChapterSelectionId ||
-            snapshot.loadingChapterId != synchronizedLoadingChapterId
+            snapshot.loadingChapterId != synchronizedLoadingChapterId ||
+            snapshot.voiceAssignments !== synchronizedChapterAssignments
         ) {
             chapters.clear()
             chapters.addAll(snapshot.chapters.map { chapter ->
+                val speakerIds = chapter.passages.mapTo(linkedSetOf()) { it.speakerId }
                 ChapterUi(
                     number = chapter.ordinal + 1,
                     title = chapter.title,
                     selected = chapter.id == selectedChapterId,
                     id = chapter.id,
                     isLoading = chapter.id == snapshot.loadingChapterId,
+                    isAvailable = chapter.passages.isNotEmpty() &&
+                        chapter.passages.all { it.attributionRule != UNATTRIBUTED_RULE } &&
+                        speakerIds.all(snapshot.voiceAssignments::containsKey),
                 )
             })
             synchronizedChapters = snapshot.chapters
             synchronizedChapterSelectionId = selectedChapterId
             synchronizedLoadingChapterId = snapshot.loadingChapterId
+            synchronizedChapterAssignments = snapshot.voiceAssignments
             chaptersSynchronized = true
         }
         if (
@@ -361,7 +378,9 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
                 PreparationStage.COPY_AND_VALIDATE, PreparationStage.READING_CHAPTERS -> 0
                 PreparationStage.FINDING_CHARACTERS -> 1
                 PreparationStage.ASSIGNING_VOICES -> 2
-                PreparationStage.PREPARING_AUDIO -> if (preparation.completedUnits > 0) 3 else 2
+                // Progressive playback only needs the cast and the first short audio segment;
+                // it no longer waits for an entire chapter to finish recording.
+                PreparationStage.PREPARING_AUDIO -> 3
                 PreparationStage.READY -> 4
                 PreparationStage.FAILED -> 0
             }
@@ -420,7 +439,7 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
         }
         return snapshot.selectedChapter?.passages.orEmpty().flatMap { passage ->
             val character = charactersById[passage.speakerId]
-            PassageTextChunker.chunks(passage.id, passage.text).map { chunk ->
+            NarrationTextChunker.chunks(passage.id, passage.text).map { chunk ->
                 PassageUi(
                     id = chunk.id,
                     speaker = character?.role ?: SpeakerRole.Narrator,
@@ -490,6 +509,11 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
     fun togglePlayback() {
         if (productionActions == null) isPlaying = !isPlaying
         productionActions?.playOrPause()
+    }
+
+    fun startPlayback() {
+        if (productionActions == null) isPlaying = true
+        productionActions?.playSelectedChapter()
     }
 
     fun playPreviousChapter() {
@@ -617,6 +641,7 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
 
     fun selectChapter(chapterId: String) {
         if (chapterId.isBlank()) return
+        if (productionActions != null && chapters.firstOrNull { it.id == chapterId }?.isAvailable != true) return
         if (productionActions == null) {
             val chapterIndex = chapters.indexOfFirst { it.id == chapterId }
             if (chapterIndex >= 0) {
@@ -639,6 +664,11 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
 
     private fun selectedChapterIndex(): Int = chapters.indexOfFirst(ChapterUi::selected)
 }
+
+private fun PreparationStage.isPlaybackSafeStage(): Boolean =
+    this == PreparationStage.PREPARING_AUDIO || this == PreparationStage.READY
+
+private const val UNATTRIBUTED_RULE = "preparation-unattributed"
 
 private val demoVoiceOptions = listOf(
     VoiceOptionUi("bella", "Bella", voiceAvatarRes("bella")),

@@ -51,9 +51,27 @@ data class StoryCharacter(
     val aliases: Set<String>,
     val colorRole: CharacterColorRole,
     val dialogueLineCount: Int,
+    val gender: CharacterGender = CharacterGender.UNKNOWN,
+    val genderConfidence: Float = 0f,
+    val ageGroup: CharacterAgeGroup = CharacterAgeGroup.UNKNOWN,
+    val ageConfidence: Float = 0f,
+    val narrationPerspective: NarrationPerspective = NarrationPerspective.UNKNOWN,
+    val perspectiveConfidence: Float = 0f,
+    val narratorIdentity: String? = null,
 )
 
 enum class CharacterColorRole { NARRATOR, ELARA_BURGUNDY, FOX_ORANGE, BLUE, BURGUNDY, ORANGE }
+
+/** Textual identity evidence used only to improve automatic casting. */
+enum class CharacterGender { FEMALE, MALE, NON_BINARY, UNKNOWN }
+
+/** Broad story-age bands; exact ages are deliberately not persisted. */
+enum class CharacterAgeGroup { CHILD, TEEN, YOUNG_ADULT, ADULT, OLDER_ADULT, UNKNOWN }
+
+enum class NarrationPerspective { FIRST_PERSON, THIRD_PERSON, UNKNOWN }
+
+/** Vocal timbre category exposed by an embedded voice preset. */
+enum class VocalAge { YOUTHFUL, ADULT, MATURE, UNKNOWN }
 
 @Immutable
 data class VoiceDescriptor(
@@ -62,6 +80,8 @@ data class VoiceDescriptor(
     val speakerIndex: Int,
     val localeTag: String = "en-US",
     val embedded: Boolean = true,
+    val gender: CharacterGender = CharacterGender.UNKNOWN,
+    val vocalAge: VocalAge = VocalAge.UNKNOWN,
 )
 
 @Immutable
@@ -121,6 +141,8 @@ data class PlaybackCursor(
     val isPlaying: Boolean,
     val speed: Float,
     val segmentDurationMs: Long = 0L,
+    /** False while [chapterDurationMs] describes only the currently playable queue prefix. */
+    val chapterDurationIsFinal: Boolean = true,
 )
 
 @Immutable

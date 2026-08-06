@@ -95,13 +95,18 @@ android {
     testOptions {
         unitTests.isIncludeAndroidResources = true
     }
+
+    sourceSets.getByName("androidTest").assets.srcDir("$projectDir/schemas")
 }
 
 dependencies {
     val composeBom = platform("androidx.compose:compose-bom:2026.06.00")
+    val serializationBom = platform("org.jetbrains.kotlinx:kotlinx-serialization-bom:1.8.1")
 
     implementation(composeBom)
+    implementation(serializationBom)
     androidTestImplementation(composeBom)
+    androidTestImplementation(serializationBom)
 
     implementation("androidx.core:core-ktx:1.18.0")
     implementation("androidx.activity:activity-compose:1.13.0")
@@ -138,6 +143,7 @@ dependencies {
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("org.jetbrains.kotlinx:kotlinx-collections-immutable:0.4.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json")
 
     implementation(files("libs/sherpa-onnx-1.13.4.aar"))
 
@@ -149,6 +155,7 @@ dependencies {
     androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
     androidTestImplementation("androidx.compose.ui:ui-test-junit4")
     androidTestImplementation("androidx.work:work-testing:2.11.2")
+    androidTestImplementation("androidx.room:room-testing:2.8.4")
 }
 
 kapt {

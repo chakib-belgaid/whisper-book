@@ -127,6 +127,18 @@ class WhisperPlaybackService : MediaSessionService() {
             return
         }
         val descriptor = PlaybackMediaItems.descriptor(player.currentMediaItem) ?: return
+        val timeline = playbackChapterTimeline(
+            queuedDescriptors = (0 until player.mediaItemCount).mapNotNull { index ->
+                PlaybackMediaItems.descriptor(player.getMediaItemAt(index))
+            },
+            current = descriptor,
+        )
+        val chapterStartMs = timeline?.currentSegmentStartMs ?: descriptor.chapterStartMs
+        val chapterDurationMs = timeline?.chapterDurationMs ?: descriptor.chapterDurationMs
+        val chapterDurationIsFinal = !PlaybackRuntime.isChapterPreparing(
+            bookId = descriptor.bookId,
+            chapterId = descriptor.chapterId,
+        )
         val segmentPositionMs = player.currentPosition.coerceAtLeast(0L)
         val cursor = PlaybackCursor(
             bookId = descriptor.bookId,
@@ -134,12 +146,13 @@ class WhisperPlaybackService : MediaSessionService() {
             passageId = descriptor.passageId,
             segmentId = descriptor.segmentId,
             segmentPositionMs = segmentPositionMs,
-            chapterPositionMs = (descriptor.chapterStartMs + segmentPositionMs)
-                .coerceAtMost(descriptor.chapterDurationMs),
-            chapterDurationMs = descriptor.chapterDurationMs,
+            chapterPositionMs = (chapterStartMs + segmentPositionMs)
+                .coerceAtMost(chapterDurationMs),
+            chapterDurationMs = chapterDurationMs,
             isPlaying = player.isPlaying,
             speed = player.playbackParameters.speed,
             segmentDurationMs = descriptor.segmentDurationMs,
+            chapterDurationIsFinal = chapterDurationIsFinal,
         )
         PlaybackRuntime.publish(cursor)
         maybeCheckpoint(cursor, forceCheckpoint)

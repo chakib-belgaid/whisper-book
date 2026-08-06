@@ -29,8 +29,8 @@ These are captured emulator builds, not design mockups. The full screen inventor
 | --- | --- |
 | Private import | Android Storage Access Framework, byte-signature validation, SHA-256 duplicate detection, and an app-private source copy |
 | Publication extraction | EPUB metadata/reading-order parsing, PDF text extraction, and bundled ML Kit OCR for image-only pages |
-| Character voices | Explainable dialogue heuristics, aliases, confidence evidence, eight embedded Supertonic 3 voice presets, and per-character overrides |
-| Durable preparation | A staged WorkManager pipeline with persisted progress, restart recovery, opening-audio priority, and next-chapter prefetch |
+| Character voices | Explainable dialogue heuristics, first-person narrator detection, confidence-bearing age/gender cues, profile-aware casting across eight embedded Supertonic 3 voices, and per-character overrides |
+| Durable preparation | A staged WorkManager pipeline with persisted progress, restart recovery, chapter-scoped character discovery, opening-audio priority, and sequential prefetch |
 | Local audio | sherpa-onnx inference, 44.1 kHz WAV output, atomic writes, cache validation, retention, and bounded cleanup |
 | Playback | Media3 foreground service, chapter queueing, automatic continuation, 15-second seek, speed control, sleep timer, and audio-focus handling |
 | Read-along | Active-passage tracking, speaker labels and portraits, live progress, optional auto-scroll, and playback checkpoints |
@@ -42,7 +42,7 @@ These are captured emulator builds, not design mockups. The full screen inventor
   <img src="./docs/architecture/diagrams/offline-pipeline.svg" width="100%" alt="Seven-stage offline pipeline from local book selection to checkpointed audiobook playback">
 </p>
 
-The opening chapter is prioritized so listening can start before the whole book is synthesized. Later chapters are generated on demand and prefetched sequentially. The editable diagrams.net source is [offline-pipeline.drawio](docs/architecture/diagrams/offline-pipeline.drawio).
+The opening chapter is attributed, cast, and streamed first, so listening can start without scanning every chapter for characters. Later chapters are analyzed and generated sequentially. A versioned `characters.json` mirror in app-private storage records each completed chapter's character contribution for restart-safe, idempotent progress; Room remains authoritative for characters and voice choices. The editable diagrams.net source is [offline-pipeline.drawio](docs/architecture/diagrams/offline-pipeline.drawio).
 
 ## Architecture
 
@@ -133,6 +133,7 @@ Without these variables, Gradle intentionally creates an unsigned release artifa
 - Image-only PDF pages use bundled on-device OCR. Pages with no recognizable text remain an import error; there is no cloud fallback.
 - The current native runtime is packaged for `arm64-v8a` only.
 - Large books are prepared progressively; they are not fully synthesized before playback starts.
+- Age, gender, and first-person identity detection is a conservative English-language heuristic. Ambiguous or conflicting evidence stays unknown and uses the normal automatic/default voice; users can always override the cast.
 - Imported sources, extracted content, generated audio, settings, and checkpoints live in app-private storage. Uninstalling the app or clearing its data removes that private library, not the user's original external file.
 
 ## Project documents

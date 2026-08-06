@@ -96,6 +96,20 @@ data class StoryCharacterEntity(
     val colorRole: String,
     @ColumnInfo(name = "dialogue_line_count")
     val dialogueLineCount: Int,
+    @ColumnInfo(name = "gender", defaultValue = "'UNKNOWN'")
+    val gender: String = "UNKNOWN",
+    @ColumnInfo(name = "gender_confidence", defaultValue = "0")
+    val genderConfidence: Float = 0f,
+    @ColumnInfo(name = "age_group", defaultValue = "'UNKNOWN'")
+    val ageGroup: String = "UNKNOWN",
+    @ColumnInfo(name = "age_confidence", defaultValue = "0")
+    val ageConfidence: Float = 0f,
+    @ColumnInfo(name = "narration_perspective", defaultValue = "'UNKNOWN'")
+    val narrationPerspective: String = "UNKNOWN",
+    @ColumnInfo(name = "perspective_confidence", defaultValue = "0")
+    val perspectiveConfidence: Float = 0f,
+    @ColumnInfo(name = "narrator_identity", defaultValue = "NULL")
+    val narratorIdentity: String? = null,
 )
 
 @Entity(

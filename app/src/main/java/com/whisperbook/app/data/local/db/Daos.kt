@@ -131,6 +131,12 @@ interface PassageDao {
 
     @Query("SELECT * FROM passages WHERE id = :passageId LIMIT 1")
     suspend fun getById(passageId: String): PassageEntity?
+
+    @Query("SELECT * FROM passages WHERE chapter_id = :chapterId ORDER BY ordinal ASC")
+    suspend fun getForChapter(chapterId: String): List<PassageEntity>
+
+    @Query("DELETE FROM passages WHERE chapter_id = :chapterId")
+    suspend fun deleteForChapter(chapterId: String)
 }
 
 @Dao

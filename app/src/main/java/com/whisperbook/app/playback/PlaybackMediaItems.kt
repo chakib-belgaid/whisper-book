@@ -29,10 +29,18 @@ internal object PlaybackMediaItems {
     private const val KEY_CHAPTER_START_MS = "whisperbook.chapter_start_ms"
     private const val KEY_CHAPTER_DURATION_MS = "whisperbook.chapter_duration_ms"
 
-    fun create(queue: PlaybackChapterQueue): List<MediaItem> {
+    fun create(
+        queue: PlaybackChapterQueue,
+        fromSegmentIndex: Int = 0,
+    ): List<MediaItem> {
+        require(fromSegmentIndex in 0..queue.segments.size) {
+            "fromSegmentIndex must point inside the queue or immediately after it"
+        }
         val chapterDurationMs = queue.durationMs
-        var chapterStartMs = 0L
-        return queue.segments.map { playable ->
+        var chapterStartMs = queue.segments
+            .take(fromSegmentIndex)
+            .sumOf { it.audioSegment.durationMs.coerceAtLeast(0L) }
+        return queue.segments.drop(fromSegmentIndex).map { playable ->
             val audio = playable.audioSegment
             val path = requireNotNull(audio.path)
             val file = File(path)

@@ -1,5 +1,7 @@
 package com.whisperbook.app.engine.tts
 
+import com.whisperbook.app.domain.model.CharacterGender
+import com.whisperbook.app.domain.model.VocalAge
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -32,6 +34,18 @@ class KittenVoiceMappingTest {
             setOf("jasper", "bruno", "hugo", "leo"),
             SherpaKittenTtsEngine.KITTEN_VOICES
                 .filter { it.speakerIndex in 5..9 }
+                .mapTo(linkedSetOf()) { it.id },
+        )
+        assertEquals(
+            setOf("bella", "luna", "rosie", "kiki"),
+            SherpaKittenTtsEngine.KITTEN_VOICES
+                .filter { it.gender == CharacterGender.FEMALE }
+                .mapTo(linkedSetOf()) { it.id },
+        )
+        assertEquals(
+            setOf("luna", "kiki", "leo"),
+            SherpaKittenTtsEngine.KITTEN_VOICES
+                .filter { it.vocalAge == VocalAge.YOUTHFUL }
                 .mapTo(linkedSetOf()) { it.id },
         )
         assertEquals(

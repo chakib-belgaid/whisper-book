@@ -33,6 +33,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
@@ -128,6 +129,7 @@ internal fun CompactChapterRow(
     chapter: ChapterUi,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    enabled: Boolean = true,
 ) {
     val colors = WhisperbookTheme.colors
     val selected = chapter.selected
@@ -138,7 +140,13 @@ internal fun CompactChapterRow(
         modifier = modifier
             .fillMaxWidth()
             .heightIn(min = 48.dp)
-            .paperClickable(onClick = onClick, role = Role.Button, fold = PaperFold.Card)
+            .alpha(if (enabled) 1f else .55f)
+            .paperClickable(
+                onClick = onClick,
+                enabled = enabled,
+                role = Role.Button,
+                fold = PaperFold.Card,
+            )
             .clip(shape)
             .background(background)
             .border(1.dp, if (selected) colors.ornament else colors.outline.copy(alpha = .65f), shape)
@@ -148,6 +156,7 @@ internal fun CompactChapterRow(
                     append("Chapter ${chapter.number}, ${chapter.title}")
                     if (selected) append(", current chapter")
                     if (chapter.isLoading) append(", preparing audio")
+                    if (!enabled) append(", voices are still being prepared")
                 }
             },
         verticalAlignment = Alignment.CenterVertically,

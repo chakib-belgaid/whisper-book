@@ -39,8 +39,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -91,17 +93,22 @@ fun NowPlayingScreen(
         modifier = modifier.fillMaxSize().padding(contentPadding).testTag("now-playing-screen"),
     ) {
         val theatreHeight = ((maxHeight - 49.dp) * .47f).coerceIn(205.dp, 245.dp)
+        val passageInTheatre = maxHeight < 646.dp
         Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
             PlayerHeader(onSettings = onSettings)
             PlayerTheatre(
                 bookTitle = appState.currentBookTitle,
                 chapterNumber = appState.currentChapterNumber,
+                currentPassage = appState.currentPassage.takeIf { passageInTheatre },
                 onBookDetails = onBookDetails,
+                onCurrentChapter = onCurrentChapter,
                 modifier = Modifier.height(theatreHeight),
             )
             PlayerControlDeck(
                 appState = appState,
+                currentPassage = appState.currentPassage.takeUnless { passageInTheatre },
                 onVoiceCast = onVoiceCast,
+                onCurrentChapter = onCurrentChapter,
                 onChooseChapter = { showChapterPicker = true },
                 modifier = Modifier.weight(1f),
             )
@@ -149,7 +156,9 @@ private fun PlayerHeader(onSettings: () -> Unit) {
 private fun PlayerTheatre(
     bookTitle: String,
     chapterNumber: Int,
+    currentPassage: PassageUi?,
     onBookDetails: () -> Unit,
+    onCurrentChapter: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Box(
@@ -209,6 +218,18 @@ private fun PlayerTheatre(
             Spacer(Modifier.width(6.dp))
             LeafOrnament(Modifier.size(width = 18.dp, height = 9.dp), WhisperbookTheme.colors.ornament)
         }
+        currentPassage?.let { passage ->
+            CurrentPassageExcerpt(
+                passage = passage,
+                onClick = onCurrentChapter,
+                maxLines = 2,
+                overArtwork = true,
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .fillMaxWidth()
+                    .padding(horizontal = 56.dp, vertical = 14.dp),
+            )
+        }
     }
 }
 
@@ -253,7 +274,9 @@ private fun CompactHeaderButton(
 @Composable
 private fun PlayerControlDeck(
     appState: WhisperbookAppState,
+    currentPassage: PassageUi?,
     onVoiceCast: () -> Unit,
+    onCurrentChapter: () -> Unit,
     onChooseChapter: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -278,6 +301,16 @@ private fun PlayerControlDeck(
             textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth(),
         )
+        currentPassage?.let { passage ->
+            CurrentPassageExcerpt(
+                passage = passage,
+                onClick = onCurrentChapter,
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .padding(vertical = 4.dp),
+            )
+        }
         Row(Modifier.fillMaxWidth().height(62.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceEvenly) {
             PlayerTransport(
                 description = "Previous chapter",
@@ -367,6 +400,53 @@ private fun PlayerControlDeck(
             Text("${appState.currentChapterNumber} of ${appState.totalChapters}", color = WhisperbookTheme.colors.ink, style = WhisperbookTheme.typography.body.copy(fontSize = 13.sp))
             Icon(Icons.Outlined.KeyboardArrowDown, contentDescription = null, tint = WhisperbookTheme.colors.inkMuted, modifier = Modifier.size(18.dp))
         }
+    }
+}
+
+@Composable
+private fun CurrentPassageExcerpt(
+    passage: PassageUi,
+    onClick: () -> Unit,
+    maxLines: Int = 3,
+    overArtwork: Boolean = false,
+    modifier: Modifier = Modifier,
+) {
+    val accent = speakerColor(passage.speaker)
+    val backgroundColor = if (overArtwork) {
+        WhisperbookTheme.colors.paper.copy(alpha = .96f)
+    } else {
+        accent.copy(alpha = .08f)
+    }
+    Column(
+        modifier = modifier
+            .clip(RoundedCornerShape(8.dp))
+            .background(backgroundColor)
+            .border(1.dp, accent.copy(alpha = .42f), RoundedCornerShape(8.dp))
+            .paperClickable(onClick = onClick, role = Role.Button, fold = PaperFold.Card)
+            .semantics(mergeDescendants = true) {
+                contentDescription = "Currently reading by ${passage.speakerName}. ${passage.text}. Open current chapter"
+                liveRegion = LiveRegionMode.Polite
+            }
+            .testTag("current-passage-excerpt")
+            .padding(horizontal = 12.dp, vertical = 5.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.Center,
+    ) {
+        Text(
+            text = passage.speakerName.uppercase(),
+            color = accent,
+            style = WhisperbookTheme.typography.label.copy(fontSize = 9.sp, lineHeight = 11.sp),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Text(
+            text = passage.text,
+            color = WhisperbookTheme.colors.ink,
+            style = WhisperbookTheme.typography.reader.copy(fontSize = 14.sp, lineHeight = 18.sp),
+            textAlign = TextAlign.Center,
+            maxLines = maxLines,
+            overflow = TextOverflow.Ellipsis,
+        )
     }
 }
 

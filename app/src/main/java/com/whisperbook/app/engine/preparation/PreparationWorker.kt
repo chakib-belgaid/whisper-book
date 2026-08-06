@@ -17,6 +17,7 @@ import androidx.work.workDataOf
 import com.whisperbook.app.MainActivity
 import com.whisperbook.app.R
 import com.whisperbook.app.data.local.db.AudioSegmentEntity
+import com.whisperbook.app.data.local.db.ChapterAggregate
 import com.whisperbook.app.data.local.db.ChapterEntity
 import com.whisperbook.app.data.local.db.PassageEntity
 import com.whisperbook.app.data.local.db.PreparationJobEntity
@@ -24,11 +25,11 @@ import com.whisperbook.app.data.local.db.toAliasEntities
 import com.whisperbook.app.data.local.db.toDomain
 import com.whisperbook.app.data.local.db.toEntity
 import com.whisperbook.app.domain.ExtractedChapter
-import com.whisperbook.app.domain.ExtractedPublication
 import com.whisperbook.app.domain.ImportedBook
 import com.whisperbook.app.domain.PassageTextChunker
 import com.whisperbook.app.domain.SynthesisRequest
 import com.whisperbook.app.domain.model.AudioSegmentState
+import com.whisperbook.app.domain.model.AppSettings
 import com.whisperbook.app.domain.model.BookFormat
 import com.whisperbook.app.domain.model.BuiltInCharacters
 import com.whisperbook.app.domain.model.CharacterColorRole
@@ -36,11 +37,19 @@ import com.whisperbook.app.domain.model.CharacterVoiceAssignment
 import com.whisperbook.app.domain.model.Passage
 import com.whisperbook.app.domain.model.PreparationStage
 import com.whisperbook.app.domain.model.PreparationState
-import com.whisperbook.app.engine.audio.AudioCacheKey
+import com.whisperbook.app.domain.model.StoryCharacter
+import com.whisperbook.app.domain.model.VoiceDescriptor
 import com.whisperbook.app.engine.audio.LocalAudioGenerationCoordinator
+import com.whisperbook.app.engine.audio.NarrationSynthesisPlanner
 import com.whisperbook.app.engine.document.PdfImportException
 import com.whisperbook.app.engine.document.SignatureBookFormatDetector
 import com.whisperbook.app.engine.document.UnsupportedPublicationException
+import com.whisperbook.app.engine.metadata.ChapterCharacterMetadata
+import com.whisperbook.app.engine.metadata.CharacterDialogueContribution
+import com.whisperbook.app.engine.metadata.CharacterMetadataChapterUpdate
+import com.whisperbook.app.engine.metadata.CharacterMetadataFingerprint
+import com.whisperbook.app.engine.metadata.CharacterMetadataRecord
+import com.whisperbook.app.engine.tts.CharacterVoiceCaster
 import java.io.File
 import java.io.IOException
 import java.security.MessageDigest
@@ -342,87 +351,38 @@ internal class PreparationStageRunner(
     }
 
     private suspend fun attributeSpeakers(bookId: String, attemptCount: Int) {
-        val source = database.chapterDao().observeForBook(bookId).first()
-        if (source.isEmpty()) {
+        val chapters = database.chapterDao().getHeadersForBook(bookId)
+        if (chapters.isEmpty()) {
             throw PreparationPipelineException("chapters-missing", "Chapters must be read before attribution", false)
-        }
-        val storedPassages = source.flatMap { it.passages }
-        val alreadyAttributed = storedPassages.isNotEmpty() &&
-            storedPassages.all { it.attributionRule != UNATTRIBUTED_RULE }
-        val existingCharacters = database.storyCharacterDao().observeForBook(bookId).first()
-        val characterIds = existingCharacters.mapTo(hashSetOf()) { it.character.id }
-        val allSpeakersPersisted = storedPassages.all { it.speakerId in characterIds }
-        if (alreadyAttributed && existingCharacters.isNotEmpty() && allSpeakersPersisted) {
-            return
         }
 
         checkpoint(
             bookId,
             PreparationState(
                 PreparationStage.FINDING_CHARACTERS,
-                totalUnits = source.sumOf { it.passages.size },
-                message = "Finding the voices in this story",
+                completedUnits = 0,
+                totalUnits = chapters.size,
+                message = "Finding voices in the opening chapter",
             ),
             attemptCount,
         )
-        val publication = ExtractedPublication(
-            title = requireBook(bookId).title,
-            author = requireBook(bookId).author,
-            chapters = source.map { aggregate ->
-                ExtractedChapter(
-                    title = aggregate.chapter.title,
-                    paragraphs = aggregate.passages.sortedBy { it.ordinal }.map { it.text },
-                )
-            },
+        ensureChapterAttributed(
+            bookId = bookId,
+            chapterId = chapters.first().id,
+            isFinalChapter = chapters.size == 1,
         )
-        val attributed = dependencies.speakerAttributor.attribute(bookId, publication)
-        if (attributed.chapters.isEmpty() || attributed.characters.isEmpty()) {
-            throw PreparationPipelineException("attribution-empty", "No narratable story passages were found", false)
-        }
-        // Character IDs are database primary keys, so the built-in narrator must be book-scoped
-        // just like every discovered character. This also keeps per-character cache invalidation
-        // isolated when several books are in the library.
-        val narratorId = "$bookId-character-narrator"
-        val persistedChapters = attributed.chapters.map { chapter ->
-            chapter.copy(
-                passages = chapter.passages.map { passage ->
-                    if (passage.speakerId == BuiltInCharacters.NARRATOR_ID) {
-                        passage.copy(speakerId = narratorId)
-                    } else {
-                        passage
-                    }
-                },
-            )
-        }
-        val persistedCharacters = attributed.characters.map { character ->
-            if (character.id == BuiltInCharacters.NARRATOR_ID) character.copy(id = narratorId) else character
-        }
-        val attributedPassages = persistedChapters.flatMap { it.passages }
-        if (attributedPassages.isEmpty()) {
-            throw PreparationPipelineException("attribution-empty", "No narratable story passages were found", false)
-        }
-
-        database.withTransaction {
-            database.chapterDao().deleteForBook(bookId)
-            database.storyCharacterDao().deleteForBook(bookId)
-            database.chapterDao().insertAll(persistedChapters.map { it.toEntity() })
-            database.storyCharacterDao().insertAll(persistedCharacters.map { it.toEntity() })
-            database.storyCharacterDao().insertAliases(persistedCharacters.flatMap { it.toAliasEntities() })
-            database.passageDao().insertAll(attributedPassages.map { it.toEntity() })
-            database.preparationJobDao().upsert(
-                stateEntity(
-                    bookId,
-                    PreparationState(
-                        stage = PreparationStage.ASSIGNING_VOICES,
-                        completedUnits = persistedCharacters.size,
-                        totalUnits = persistedCharacters.size,
-                        progressFraction = 1f,
-                        message = "Found ${persistedCharacters.size} story voices",
-                    ),
-                    attemptCount,
-                ),
-            )
-        }
+        val characterCount = database.storyCharacterDao().getEntitiesForBook(bookId).size
+        checkpoint(
+            bookId,
+            PreparationState(
+                stage = PreparationStage.ASSIGNING_VOICES,
+                completedUnits = 1,
+                totalUnits = chapters.size,
+                progressFraction = 1f / chapters.size,
+                message = "Found $characterCount voices in the opening chapter",
+            ),
+            attemptCount,
+        )
     }
 
     private suspend fun assignVoices(bookId: String, attemptCount: Int) {
@@ -437,17 +397,6 @@ internal class PreparationStageRunner(
             if (voices.isEmpty()) {
                 throw PreparationPipelineException("voices-unavailable", "No local story voices are available", false)
             }
-            val voiceIds = voices.mapTo(hashSetOf()) { it.id }
-            val assignments = characters.associate { character ->
-                character.character.id to database.voiceAssignmentDao().getForCharacter(character.character.id)
-            }
-            val complete = assignments.values.all {
-                it != null &&
-                    it.voiceId in voiceIds &&
-                    it.modelVersion == dependencies.modelVersion
-            }
-            if (complete) return
-
             checkpoint(
                 bookId,
                 PreparationState(
@@ -457,56 +406,17 @@ internal class PreparationStageRunner(
                 ),
                 attemptCount,
             )
-            val narratorVoice = voices.firstOrNull { it.id == settings.defaultNarratorVoiceId }
-                ?: voices.firstOrNull { it.id == dependencies.narratorVoiceId }
-                ?: voices.first()
-            val orderedCharacters = characters.sortedWith(
-                compareBy(
-                    { it.character.colorRole != CharacterColorRole.NARRATOR.name },
-                    { it.character.id },
+            assignMissingVoices(bookId, voices, settings)
+            checkpoint(
+                bookId,
+                PreparationState(
+                    stage = PreparationStage.PREPARING_AUDIO,
+                    completedUnits = 0,
+                    totalUnits = database.chapterDao().getHeadersForBook(bookId).size,
+                    message = "The opening cast is ready",
                 ),
+                attemptCount,
             )
-            database.withTransaction {
-                orderedCharacters.forEachIndexed { index, character ->
-                    val existing = assignments[character.character.id]
-                    if (
-                        existing != null &&
-                        existing.voiceId in voiceIds &&
-                        existing.modelVersion == dependencies.modelVersion
-                    ) {
-                        return@forEachIndexed
-                    }
-                    val voice = if (character.character.colorRole == CharacterColorRole.NARRATOR.name) {
-                        existing?.voiceId?.let { id -> voices.firstOrNull { it.id == id } } ?: narratorVoice
-                    } else {
-                        existing?.voiceId?.let { id -> voices.firstOrNull { it.id == id } }
-                            ?: voices[index % voices.size]
-                    }
-                    database.voiceAssignmentDao().upsert(
-                        CharacterVoiceAssignment(
-                            characterId = character.character.id,
-                            voiceId = voice.id,
-                            modelVersion = dependencies.modelVersion,
-                            speed = existing?.speed ?: settings.speakingSpeed
-                                .takeIf { it.isFinite() && it in 0.5f..2f }
-                                ?: dependencies.speakingSpeed,
-                        ).toEntity(),
-                    )
-                }
-                database.preparationJobDao().upsert(
-                    stateEntity(
-                        bookId,
-                        PreparationState(
-                            stage = PreparationStage.PREPARING_AUDIO,
-                            completedUnits = characters.size,
-                            totalUnits = characters.size,
-                            progressFraction = 1f,
-                            message = "The cast is ready",
-                        ),
-                        attemptCount,
-                    ),
-                )
-            }
         } finally {
             engine.close()
         }
@@ -517,26 +427,55 @@ internal class PreparationStageRunner(
         attemptCount: Int,
         fromChapterOrdinal: Int,
     ) {
-        val chapters = database.chapterDao().observeForBook(bookId).first()
-        val allBatches = orderedChapterAudioBatches(chapters, fromChapterOrdinal = 0)
-        if (allBatches.isEmpty()) {
-            throw PreparationPipelineException("passages-missing", "Passages must exist before audio is prepared", false)
+        val chapters = database.chapterDao().getHeadersForBook(bookId)
+        if (chapters.isEmpty()) {
+            throw PreparationPipelineException("chapters-missing", "Chapters must exist before audio is prepared", false)
         }
-        val targets = allBatches.filter { it.chapterOrdinal >= fromChapterOrdinal }
+        val priorStage = database.preparationJobDao().getForBook(bookId).stage()
+        val requestedStartOrdinal = if (priorStage == PreparationStage.READY) {
+            fromChapterOrdinal
+        } else {
+            0
+        }
+        // Voice regeneration replaces the unique WorkManager chain. If it happens while a large
+        // book is still being prepared, resume at the first chapter whose catalog is incomplete so
+        // the remainder of the book is not stranded behind the replacement request.
+        val attributionStartOrdinal = if (requestedStartOrdinal == 0) {
+            null
+        } else {
+            val characterIds = database.storyCharacterDao().getEntitiesForBook(bookId)
+                .mapTo(hashSetOf()) { it.id }
+            chapters.firstOrNull { chapter ->
+                val passages = database.passageDao().getForChapter(chapter.id)
+                passages.isEmpty() ||
+                    passages.any { it.attributionRule == UNATTRIBUTED_RULE || it.speakerId !in characterIds }
+            }?.ordinal
+        }
+        val metadataStartOrdinal = firstMissingMetadataChapterOrdinal(bookId, chapters)
+        val effectiveStartOrdinal = listOfNotNull(
+            requestedStartOrdinal,
+            attributionStartOrdinal,
+            metadataStartOrdinal,
+        ).minOrNull() ?: 0
+        val targets = chapters.filter { it.ordinal >= effectiveStartOrdinal }
         if (targets.isEmpty()) {
             checkpoint(bookId, PreparationState.Ready, attemptCount)
             return
         }
 
-        val completedBeforeStart = allBatches.size - targets.size
+        val completedBeforeStart = chapters.size - targets.size
         checkpoint(
             bookId,
             PreparationState(
                 PreparationStage.PREPARING_AUDIO,
                 completedUnits = completedBeforeStart,
-                totalUnits = allBatches.size,
-                progressFraction = completedBeforeStart.toFloat() / allBatches.size,
-                message = chapterPreparationMessage(targets.first(), allBatches.size),
+                totalUnits = chapters.size,
+                progressFraction = completedBeforeStart.toFloat() / chapters.size,
+                message = chapterPreparationMessage(
+                    targets.first().ordinal,
+                    targets.first().title,
+                    chapters.size,
+                ),
             ),
             attemptCount,
         )
@@ -547,58 +486,368 @@ internal class PreparationStageRunner(
             if (voices.isEmpty()) {
                 throw PreparationPipelineException("voices-unavailable", "No local story voices are available", false)
             }
-            val synthesisBatches = targets.map { chapter ->
-                ChapterAudioBatch(
-                    chapterId = chapter.chapterId,
-                    chapterOrdinal = chapter.chapterOrdinal,
-                    chapterTitle = chapter.chapterTitle,
-                    passages = chapter.passages.map { passage -> synthesisTask(passage, voices) },
-                )
-            }
-            SequentialChapterAudioPreparer(
+            val settings = dependencies.settingsFlow.first()
+            val preparer = SequentialChapterAudioPreparer(
                 isPassageReady = ::isPassageAudioDurable,
                 preparePassage = { task -> synthesizePassage(engine, task) },
-            ).prepare(
-                chapters = synthesisBatches,
-                onChapterStarted = { targetIndex, chapter ->
-                    val completedChapters = completedBeforeStart + targetIndex
-                    checkpoint(
-                        bookId,
-                        PreparationState(
-                            stage = PreparationStage.PREPARING_AUDIO,
-                            completedUnits = completedChapters,
-                            totalUnits = allBatches.size,
-                            progressFraction = completedChapters.toFloat() / allBatches.size,
-                            message = chapterPreparationMessage(chapter, allBatches.size),
-                        ),
-                        attemptCount,
-                    )
-                },
-                onChapterReady = { targetIndex, chapter ->
-                    val completedChapters = completedBeforeStart + targetIndex + 1
-                    checkpoint(
-                        bookId,
-                        PreparationState(
-                            stage = PreparationStage.PREPARING_AUDIO,
-                            completedUnits = completedChapters,
-                            totalUnits = allBatches.size,
-                            progressFraction = completedChapters.toFloat() / allBatches.size,
-                            message = "${chapter.chapterTitle} is ready to listen",
-                        ),
-                        attemptCount,
-                    )
-                },
             )
+            targets.forEachIndexed { targetIndex, chapterHeader ->
+                val completedChapters = completedBeforeStart + targetIndex
+                checkpoint(
+                    bookId,
+                    PreparationState(
+                        stage = PreparationStage.PREPARING_AUDIO,
+                        completedUnits = completedChapters,
+                        totalUnits = chapters.size,
+                        progressFraction = completedChapters.toFloat() / chapters.size,
+                        message = chapterPreparationMessage(
+                            chapterHeader.ordinal,
+                            chapterHeader.title,
+                            chapters.size,
+                        ),
+                    ),
+                    attemptCount,
+                )
+
+                val chapter = ensureChapterAttributed(
+                    bookId = bookId,
+                    chapterId = chapterHeader.id,
+                    isFinalChapter = chapterHeader.ordinal == chapters.last().ordinal,
+                )
+                assignMissingVoices(bookId, voices, settings)
+                val chapterBatch = ChapterAudioBatch(
+                    chapterId = chapter.chapter.id,
+                    chapterOrdinal = chapter.chapter.ordinal,
+                    chapterTitle = chapter.chapter.title,
+                    passages = chapter.passages.sortedBy { it.ordinal },
+                )
+
+                // Resolve and generate one source passage at a time. Eagerly resolving every
+                // passage in a large book (or even a long opening chapter) delayed first audio
+                // behind unrelated Room lookups.
+                chapterBatch.passages.forEach { passage ->
+                    val passageBatch = ChapterAudioBatch(
+                        chapterId = chapterBatch.chapterId,
+                        chapterOrdinal = chapterBatch.chapterOrdinal,
+                        chapterTitle = chapterBatch.chapterTitle,
+                        passages = synthesisTasks(passage, voices),
+                    )
+                    preparer.prepare(listOf(passageBatch))
+                }
+
+                val readyChapters = completedChapters + 1
+                checkpoint(
+                    bookId,
+                    PreparationState(
+                        stage = PreparationStage.PREPARING_AUDIO,
+                        completedUnits = readyChapters,
+                        totalUnits = chapters.size,
+                        progressFraction = readyChapters.toFloat() / chapters.size,
+                        message = "${chapterBatch.chapterTitle} is ready to listen",
+                    ),
+                    attemptCount,
+                )
+            }
         } finally {
             engine.close()
         }
+        reconcileCharacterMetadata(bookId, chapters)
         checkpoint(bookId, PreparationState.Ready, attemptCount)
     }
 
-    private suspend fun synthesisTask(
+    private suspend fun firstMissingMetadataChapterOrdinal(
+        bookId: String,
+        chapters: List<ChapterEntity>,
+    ): Int? {
+        val catalog = dependencies.characterMetadataCatalog ?: return null
+        val sourceSha256 = requireBook(bookId).sourceSha256?.trim()?.takeIf(String::isNotBlank)
+        val snapshot = catalog.read(bookId)?.takeIf { current ->
+            current.sourceSha256 == sourceSha256 &&
+                current.analysisVersion == CHARACTER_ANALYSIS_VERSION
+        } ?: return chapters.firstOrNull()?.ordinal
+        val recordedChapterIds = snapshot.chapters.mapTo(hashSetOf()) { it.chapterId }
+        return chapters.firstOrNull { it.id !in recordedChapterIds }?.ordinal
+    }
+
+    private suspend fun ensureChapterAttributed(
+        bookId: String,
+        chapterId: String,
+        isFinalChapter: Boolean,
+    ): ChapterAggregate {
+        val source = database.chapterDao().getById(chapterId)
+            ?: throw PreparationPipelineException(
+                "chapter-missing",
+                "A chapter disappeared while the book was being prepared",
+                false,
+            )
+        if (source.passages.isEmpty()) {
+            throw PreparationPipelineException("passages-missing", "A chapter has no readable passages", false)
+        }
+        val existingCharacters = database.storyCharacterDao().observeForBook(bookId).first()
+        val existingCharacterIds = existingCharacters.mapTo(hashSetOf()) { it.character.id }
+        val alreadyAttributed = source.passages.all { it.attributionRule != UNATTRIBUTED_RULE }
+        if (alreadyAttributed) {
+            if (source.passages.any { it.speakerId !in existingCharacterIds }) {
+                throw PreparationPipelineException(
+                    "character-catalog-incomplete",
+                    "A prepared chapter references a missing character",
+                    false,
+                )
+            }
+            recordChapterMetadata(bookId, source, isFinalChapter)
+            return source
+        }
+
+        val attributed = dependencies.speakerAttributor.attributeChapter(
+            bookId = bookId,
+            chapterId = source.chapter.id,
+            chapterOrdinal = source.chapter.ordinal,
+            chapter = ExtractedChapter(
+                title = source.chapter.title,
+                paragraphs = source.passages.sortedBy { it.ordinal }.map { it.text },
+            ),
+            knownCharacters = existingCharacters.map { it.toDomain() },
+        )
+        val attributedChapter = attributed.chapters.singleOrNull()
+            ?: throw PreparationPipelineException(
+                "attribution-empty",
+                "No narratable story passages were found in this chapter",
+                false,
+            )
+        if (
+            attributedChapter.id != source.chapter.id ||
+            attributedChapter.ordinal != source.chapter.ordinal
+        ) {
+            throw PreparationPipelineException(
+                "attribution-chapter-mismatch",
+                "Chapter attribution returned the wrong chapter identity",
+                false,
+            )
+        }
+
+        // The legacy first call uses the built-in narrator ID. Scope it before persistence so
+        // assignments and audio invalidation remain isolated to this book. Incremental calls are
+        // seeded with this scoped character and retain the ID directly.
+        val narratorId = "$bookId-character-narrator"
+        val persistedCharacters = attributed.characters.map { character ->
+            if (character.id == BuiltInCharacters.NARRATOR_ID) character.copy(id = narratorId) else character
+        }.distinctBy(StoryCharacter::id)
+        val persistedPassages = attributedChapter.passages.map { passage ->
+            passage.copy(
+                chapterId = source.chapter.id,
+                speakerId = if (passage.speakerId == BuiltInCharacters.NARRATOR_ID) {
+                    narratorId
+                } else {
+                    passage.speakerId
+                },
+            )
+        }
+        val persistedCharacterIds = persistedCharacters.mapTo(hashSetOf(), StoryCharacter::id)
+        if (persistedCharacters.isEmpty() || persistedPassages.isEmpty()) {
+            throw PreparationPipelineException(
+                "attribution-empty",
+                "No narratable story passages were found in this chapter",
+                false,
+            )
+        }
+        if (persistedPassages.any { it.speakerId !in persistedCharacterIds }) {
+            throw PreparationPipelineException(
+                "attribution-character-missing",
+                "Chapter attribution returned a speaker without character metadata",
+                false,
+            )
+        }
+
+        database.withTransaction {
+            // This chapter has not produced audio yet. Replacing only its provisional passages
+            // leaves completed chapters, manual voice choices, and their cached audio untouched.
+            database.passageDao().deleteForChapter(source.chapter.id)
+            database.storyCharacterDao().insertAll(persistedCharacters.map { it.toEntity() })
+            database.storyCharacterDao().insertAliases(
+                persistedCharacters.flatMap { it.toAliasEntities() },
+            )
+            database.passageDao().insertAll(persistedPassages.map { it.toEntity() })
+        }
+        val stored = database.chapterDao().getById(source.chapter.id)
+            ?: throw PreparationPipelineException(
+                "chapter-missing",
+                "A chapter disappeared after character attribution",
+                false,
+            )
+        recordChapterMetadata(bookId, stored, isFinalChapter)
+        return stored
+    }
+
+    private suspend fun recordChapterMetadata(
+        bookId: String,
+        chapter: ChapterAggregate,
+        complete: Boolean,
+    ) {
+        val catalog = dependencies.characterMetadataCatalog ?: return
+        val book = requireBook(bookId)
+        val sourceSha256 = book.sourceSha256?.trim()?.takeIf(String::isNotBlank)
+        val current = catalog.read(bookId)?.takeIf { snapshot ->
+            snapshot.sourceSha256 == sourceSha256 &&
+                snapshot.analysisVersion == CHARACTER_ANALYSIS_VERSION
+        }
+        val expectedChapterIds = database.chapterDao().getHeadersForBook(bookId)
+            .mapTo(linkedSetOf()) { it.id }
+        val recordedChapterIds = current?.chapters.orEmpty().mapTo(linkedSetOf()) { it.chapterId }
+        val existingChapter = current?.chapters?.firstOrNull { it.chapterId == chapter.chapter.id }
+        val alreadyComplete = current?.complete == true && recordedChapterIds.containsAll(expectedChapterIds)
+        if (existingChapter != null && (!complete || alreadyComplete)) return
+
+        val characters = database.storyCharacterDao().observeForBook(bookId).first().map { it.toDomain() }
+        val charactersById = characters.associateBy(StoryCharacter::id)
+        val chapterDialogueCounts = chapter.passages
+            .asSequence()
+            .filter { passage ->
+                charactersById[passage.speakerId]?.colorRole != CharacterColorRole.NARRATOR
+            }
+            .groupBy(PassageEntity::speakerId)
+            .mapValues { (_, passages) ->
+                passages.mapTo(linkedSetOf(), PassageEntity::dialogueUnitKey).size
+            }
+        val chapterSpeakerIds = chapter.passages.mapTo(linkedSetOf()) { it.speakerId }
+        val contributions = chapterSpeakerIds.sorted().map { characterId ->
+            if (characterId !in charactersById) {
+                throw PreparationPipelineException(
+                    "character-catalog-incomplete",
+                    "Character metadata is missing while writing the chapter catalog",
+                    false,
+                )
+            }
+            CharacterDialogueContribution(
+                characterId = characterId,
+                dialogueLineCount = chapterDialogueCounts[characterId] ?: 0,
+            )
+        }
+        val chapterMetadata = existingChapter ?: ChapterCharacterMetadata(
+            chapterId = chapter.chapter.id,
+            ordinal = chapter.chapter.ordinal,
+            textSha256 = CharacterMetadataFingerprint.sha256Utf8(
+                chapter.passages.sortedBy { it.ordinal }.joinToString("\n") { it.text.trim() },
+            ),
+            contributions = contributions,
+        )
+        catalog.recordChapter(
+            CharacterMetadataChapterUpdate(
+                bookId = bookId,
+                sourceSha256 = sourceSha256,
+                analysisVersion = CHARACTER_ANALYSIS_VERSION,
+                chapter = chapterMetadata,
+                characters = characters.map(StoryCharacter::toMetadataRecord),
+                complete = complete && (recordedChapterIds + chapter.chapter.id).containsAll(expectedChapterIds),
+            ),
+        )
+    }
+
+    private suspend fun reconcileCharacterMetadata(
+        bookId: String,
+        chapters: List<ChapterEntity>,
+    ) {
+        val catalog = dependencies.characterMetadataCatalog ?: return
+        val sourceSha256 = requireBook(bookId).sourceSha256?.trim()?.takeIf(String::isNotBlank)
+        val expectedIds = chapters.mapTo(linkedSetOf()) { it.id }
+        val current = catalog.read(bookId)?.takeIf { snapshot ->
+            snapshot.sourceSha256 == sourceSha256 &&
+                snapshot.analysisVersion == CHARACTER_ANALYSIS_VERSION
+        }
+        if (current?.complete == true && current.chapters.mapTo(hashSetOf()) { it.chapterId }.containsAll(expectedIds)) {
+            return
+        }
+        chapters.forEachIndexed { index, header ->
+            val chapter = database.chapterDao().getById(header.id)
+                ?: throw PreparationPipelineException(
+                    "chapter-missing",
+                    "A chapter disappeared while rebuilding character metadata",
+                    false,
+                )
+            if (
+                chapter.passages.isEmpty() ||
+                chapter.passages.any { it.attributionRule == UNATTRIBUTED_RULE }
+            ) {
+                throw PreparationPipelineException(
+                    "character-metadata-incomplete",
+                    "Character metadata cannot finish before every chapter is attributed",
+                    false,
+                )
+            }
+            recordChapterMetadata(bookId, chapter, complete = index == chapters.lastIndex)
+        }
+        val repaired = catalog.read(bookId)
+        if (
+            repaired?.complete != true ||
+            !repaired.chapters.mapTo(hashSetOf()) { it.chapterId }.containsAll(expectedIds)
+        ) {
+            throw IOException("Character metadata did not finish writing")
+        }
+    }
+
+    private suspend fun assignMissingVoices(
+        bookId: String,
+        voices: List<VoiceDescriptor>,
+        settings: AppSettings,
+    ) {
+        val characters = database.storyCharacterDao().observeForBook(bookId).first()
+        if (characters.isEmpty()) {
+            throw PreparationPipelineException("characters-missing", "No story characters are available", false)
+        }
+        val voiceIds = voices.mapTo(hashSetOf(), VoiceDescriptor::id)
+        val assignments = database.voiceAssignmentDao()
+            .getForCharacters(characters.map { it.character.id })
+            .associateBy { it.characterId }
+        val narratorVoice = voices.firstOrNull { it.id == settings.defaultNarratorVoiceId }
+            ?: voices.firstOrNull { it.id == dependencies.narratorVoiceId }
+            ?: voices.first()
+        val orderedCharacters = characters.sortedWith(
+            compareBy(
+                { it.character.colorRole != CharacterColorRole.NARRATOR.name },
+                { it.character.id },
+            ),
+        )
+        val usedVoiceIds = assignments.values.mapNotNullTo(linkedSetOf()) { assignment ->
+            assignment.voiceId.takeIf { voiceId ->
+                voiceId in voiceIds && assignment.modelVersion == dependencies.modelVersion
+            }
+        }
+        database.withTransaction {
+            orderedCharacters.forEach { character ->
+                val existing = assignments[character.character.id]
+                if (
+                    existing != null &&
+                    existing.voiceId in voiceIds &&
+                    existing.modelVersion == dependencies.modelVersion
+                ) {
+                    usedVoiceIds += existing.voiceId
+                    return@forEach
+                }
+                val voice = existing?.voiceId?.let { id -> voices.firstOrNull { it.id == id } }
+                    ?: CharacterVoiceCaster.select(
+                        character = character.toDomain(),
+                        voices = voices,
+                        preferredNarrator = narratorVoice,
+                        alreadyUsedVoiceIds = usedVoiceIds,
+                    )
+                usedVoiceIds += voice.id
+                database.voiceAssignmentDao().upsert(
+                    CharacterVoiceAssignment(
+                        characterId = character.character.id,
+                        voiceId = voice.id,
+                        modelVersion = dependencies.modelVersion,
+                        speed = existing?.speed ?: settings.speakingSpeed
+                            .takeIf { it.isFinite() && it in 0.5f..2f }
+                            ?: dependencies.speakingSpeed,
+                    ).toEntity(),
+                )
+            }
+        }
+    }
+
+    private suspend fun synthesisTasks(
         passage: PassageEntity,
         voices: List<com.whisperbook.app.domain.model.VoiceDescriptor>,
-    ): PassageSynthesisTask {
+    ): List<PassageSynthesisTask> {
         val assignment = database.chapterVoiceAssignmentDao()
             .getForChapterAndCharacter(passage.chapterId, passage.speakerId)
             ?.toDomain()
@@ -614,22 +863,19 @@ internal class PreparationStageRunner(
                 "An assigned local voice is unavailable",
                 false,
             )
-        val baseRequest = SynthesisRequest(
+        return NarrationSynthesisPlanner.plan(
+            passageId = passage.id,
             text = passage.text,
             voice = voice,
             speed = assignment.speed,
-            cacheKey = "pending",
-        )
-        val cacheKey = AudioCacheKey.forPassage(
-            passageId = passage.id,
-            request = baseRequest,
             modelVersion = assignment.modelVersion,
             sampleRate = dependencies.expectedSampleRate,
-        )
-        return PassageSynthesisTask(
-            passage = passage,
-            request = baseRequest.copy(cacheKey = cacheKey),
-        )
+        ).map { unit ->
+            PassageSynthesisTask(
+                passage = passage,
+                request = unit.request,
+            )
+        }
     }
 
     private suspend fun synthesizePassage(
@@ -696,9 +942,10 @@ internal class PreparationStageRunner(
                 ?.takeIf { it.path?.let(::File)?.isFile == true }
 
     private fun chapterPreparationMessage(
-        chapter: ChapterAudioBatch<*>,
+        chapterOrdinal: Int,
+        chapterTitle: String,
         totalChapters: Int,
-    ): String = "Preparing chapter ${chapter.chapterOrdinal + 1} of $totalChapters: ${chapter.chapterTitle}"
+    ): String = "Preparing chapter ${chapterOrdinal + 1} of $totalChapters: $chapterTitle"
 
     private data class PassageSynthesisTask(
         val passage: PassageEntity,
@@ -725,12 +972,33 @@ internal class PreparationStageRunner(
     )
 
     private companion object {
+        const val CHARACTER_ANALYSIS_VERSION = "heuristic-attribution-chapter-v1"
         const val UNATTRIBUTED_RULE = "preparation-unattributed"
 
         fun chapterId(bookId: String, index: Int): String = "$bookId-chapter-${index + 1}"
         fun passageId(chapterId: String, index: Int): String = "$chapterId-passage-${index + 1}"
     }
 }
+
+private fun StoryCharacter.toMetadataRecord(): CharacterMetadataRecord = CharacterMetadataRecord(
+    id = id,
+    displayName = displayName,
+    aliases = aliases,
+    colorRole = colorRole,
+    dialogueLineCount = dialogueLineCount,
+    gender = gender,
+    genderConfidence = genderConfidence,
+    ageGroup = ageGroup,
+    ageConfidence = ageConfidence,
+    narrationPerspective = narrationPerspective,
+    perspectiveConfidence = perspectiveConfidence,
+    narratorIdentity = narratorIdentity,
+)
+
+private fun PassageEntity.dialogueUnitKey(): String =
+    DIALOGUE_UNIT_PATTERN.find(attributionRule)?.value ?: id
+
+private val DIALOGUE_UNIT_PATTERN = Regex("(?:^|;)dialogue-unit-\\d+-\\d+(?:$|;)")
 
 internal data class MappedPreparationError(
     val code: String,

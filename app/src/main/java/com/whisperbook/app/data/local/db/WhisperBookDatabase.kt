@@ -20,7 +20,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PreparationJobEntity::class,
         PlaybackCheckpointEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = true,
 )
 abstract class WhisperBookDatabase : RoomDatabase() {
@@ -43,7 +43,7 @@ abstract class WhisperBookDatabase : RoomDatabase() {
                 WhisperBookDatabase::class.java,
                 name,
             )
-                .addMigrations(MIGRATION_1_2)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                 .build()
 
         val MIGRATION_1_2: Migration = object : Migration(1, 2) {
@@ -72,6 +72,22 @@ abstract class WhisperBookDatabase : RoomDatabase() {
                     "CREATE INDEX IF NOT EXISTS `index_chapter_voice_assignments_character_id` " +
                         "ON `chapter_voice_assignments` (`character_id`)",
                 )
+            }
+        }
+
+        val MIGRATION_2_3: Migration = object : Migration(2, 3) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL("ALTER TABLE `characters` ADD COLUMN `gender` TEXT NOT NULL DEFAULT 'UNKNOWN'")
+                database.execSQL("ALTER TABLE `characters` ADD COLUMN `gender_confidence` REAL NOT NULL DEFAULT 0")
+                database.execSQL("ALTER TABLE `characters` ADD COLUMN `age_group` TEXT NOT NULL DEFAULT 'UNKNOWN'")
+                database.execSQL("ALTER TABLE `characters` ADD COLUMN `age_confidence` REAL NOT NULL DEFAULT 0")
+                database.execSQL(
+                    "ALTER TABLE `characters` ADD COLUMN `narration_perspective` TEXT NOT NULL DEFAULT 'UNKNOWN'",
+                )
+                database.execSQL(
+                    "ALTER TABLE `characters` ADD COLUMN `perspective_confidence` REAL NOT NULL DEFAULT 0",
+                )
+                database.execSQL("ALTER TABLE `characters` ADD COLUMN `narrator_identity` TEXT DEFAULT NULL")
             }
         }
     }

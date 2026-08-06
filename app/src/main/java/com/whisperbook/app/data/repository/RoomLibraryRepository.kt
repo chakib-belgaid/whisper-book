@@ -14,6 +14,7 @@ import com.whisperbook.app.domain.model.Chapter
 import com.whisperbook.app.domain.model.CharacterVoiceAssignment
 import com.whisperbook.app.domain.model.PreparationStage
 import com.whisperbook.app.domain.model.StoryCharacter
+import com.whisperbook.app.engine.metadata.CharacterMetadataCatalog
 import java.io.File
 import java.util.UUID
 import java.util.concurrent.CancellationException
@@ -27,6 +28,7 @@ class RoomLibraryRepository(
     private val bookImporter: BookImporter,
     private val idGenerator: () -> String = { UUID.randomUUID().toString() },
     private val clockEpochMs: () -> Long = System::currentTimeMillis,
+    private val characterMetadataCatalog: CharacterMetadataCatalog? = null,
 ) : LibraryRepository {
     override fun observeBooks(): Flow<List<Book>> = database.bookDao()
         .observeAll()
@@ -113,6 +115,7 @@ class RoomLibraryRepository(
         withContext(Dispatchers.IO) {
             artifacts.privateSourcePath?.let(::File)?.delete()
             artifacts.audioPaths.map(::File).forEach(File::delete)
+            characterMetadataCatalog?.delete(bookId)
         }
     }
 }

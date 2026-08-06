@@ -14,6 +14,8 @@ import com.whisperbook.app.domain.model.AppSettings
 import com.whisperbook.app.engine.attribution.HeuristicSpeakerAttributor
 import com.whisperbook.app.engine.audio.AppPrivateAudioSegmentStore
 import com.whisperbook.app.engine.document.OfflinePublicationExtractor
+import com.whisperbook.app.engine.metadata.AppPrivateCharacterMetadataCatalog
+import com.whisperbook.app.engine.metadata.CharacterMetadataCatalog
 import com.whisperbook.app.engine.tts.SherpaKittenTtsEngine
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
@@ -29,6 +31,7 @@ data class PreparationDependencies(
     val speakerAttributor: SpeakerAttributor,
     val ttsEngineFactory: LocalTtsEngineFactory,
     val audioSegmentStore: AppPrivateAudioSegmentStore,
+    val characterMetadataCatalog: CharacterMetadataCatalog? = null,
     val settingsFlow: Flow<AppSettings> = flowOf(AppSettings()),
     val modelVersion: String = SherpaKittenTtsEngine.MODEL_VERSION,
     val expectedSampleRate: Int = SherpaKittenTtsEngine.EXPECTED_SAMPLE_RATE,
@@ -81,6 +84,7 @@ object PreparationRuntime {
             speakerAttributor = HeuristicSpeakerAttributor(),
             ttsEngineFactory = LocalTtsEngineFactory { SherpaKittenTtsEngine(context) },
             audioSegmentStore = AppPrivateAudioSegmentStore(context),
+            characterMetadataCatalog = AppPrivateCharacterMetadataCatalog(context),
             settingsFlow = DataStoreSettingsRepository(context.whisperBookSettingsDataStore).settings,
         )
 }

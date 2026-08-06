@@ -12,6 +12,7 @@ import com.whisperbook.app.domain.LocalTtsEngine
 import com.whisperbook.app.domain.SynthesisRequest
 import com.whisperbook.app.domain.model.VoiceDescriptor
 import com.whisperbook.app.engine.tts.SherpaKittenTtsEngine
+import com.whisperbook.app.engine.preparation.PreparationRuntime
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 
@@ -38,7 +39,7 @@ internal class VoicePreviewBootstrapWorker(
     workerParameters: WorkerParameters,
 ) : CoroutineWorker(appContext, workerParameters) {
     override suspend fun doWork(): Result {
-        val engine = SherpaKittenTtsEngine(applicationContext)
+        val engine = PreparationRuntime.resolve(applicationContext).ttsEngineFactory.create()
         val cache = AppPrivateVoicePreviewCache(
             context = applicationContext,
             modelVersion = SherpaKittenTtsEngine.MODEL_VERSION,

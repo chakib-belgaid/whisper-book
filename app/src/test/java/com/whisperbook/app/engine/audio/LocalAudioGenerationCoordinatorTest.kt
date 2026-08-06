@@ -75,4 +75,32 @@ class LocalAudioGenerationCoordinatorTest {
         secondBackground.join()
         assertEquals(listOf("background-1", "playback", "background-2"), order)
     }
+
+    @Test
+    fun `progressive reservation blocks background work between playback segments`() = runTest {
+        val gate = LocalAudioGenerationGate()
+        val betweenSegments = CompletableDeferred<Unit>()
+        val releaseSecondSegment = CompletableDeferred<Unit>()
+        val order = mutableListOf<String>()
+
+        val playback = launch {
+            gate.withOnDemandPriority {
+                gate.runOnDemand { order += "playback-1" }
+                betweenSegments.complete(Unit)
+                releaseSecondSegment.await()
+                gate.runOnDemand { order += "playback-2" }
+            }
+        }
+        betweenSegments.await()
+        val background = launch {
+            gate.runBackground { order += "background" }
+        }
+        yield()
+
+        assertEquals(listOf("playback-1"), order)
+        releaseSecondSegment.complete(Unit)
+        playback.join()
+        background.join()
+        assertEquals(listOf("playback-1", "playback-2", "background"), order)
+    }
 }

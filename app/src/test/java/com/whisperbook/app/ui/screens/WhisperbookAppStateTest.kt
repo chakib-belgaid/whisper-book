@@ -1,11 +1,12 @@
 package com.whisperbook.app.ui.screens
 
 import com.whisperbook.app.R
-import com.whisperbook.app.domain.PassageTextChunker
+import com.whisperbook.app.domain.NarrationTextChunker
 import com.whisperbook.app.domain.model.BuiltInCharacters
 import com.whisperbook.app.domain.model.Book
 import com.whisperbook.app.domain.model.BookFormat
 import com.whisperbook.app.domain.model.Chapter
+import com.whisperbook.app.domain.model.CharacterVoiceAssignment
 import com.whisperbook.app.domain.model.Passage
 import com.whisperbook.app.domain.model.PlaybackCursor
 import com.whisperbook.app.domain.model.PreparationStage
@@ -79,7 +80,7 @@ class WhisperbookAppStateTest {
     }
 
     @Test
-    fun `first completed chapter makes the audiobook openable while later chapters prepare`() {
+    fun `audio preparation is openable before the first chapter finishes`() {
         val state = WhisperbookAppState()
 
         state.synchronize(
@@ -91,7 +92,7 @@ class WhisperbookAppStateTest {
                 ),
             ),
         )
-        assertEquals(2, state.preparationStage)
+        assertEquals(3, state.preparationStage)
 
         state.synchronize(
             WhisperbookUiSnapshot(
@@ -104,6 +105,128 @@ class WhisperbookAppStateTest {
             ),
         )
         assertEquals(3, state.preparationStage)
+    }
+
+    @Test
+    fun `listening opens once voice assignment is durable without waiting for a chapter`() {
+        val preparation = PreparationState(
+            stage = PreparationStage.PREPARING_AUDIO,
+            completedUnits = 0,
+            totalUnits = 1,
+        )
+        val chapter = Chapter(
+            id = "chapter-1",
+            bookId = "book-1",
+            ordinal = 0,
+            title = "Chapter 1",
+            passages = emptyList(),
+        )
+        val book = Book(
+            id = "book-1",
+            title = "Book",
+            author = "Author",
+            format = BookFormat.EPUB,
+            sourceUri = null,
+            privateSourcePath = "/private/book.epub",
+            coverPath = null,
+            preparation = preparation,
+            currentChapterId = chapter.id,
+            currentPassageId = null,
+            progressFraction = 0f,
+            lastOpenedAtEpochMs = 1L,
+            chapterCount = 1,
+            currentChapterOrdinal = 0,
+        )
+        val state = WhisperbookAppState()
+
+        state.synchronize(
+            WhisperbookUiSnapshot(
+                books = listOf(book),
+                selectedBook = book,
+                chapters = listOf(chapter),
+                selectedChapter = chapter,
+                preparation = preparation,
+            ),
+        )
+
+        assertTrue(state.canListen)
+        assertTrue(state.books.single().canListen)
+    }
+
+    @Test
+    fun `chapter availability requires attribution and every speaker voice`() {
+        val ready = chapterWithPassage("ready", 0, BuiltInCharacters.NARRATOR_ID, "narration")
+        val unattributed = chapterWithPassage(
+            "unattributed",
+            1,
+            BuiltInCharacters.NARRATOR_ID,
+            "preparation-unattributed",
+        )
+        val missingVoice = chapterWithPassage("missing-voice", 2, "new-character", "dialogue")
+        val empty = Chapter("empty", "book-1", 3, "Chapter 4")
+        val state = WhisperbookAppState()
+
+        state.synchronize(
+            WhisperbookUiSnapshot(
+                chapters = listOf(ready, unattributed, missingVoice, empty),
+                selectedChapter = ready,
+                preparation = PreparationState(stage = PreparationStage.PREPARING_AUDIO),
+                voiceAssignments = mapOf(
+                    BuiltInCharacters.NARRATOR_ID to CharacterVoiceAssignment(
+                        characterId = BuiltInCharacters.NARRATOR_ID,
+                        voiceId = "bella",
+                        modelVersion = "test-model",
+                    ),
+                ),
+            ),
+        )
+
+        assertEquals(listOf(true, false, false, false), state.chapters.map(ChapterUi::isAvailable))
+        assertTrue(state.canListen)
+        assertFalse(state.hasNextChapter)
+    }
+
+    @Test
+    fun `voice assignment arrival unlocks chapter without replacing chapter list`() {
+        val chapters = listOf(chapterWithPassage("chapter-1", 0, "new-character", "dialogue"))
+        val state = WhisperbookAppState()
+        val initial = WhisperbookUiSnapshot(
+            chapters = chapters,
+            selectedChapter = chapters.single(),
+            preparation = PreparationState(stage = PreparationStage.PREPARING_AUDIO),
+        )
+
+        state.synchronize(initial)
+        assertFalse(state.chapters.single().isAvailable)
+
+        state.synchronize(
+            initial.copy(
+                voiceAssignments = mapOf(
+                    "new-character" to CharacterVoiceAssignment(
+                        characterId = "new-character",
+                        voiceId = "jasper",
+                        modelVersion = "test-model",
+                    ),
+                ),
+            ),
+        )
+
+        assertTrue(state.chapters.single().isAvailable)
+    }
+
+    @Test
+    fun `chapter discovery alone does not expose playback before voices exist`() {
+        val item = LibraryBookUi(
+            id = "book-1",
+            title = "Book",
+            author = "Author",
+            chapter = 1,
+            totalChapters = 1,
+            progress = 0f,
+            preparation = PreparationState(stage = PreparationStage.FINDING_CHARACTERS),
+        )
+
+        assertFalse(item.canListen)
     }
 
     @Test
@@ -172,8 +295,12 @@ class WhisperbookAppStateTest {
         )
 
         assertTrue(state.passages.size > 1)
-        assertTrue(state.passages.all { it.text.length <= PassageTextChunker.MAX_CHARS })
+        assertTrue(state.passages.all { it.text.length <= NarrationTextChunker.MAX_CHARS })
         assertEquals(state.passages.size, state.passages.map { it.id }.distinct().size)
+        assertEquals(
+            NarrationTextChunker.chunks("legacy-passage", text).map { it.id },
+            state.passages.map { it.id },
+        )
         assertEquals(text.trim(), state.passages.joinToString(" ") { it.text })
     }
 
@@ -223,4 +350,79 @@ class WhisperbookAppStateTest {
         assertSame(passageItem, state.passages.single())
         assertEquals(0.025f, state.chapterProgress)
     }
+
+    @Test
+    fun `current passage follows the playback cursor`() {
+        val chapter = Chapter(
+            id = "chapter-1",
+            bookId = "book-1",
+            ordinal = 0,
+            title = "Chapter 1",
+            passages = listOf(
+                Passage(
+                    id = "passage-1",
+                    chapterId = "chapter-1",
+                    ordinal = 0,
+                    text = "The first passage.",
+                    speakerId = BuiltInCharacters.NARRATOR_ID,
+                    confidence = 1f,
+                    attributionRule = "narration",
+                ),
+                Passage(
+                    id = "passage-2",
+                    chapterId = "chapter-1",
+                    ordinal = 1,
+                    text = "The passage being read now.",
+                    speakerId = BuiltInCharacters.NARRATOR_ID,
+                    confidence = 1f,
+                    attributionRule = "narration",
+                ),
+            ),
+        )
+        val state = WhisperbookAppState()
+
+        state.synchronize(
+            WhisperbookUiSnapshot(
+                chapters = listOf(chapter),
+                selectedChapter = chapter,
+                playback = PlaybackCursor(
+                    bookId = "book-1",
+                    chapterId = "chapter-1",
+                    passageId = "passage-2",
+                    segmentId = "segment-2",
+                    segmentPositionMs = 1_000L,
+                    chapterPositionMs = 2_000L,
+                    chapterDurationMs = 8_000L,
+                    isPlaying = true,
+                    speed = 1f,
+                ),
+            ),
+        )
+
+        assertEquals("passage-2", state.currentPassage?.id)
+        assertEquals("The passage being read now.", state.currentPassage?.text)
+    }
 }
+
+private fun chapterWithPassage(
+    id: String,
+    ordinal: Int,
+    speakerId: String,
+    attributionRule: String,
+): Chapter = Chapter(
+    id = id,
+    bookId = "book-1",
+    ordinal = ordinal,
+    title = "Chapter ${ordinal + 1}",
+    passages = listOf(
+        Passage(
+            id = "$id-passage",
+            chapterId = id,
+            ordinal = 0,
+            text = "A chapter passage.",
+            speakerId = speakerId,
+            confidence = 1f,
+            attributionRule = attributionRule,
+        ),
+    ),
+)

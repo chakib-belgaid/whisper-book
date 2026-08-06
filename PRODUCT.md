@@ -10,7 +10,7 @@ People who want to listen to story-driven PDF and EPUB books on an Android phone
 
 ## Product Purpose
 
-Whisperbook turns PDF and EPUB files into chapter-based offline audiobooks. It extracts chapters, divides prose into passages, attributes quoted dialogue to recurring characters with deterministic heuristics, assigns each character a local voice, synthesizes audio on the phone, and keeps playback synchronized with a color-and-label read-along view. Success means that the complete import-to-listen flow works in airplane mode, survives process death, and remains understandable when automatic speaker attribution is uncertain.
+Whisperbook turns PDF and EPUB files into chapter-based offline audiobooks. It extracts chapters, divides prose into passages, attributes quoted dialogue to recurring characters with deterministic heuristics, and uses explicit textual age/gender cues plus first-person narration evidence to improve the initial local voice cast. It synthesizes audio on the phone and keeps playback synchronized with a color-and-label read-along view. Success means that the complete import-to-listen flow works in airplane mode, survives process death, and remains understandable and editable when automatic attribution is uncertain.
 
 ## Brand Personality
 

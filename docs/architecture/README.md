@@ -20,7 +20,8 @@ Editable diagrams.net source: [system-architecture.drawio](diagrams/system-archi
 | `integration` | UI orchestration and process-level dependency composition | `WhisperbookViewModel`, `WhisperbookAppContainer`, `WhisperbookServices` |
 | `domain` | Stable data models and ports used across storage, preparation, and playback | `Models.kt`, `Ports.kt` |
 | `engine.document` | SAF import, byte-signature validation, EPUB parsing, PDF extraction, and offline OCR | `SafBookImporter`, `OfflinePublicationExtractor`, `AndroidPdfOcrHook` |
-| `engine.attribution` | Dialogue scanning, speaker attribution, alias handling, and confidence evidence | `DialogueScanner`, `HeuristicSpeakerAttributor` |
+| `engine.attribution` | Dialogue scanning, speaker attribution, alias handling, first-person narration detection, and confidence-bearing character profiles | `DialogueScanner`, `HeuristicSpeakerAttributor`, `CharacterProfileInferencer` |
+| `engine.metadata` | Atomic, versioned, app-private character discovery mirror with per-chapter contributions | `AppPrivateCharacterMetadataCatalog` |
 | `engine.preparation` | Durable, staged background preparation and chapter prefetch | `ProductionPreparationCoordinator`, `PreparationWorker`, `SequentialChapterAudioPreparer` |
 | `engine.tts` | Embedded model validation and local speech generation | `SherpaKittenTtsEngine`, `SupertonicAssets` |
 | `engine.audio` | WAV persistence, cache keys, on-demand generation, and voice previews | `AppPrivateAudioSegmentStore`, `LocalAudioGenerationCoordinator`, `LocalVoicePreviewPlayer` |
@@ -62,9 +63,10 @@ Editable diagrams.net source: [offline-pipeline.drawio](diagrams/offline-pipelin
 1. `SafBookImporter` reads the user-selected URI, validates the actual file signature, hashes the content, and creates an app-private copy.
 2. `RoomLibraryRepository` persists the book record and prevents duplicate sources from becoming separate library entries.
 3. `OfflinePublicationExtractor` parses EPUB reading order or extracts PDF pages. `AndroidPdfOcrHook` recognizes pages without a usable text layer.
-4. The preparation worker normalizes passages, detects chapters, attributes dialogue, creates stable character/voice assignments, and commits each stage to Room.
-5. Supertonic synthesis generates PCM on one low-priority inference lane. `AppPrivateAudioSegmentStore` validates and atomically commits WAV files.
-6. Opening passages become playable first. Remaining passages are generated sequentially, with next-chapter work prefetched rather than competing for CPU in parallel.
+4. The preparation worker normalizes passages and detects chapter boundaries, then attributes, casts, and synthesizes one chapter at a time. Chapter 1 reaches audio before later chapters are scanned for characters.
+5. Each committed chapter updates an atomic `characters.json` mirror with stable IDs, aliases, profiles, fingerprints, and idempotent per-chapter counts. Room remains the source of truth for playback and user voice choices.
+6. Supertonic synthesis generates PCM on one low-priority inference lane. `AppPrivateAudioSegmentStore` validates and atomically commits WAV files.
+7. Opening microsegments become playable first. Remaining passages are generated sequentially rather than competing for CPU in parallel.
 
 ### Playback and read-along
 
@@ -79,6 +81,7 @@ Editable diagrams.net source: [offline-pipeline.drawio](diagrams/offline-pipelin
 | Store | Contents | Lifecycle |
 | --- | --- | --- |
 | Room | Books, chapters, passages, characters, voice assignments, audio metadata, preparation jobs, checkpoints | App-private; schema history is committed under `app/schemas/` |
+| Character metadata JSON | Derived per-chapter discovery contributions and cumulative character profiles | `filesDir/publications/metadata/<sha256(bookId)>/characters.json`; atomic and deleted with the book |
 | DataStore | Playback and presentation preferences | App-private |
 | Imported source files | Private copies of user-selected EPUB/PDF files | Deleted with the library entry or app data; the external original is untouched |
 | Audio cache | Synthesized segments and retained voice-change rollback audio | App-private, validated, bounded, and cleaned according to retention rules |

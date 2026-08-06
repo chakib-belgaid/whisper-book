@@ -16,13 +16,16 @@ import com.whisperbook.app.engine.attribution.HeuristicSpeakerAttributor
 import com.whisperbook.app.engine.audio.AppPrivateAudioSegmentStore
 import com.whisperbook.app.engine.audio.AppPrivateVoicePreviewCache
 import com.whisperbook.app.engine.audio.LocalVoicePreviewPlayer
+import com.whisperbook.app.engine.audio.LocalAudioGenerationCoordinator
 import com.whisperbook.app.engine.audio.VoicePreviewBootstrap
 import com.whisperbook.app.engine.document.OfflinePublicationExtractor
 import com.whisperbook.app.engine.document.SafBookImporter
+import com.whisperbook.app.engine.metadata.AppPrivateCharacterMetadataCatalog
 import com.whisperbook.app.engine.preparation.LocalTtsEngineFactory
 import com.whisperbook.app.engine.preparation.PreparationDependencies
 import com.whisperbook.app.engine.preparation.PreparationRuntime
 import com.whisperbook.app.engine.preparation.ProductionPreparationCoordinator
+import com.whisperbook.app.engine.tts.ProcessScopedLocalTtsEngine
 import com.whisperbook.app.engine.tts.SherpaKittenTtsEngine
 import com.whisperbook.app.playback.ControllerBackedPlaybackGateway
 import com.whisperbook.app.playback.PlaybackRuntime
@@ -45,19 +48,25 @@ class WhisperbookAppContainer(context: Context) : WhisperbookServices, Closeable
     private val maintenanceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     val database: WhisperBookDatabase = WhisperBookDatabase.create(appContext)
     private val importer = SafBookImporter(appContext)
+    private val characterMetadataCatalog = AppPrivateCharacterMetadataCatalog(appContext)
 
-    override val libraryRepository = RoomLibraryRepository(database, importer)
+    override val libraryRepository = RoomLibraryRepository(
+        database,
+        importer,
+        characterMetadataCatalog = characterMetadataCatalog,
+    )
     override val settingsRepository = DataStoreSettingsRepository(appContext.whisperBookSettingsDataStore)
     override val audioSegmentStore = AppPrivateAudioSegmentStore(appContext)
     override val availableVoices = SherpaKittenTtsEngine.KITTEN_VOICES
     override val ttsModelVersion: String = SherpaKittenTtsEngine.MODEL_VERSION
+    private val sharedTtsEngine = ProcessScopedLocalTtsEngine(SherpaKittenTtsEngine(appContext))
     private val voicePreviewCache = AppPrivateVoicePreviewCache(
         context = appContext,
         modelVersion = ttsModelVersion,
         expectedSampleRate = SherpaKittenTtsEngine.EXPECTED_SAMPLE_RATE,
     )
     override val voicePreviewPlayer = LocalVoicePreviewPlayer(
-        ttsEngine = SherpaKittenTtsEngine(appContext),
+        ttsEngine = sharedTtsEngine,
         previewCache = voicePreviewCache,
     )
 
@@ -65,8 +74,9 @@ class WhisperbookAppContainer(context: Context) : WhisperbookServices, Closeable
         database = database,
         publicationExtractor = OfflinePublicationExtractor(appContext),
         speakerAttributor = HeuristicSpeakerAttributor(),
-        ttsEngineFactory = LocalTtsEngineFactory { SherpaKittenTtsEngine(appContext) },
+        ttsEngineFactory = LocalTtsEngineFactory { sharedTtsEngine },
         audioSegmentStore = audioSegmentStore,
+        characterMetadataCatalog = characterMetadataCatalog,
         settingsFlow = settingsRepository.settings,
     )
 
@@ -78,13 +88,24 @@ class WhisperbookAppContainer(context: Context) : WhisperbookServices, Closeable
     private val playbackQueueSource = LocalPlaybackQueueSource(
         database = database,
         audioStore = audioSegmentStore,
-        ttsEngineFactory = { SherpaKittenTtsEngine(appContext) },
+        ttsEngineFactory = { sharedTtsEngine },
     )
     override val playbackGateway = ControllerBackedPlaybackGateway(appContext, playbackQueueSource)
 
     init {
         PreparationRuntime.install(preparationDependencies)
         VoicePreviewBootstrap.enqueue(appContext)
+        maintenanceScope.launch {
+            // Returning listeners should not pay native model initialization after pressing Play.
+            // Fresh installs are warmed by the preview bootstrap while the first book is imported.
+            if (database.bookDao().count() > 0) {
+                runCatching {
+                    LocalAudioGenerationCoordinator.runBackground {
+                        sharedTtsEngine.warmUp().getOrThrow()
+                    }
+                }
+            }
+        }
         maintenanceScope.launch {
             audioSegmentStore.cleanupExpiredRetainedAudio()
             database.bookDao().getBooksWithSourceSha256()
@@ -98,6 +119,9 @@ class WhisperbookAppContainer(context: Context) : WhisperbookServices, Closeable
         }
         PlaybackRuntime.installCheckpointSink { cursor ->
             database.playbackCheckpointDao().upsert(cursor.toEntity(System.currentTimeMillis()))
+            // The segment checkpoint is valid immediately, but the queued-prefix duration is not
+            // a chapter denominator. Wait for the complete timeline before updating shelf progress.
+            if (!cursor.chapterDurationIsFinal) return@installCheckpointSink
             val chapterPosition = database.chapterDao().getProgressPosition(cursor.bookId, cursor.chapterId)
             val chapterOrdinal = chapterPosition.chapterOrdinal?.coerceAtLeast(0) ?: 0
             val withinChapter = if (cursor.chapterDurationMs > 0L) {
@@ -249,6 +273,7 @@ class WhisperbookAppContainer(context: Context) : WhisperbookServices, Closeable
         PlaybackRuntime.installCheckpointSink(null)
         voicePreviewPlayer.close()
         (playbackGateway as ControllerBackedPlaybackGateway).close()
+        sharedTtsEngine.shutdown()
         database.close()
     }
 }

@@ -5,6 +5,7 @@ import android.content.Context
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
 import android.util.Log
 import androidx.media3.common.PlaybackParameters
 import androidx.media3.common.Player
@@ -88,6 +89,7 @@ class ControllerBackedPlaybackGateway(
 
     override suspend fun playBook(bookId: String, chapterId: String?) {
         Log.i(LOG_TAG, "playBook book=$bookId chapter=$chapterId")
+        val requestedAtMs = SystemClock.elapsedRealtime()
         val generation = queueGeneration.incrementAndGet()
         withContext(Dispatchers.Main.immediate) {
             connectedController?.pause()
@@ -98,6 +100,7 @@ class ControllerBackedPlaybackGateway(
         }
         val firstQueueReady = CompletableDeferred<Unit>()
         chapterPreparationJob = continuationScope.launch {
+            var progressivelyPreparingChapterId: String? = null
             try {
                 queueSource.loadProgressively(bookId, chapterId) { queue, completed, total ->
                     if (generation != queueGeneration.get()) return@loadProgressively
@@ -111,13 +114,30 @@ class ControllerBackedPlaybackGateway(
                         )
                     }
                     if (queue != null) {
-                        applyProgressiveQueue(generation, queue, firstQueueReady)
+                        if (progressivelyPreparingChapterId != queue.chapterId) {
+                            progressivelyPreparingChapterId?.let { previousChapterId ->
+                                PlaybackRuntime.clearChapterPreparing(
+                                    bookId,
+                                    previousChapterId,
+                                    generation,
+                                )
+                            }
+                            progressivelyPreparingChapterId = queue.chapterId
+                            PlaybackRuntime.markChapterPreparing(bookId, queue.chapterId, generation)
+                        }
+                        applyProgressiveQueue(generation, queue, firstQueueReady, requestedAtMs)
                     }
                 }.getOrThrow()
                 if (!firstQueueReady.isCompleted) {
                     firstQueueReady.completeExceptionally(
                         IllegalStateException("This chapter did not produce playable audio"),
                     )
+                }
+                progressivelyPreparingChapterId?.let { preparedChapterId ->
+                    // Only a successful full load makes the queued prefix a final chapter. If
+                    // generation is canceled or fails, keep it marked incomplete so an underrun
+                    // cannot be persisted as 100% chapter progress.
+                    PlaybackRuntime.clearChapterPreparing(bookId, preparedChapterId, generation)
                 }
                 if (generation == queueGeneration.get()) {
                     preparationProgress.value = null
@@ -223,6 +243,7 @@ class ControllerBackedPlaybackGateway(
         chapterPreparationJob?.cancel()
         nextChapterJob?.cancel()
         preparationProgress.value = null
+        PlaybackRuntime.clearChapterPreparing()
         connectedController = null
         continuationScope.cancel()
         if (Looper.myLooper() == Looper.getMainLooper()) {
@@ -249,25 +270,44 @@ class ControllerBackedPlaybackGateway(
         prefetchedAfterChapterKey = chapterKey
         val generation = queueGeneration.get()
         nextChapterJob = continuationScope.launch {
-            val nextQueue = queueSource.loadNext(current.bookId, current.chapterId).getOrNull() ?: return@launch
-            if (generation != queueGeneration.get()) return@launch
-            val nextItems = withContext(Dispatchers.Default) {
-                runCatching { PlaybackMediaItems.create(nextQueue) }.getOrNull()
-            } ?: return@launch
-            if (nextItems.isEmpty()) return@launch
+            var prefetched = false
+            try {
+                val nextQueue = queueSource.loadNext(current.bookId, current.chapterId).getOrNull()
+                    ?: return@launch
+                if (generation != queueGeneration.get()) return@launch
+                val nextItems = withContext(Dispatchers.Default) {
+                    runCatching { PlaybackMediaItems.create(nextQueue) }.getOrNull()
+                } ?: return@launch
+                if (nextItems.isEmpty()) return@launch
 
-            val latest = PlaybackMediaItems.descriptor(controller.currentMediaItem) ?: return@launch
-            if (latest.bookId != current.bookId) return@launch
-            if (controller.hasChapter(nextQueue.chapterId)) return@launch
+                val latest = PlaybackMediaItems.descriptor(controller.currentMediaItem) ?: return@launch
+                if (latest.bookId != current.bookId) return@launch
+                if (controller.hasChapter(nextQueue.chapterId)) {
+                    prefetched = true
+                    return@launch
+                }
 
-            val firstNextIndex = controller.mediaItemCount
-            val wasWaitingForNextChapter =
-                controller.playbackState == Player.STATE_ENDED && latest.chapterId == current.chapterId
-            controller.addMediaItems(nextItems)
-            if (wasWaitingForNextChapter) {
-                controller.seekTo(firstNextIndex, 0L)
-                controller.prepare()
-                controller.play()
+                val firstNextIndex = controller.mediaItemCount
+                val wasWaitingForNextChapter =
+                    controller.playbackState == Player.STATE_ENDED && latest.chapterId == current.chapterId
+                controller.addMediaItems(nextItems)
+                prefetched = true
+                if (wasWaitingForNextChapter) {
+                    controller.seekTo(firstNextIndex, 0L)
+                    controller.prepare()
+                    controller.play()
+                }
+            } finally {
+                // An unattributed next chapter is expected while a large book is still streaming.
+                // Do not latch the failed prefetch forever; a later playback callback can retry
+                // after that chapter's character catalog and voice assignments arrive.
+                if (
+                    !prefetched &&
+                    generation == queueGeneration.get() &&
+                    prefetchedAfterChapterKey == chapterKey
+                ) {
+                    prefetchedAfterChapterKey = null
+                }
             }
         }
     }
@@ -276,8 +316,23 @@ class ControllerBackedPlaybackGateway(
         generation: Long,
         queue: PlaybackChapterQueue,
         firstQueueReady: CompletableDeferred<Unit>,
+        requestedAtMs: Long,
     ) {
-        val mediaItems = withContext(Dispatchers.Default) { PlaybackMediaItems.create(queue) }
+        val existingChapterSegments = if (!firstQueueReady.isCompleted) {
+            0
+        } else {
+            withController { controller ->
+                (0 until controller.mediaItemCount).count { index ->
+                    PlaybackMediaItems.descriptor(controller.getMediaItemAt(index))?.let { descriptor ->
+                        descriptor.bookId == queue.bookId && descriptor.chapterId == queue.chapterId
+                    } == true
+                }
+            }
+        }
+        if (existingChapterSegments >= queue.segments.size && firstQueueReady.isCompleted) return
+        val mediaItems = withContext(Dispatchers.Default) {
+            PlaybackMediaItems.create(queue, fromSegmentIndex = existingChapterSegments)
+        }
         withController { controller ->
             if (generation != queueGeneration.get()) return@withController
             if (!firstQueueReady.isCompleted) {
@@ -292,15 +347,20 @@ class ControllerBackedPlaybackGateway(
                 controller.setMediaItems(mediaItems, startIndex, startPosition)
                 controller.prepare()
                 controller.play()
+                Log.i(
+                    LOG_TAG,
+                    "first_audio_ready book=${queue.bookId} chapter=${queue.chapterId} " +
+                        "elapsedMs=${SystemClock.elapsedRealtime() - requestedAtMs} " +
+                        "bufferMs=${queue.durationMs}",
+                )
                 firstQueueReady.complete(Unit)
                 return@withController
             }
 
-            val existingCount = controller.mediaItemCount
-            if (mediaItems.size <= existingCount) return@withController
-            val resumeFromIndex = existingCount
+            if (mediaItems.isEmpty()) return@withController
+            val resumeFromIndex = controller.mediaItemCount
             val wasWaitingForAudio = controller.playbackState == Player.STATE_ENDED
-            controller.addMediaItems(mediaItems.drop(existingCount))
+            controller.addMediaItems(mediaItems)
             if (wasWaitingForAudio) {
                 controller.seekTo(resumeFromIndex, 0L)
                 controller.prepare()
