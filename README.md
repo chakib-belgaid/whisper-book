@@ -30,6 +30,7 @@ These are captured emulator builds, not design mockups. The full screen inventor
 | Private import | Android Storage Access Framework, byte-signature validation, SHA-256 duplicate detection, and an app-private source copy |
 | Publication extraction | EPUB metadata/reading-order parsing, PDF text extraction, and bundled ML Kit OCR for image-only pages |
 | Character voices | Explainable dialogue heuristics, first-person narrator detection, confidence-bearing age/gender cues, profile-aware casting across eight embedded Supertonic 3 voices, and per-character overrides |
+| Language packs | English is ready by default; French and Arabic can be added and selected independently from Settings while synthesis remains private and on-device |
 | Durable preparation | A staged WorkManager pipeline with persisted progress, restart recovery, chapter-scoped character discovery, opening-audio priority, and sequential prefetch |
 | Local audio | sherpa-onnx inference, 44.1 kHz WAV output, atomic writes, cache validation, retention, and bounded cleanup |
 | Playback | Media3 foreground service, chapter queueing, automatic continuation, 15-second seek, speed control, sleep timer, and audio-focus handling |
@@ -86,7 +87,7 @@ whisper-book/
 - Android SDK 36 and build-tools 36
 - An arm64 Android device or emulator running Android 8.0 / API 26 or newer
 
-The TTS runtime and model are committed under `app/libs/` and `app/src/main/assets/tts/`; no separate model download is required.
+The TTS runtime and multilingual model are committed under `app/libs/` and `app/src/main/assets/tts/`; no first-launch model download is required. English is enabled by default. French and Arabic are optional language-pack choices under **Settings → Language packs** and reuse the same local multilingual model without adding a network permission.
 
 ```bash
 ./gradlew :app:assembleDebug

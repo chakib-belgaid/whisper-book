@@ -32,11 +32,14 @@ class LocalVoicePreviewPlayer internal constructor(
         text: String,
         voice: VoiceDescriptor,
         speed: Float,
+        languageCode: String,
     ): Result<Unit> = resultOf {
         require(text.isNotBlank()) { "Voice preview text must not be blank" }
         playbackMutex.withLock {
             audioSink.stop()
-            previewCache?.read(voice, speed)?.let { cached ->
+            // Installation previews are currently pre-generated in English. Other language
+            // packs synthesize their own localized sample so an English clip is never replayed.
+            previewCache?.takeIf { languageCode == "en" }?.read(voice, speed)?.let { cached ->
                 audioSink.play(cached.pcm16, cached.sampleRate)
                 return@withLock
             }
@@ -50,6 +53,7 @@ class LocalVoicePreviewPlayer internal constructor(
                         voice = voice,
                         speed = speed,
                         cacheKey = "voice-preview",
+                        languageCode = languageCode,
                     ),
                 ).getOrThrow()
             }

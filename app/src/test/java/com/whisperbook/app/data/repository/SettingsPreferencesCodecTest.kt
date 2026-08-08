@@ -16,6 +16,8 @@ class SettingsPreferencesCodecTest {
         val expected = AppSettings(
             onboardingComplete = true,
             defaultNarratorVoiceId = "willow",
+            narrationLanguageCode = "fr",
+            installedLanguagePackCodes = setOf("en", "fr", "ar"),
             speakingSpeed = 1.25f,
             sleepTimerMinutes = 45,
             keepScreenAwake = true,
@@ -57,5 +59,22 @@ class SettingsPreferencesCodecTest {
         SettingsPreferencesCodec.write(preferences, AppSettings(speakingSpeed = Float.NaN))
 
         assertEquals(1f, SettingsPreferencesCodec.decode(preferences).speakingSpeed)
+    }
+
+    @Test
+    fun `language packs keep English installed and reject an uninstalled selection`() {
+        val preferences = mutablePreferencesOf()
+        SettingsPreferencesCodec.write(
+            preferences,
+            AppSettings(
+                narrationLanguageCode = "fr",
+                installedLanguagePackCodes = setOf("ar", "unsupported"),
+            ),
+        )
+
+        val decoded = SettingsPreferencesCodec.decode(preferences)
+
+        assertEquals("en", decoded.narrationLanguageCode)
+        assertEquals(setOf("en", "ar"), decoded.installedLanguagePackCodes)
     }
 }

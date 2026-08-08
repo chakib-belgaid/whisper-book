@@ -38,6 +38,23 @@ class NarrationSynthesisPlannerTest {
         )
     }
 
+    @Test
+    fun `selected language reaches synthesis and cache identity`() {
+        val english = plan("Bonjour le monde.").single()
+        val french = NarrationSynthesisPlanner.plan(
+            passageId = "passage-1",
+            text = "Bonjour le monde.",
+            voice = voice,
+            speed = 1f,
+            modelVersion = MODEL_VERSION,
+            sampleRate = SAMPLE_RATE,
+            languageCode = "fr",
+        ).single()
+
+        assertEquals("fr", french.request.languageCode)
+        assertTrue(english.request.cacheKey != french.request.cacheKey)
+    }
+
     private fun plan(text: String) = NarrationSynthesisPlanner.plan(
         passageId = "passage-1",
         text = text,

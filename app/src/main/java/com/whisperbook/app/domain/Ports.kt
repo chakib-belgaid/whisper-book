@@ -42,6 +42,7 @@ data class SynthesisRequest(
     val voice: VoiceDescriptor,
     val speed: Float,
     val cacheKey: String,
+    val languageCode: String = "en",
 )
 
 data class SynthesisResult(
@@ -126,7 +127,12 @@ interface LocalTtsEngine : AutoCloseable {
 }
 
 interface VoicePreviewPlayer : AutoCloseable {
-    suspend fun play(text: String, voice: VoiceDescriptor, speed: Float): Result<Unit>
+    suspend fun play(
+        text: String,
+        voice: VoiceDescriptor,
+        speed: Float,
+        languageCode: String = "en",
+    ): Result<Unit>
     fun stop()
     override fun close()
 }

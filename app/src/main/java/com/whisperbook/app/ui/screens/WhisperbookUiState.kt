@@ -15,6 +15,7 @@ import com.whisperbook.app.domain.model.Book
 import com.whisperbook.app.domain.model.Chapter
 import com.whisperbook.app.domain.model.CharacterColorRole
 import com.whisperbook.app.domain.model.CharacterVoiceAssignment
+import com.whisperbook.app.domain.model.NarrationLanguage
 import com.whisperbook.app.domain.model.PreparationStage
 import com.whisperbook.app.domain.model.PreparationState
 import com.whisperbook.app.domain.model.StoryCharacter
@@ -41,6 +42,8 @@ interface WhisperbookUiActions {
     fun cycleSpeed()
     fun cycleDefaultNarratorVoice()
     fun chooseDefaultNarratorVoice(voiceId: String)
+    fun downloadLanguagePack(languageCode: String)
+    fun selectNarrationLanguage(languageCode: String)
     fun cycleSleepTimer()
     fun cycleVoice(characterId: String)
     fun assignVoice(characterId: String, voiceId: String, regenerationScope: VoiceRegenerationScope)
@@ -231,6 +234,10 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
         private set
     var defaultNarratorVoice by mutableStateOf("Bella")
         private set
+    var narrationLanguageCode by mutableStateOf(NarrationLanguage.ENGLISH.code)
+        private set
+    var installedLanguagePackCodes by mutableStateOf(setOf(NarrationLanguage.ENGLISH.code))
+        private set
     var canRevertVoiceChange by mutableStateOf(false)
         private set
     var preparationStatus by mutableStateOf<PreparationState?>(null)
@@ -418,6 +425,8 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
             .firstOrNull { it.id == snapshot.settings.defaultNarratorVoiceId }
             ?.displayName
             ?: "Bella"
+        narrationLanguageCode = snapshot.settings.narrationLanguageCode
+        installedLanguagePackCodes = snapshot.settings.installedLanguagePackCodes
         importError = snapshot.errorMessage
         isBusy = snapshot.isBusy
         statusMessage = snapshot.statusMessage
@@ -565,6 +574,19 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
         val voice = voiceOptions.firstOrNull { it.id == voiceId } ?: return
         defaultNarratorVoice = voice.displayName
         productionActions?.chooseDefaultNarratorVoice(voiceId)
+    }
+
+    fun downloadLanguagePack(languageCode: String) {
+        val language = NarrationLanguage.fromCode(languageCode) ?: return
+        installedLanguagePackCodes = installedLanguagePackCodes + language.code
+        narrationLanguageCode = language.code
+        productionActions?.downloadLanguagePack(language.code)
+    }
+
+    fun selectNarrationLanguage(languageCode: String) {
+        if (languageCode !in installedLanguagePackCodes) return
+        narrationLanguageCode = languageCode
+        productionActions?.selectNarrationLanguage(languageCode)
     }
 
     fun cycleSleepTimer() {

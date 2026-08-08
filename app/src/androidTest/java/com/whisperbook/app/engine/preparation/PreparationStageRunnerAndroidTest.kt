@@ -21,10 +21,12 @@ import com.whisperbook.app.domain.PublicationExtractor
 import com.whisperbook.app.domain.SpeakerAttributor
 import com.whisperbook.app.domain.SynthesisRequest
 import com.whisperbook.app.domain.SynthesisResult
+import com.whisperbook.app.domain.model.AppSettings
 import com.whisperbook.app.domain.model.BookFormat
 import com.whisperbook.app.domain.model.BuiltInCharacters
 import com.whisperbook.app.domain.model.Chapter
 import com.whisperbook.app.domain.model.CharacterColorRole
+import com.whisperbook.app.domain.model.CharacterGender
 import com.whisperbook.app.domain.model.Passage
 import com.whisperbook.app.domain.model.PreparationStage
 import com.whisperbook.app.domain.model.StoryCharacter
@@ -33,6 +35,7 @@ import com.whisperbook.app.engine.audio.AppPrivateAudioSegmentStore
 import com.whisperbook.app.engine.metadata.AppPrivateCharacterMetadataCatalog
 import java.io.File
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -167,6 +170,51 @@ class PreparationStageRunnerAndroidTest {
             assertEquals(false, metadata?.complete)
         } finally {
             metadataRoot.deleteRecursively()
+            database.close()
+        }
+    }
+
+    @Test
+    fun unknownGenderNarratorUsesTheDefaultNarratorVoicePreference() = runBlocking {
+        val database = Room.inMemoryDatabaseBuilder(context, WhisperBookDatabase::class.java).build()
+
+        try {
+            database.bookDao().insert(testBook())
+            database.chapterDao().insertAll(
+                listOf(ChapterEntity(CHAPTER_ONE_ID, BOOK_ID, 0, "Opening")),
+            )
+            database.passageDao().insertAll(
+                listOf(
+                    provisionalPassage(
+                        id = "$CHAPTER_ONE_ID-passage-1",
+                        chapterId = CHAPTER_ONE_ID,
+                        text = "Morning arrived.",
+                    ),
+                ),
+            )
+            val runner = PreparationStageRunner(
+                dependencies = PreparationDependencies(
+                    database = database,
+                    publicationExtractor = NeverUsedPublicationExtractor,
+                    speakerAttributor = StreamingChapterAttributor(),
+                    ttsEngineFactory = LocalTtsEngineFactory { PreferenceVoiceCatalogEngine },
+                    audioSegmentStore = AppPrivateAudioSegmentStore(context),
+                    settingsFlow = flowOf(AppSettings(defaultNarratorVoiceId = "jasper")),
+                    modelVersion = TEST_MODEL_VERSION,
+                    narratorVoiceId = "bella",
+                ),
+            )
+
+            runner.run(BOOK_ID, PreparationStage.FINDING_CHARACTERS, attemptCount = 0)
+            val narrator = database.storyCharacterDao().getEntitiesForBook(BOOK_ID)
+                .single { it.colorRole == CharacterColorRole.NARRATOR.name }
+            assertEquals(CharacterGender.UNKNOWN.name, narrator.gender)
+
+            runner.run(BOOK_ID, PreparationStage.ASSIGNING_VOICES, attemptCount = 0)
+
+            val assignment = database.voiceAssignmentDao().getForCharacter(narrator.id)
+            assertEquals("jasper", assignment?.voiceId)
+        } finally {
             database.close()
         }
     }
@@ -453,6 +501,30 @@ class PreparationStageRunnerAndroidTest {
         override suspend fun voices(): List<VoiceDescriptor> = error("TTS must not run")
         override suspend fun synthesize(request: SynthesisRequest): Result<SynthesisResult> =
             error("TTS must not run")
+
+        override fun close() = Unit
+    }
+
+    private object PreferenceVoiceCatalogEngine : LocalTtsEngine {
+        override suspend fun warmUp(): Result<Unit> = error("TTS warm-up must not run")
+
+        override suspend fun voices(): List<VoiceDescriptor> = listOf(
+            VoiceDescriptor(
+                id = "bella",
+                displayName = "Bella",
+                speakerIndex = 0,
+                gender = CharacterGender.FEMALE,
+            ),
+            VoiceDescriptor(
+                id = "jasper",
+                displayName = "Jasper",
+                speakerIndex = 1,
+                gender = CharacterGender.MALE,
+            ),
+        )
+
+        override suspend fun synthesize(request: SynthesisRequest): Result<SynthesisResult> =
+            error("TTS synthesis must not run")
 
         override fun close() = Unit
     }

@@ -18,12 +18,14 @@ object NarrationSynthesisPlanner {
         speed: Float,
         modelVersion: String,
         sampleRate: Int,
+        languageCode: String = "en",
     ): List<NarrationSynthesisUnit> = NarrationTextChunker.chunks(passageId, text).map { chunk ->
         val provisional = SynthesisRequest(
             text = chunk.text,
             voice = voice,
             speed = speed,
             cacheKey = "pending",
+            languageCode = languageCode,
         )
         NarrationSynthesisUnit(
             passageId = chunk.id,

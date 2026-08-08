@@ -20,11 +20,13 @@ object AudioCacheKey {
         modelVersion: String,
         speed: Float,
         sampleRate: Int,
+        languageCode: String = "en",
     ): String {
         require(voiceId.isNotBlank()) { "voiceId must not be blank" }
         require(modelVersion.isNotBlank()) { "modelVersion must not be blank" }
         require(speed.isFinite() && speed > 0f) { "speed must be finite and positive" }
         require(sampleRate > 0) { "sampleRate must be positive" }
+        require(languageCode.isNotBlank()) { "languageCode must not be blank" }
 
         val digest = MessageDigest.getInstance("SHA-256")
         digest.updateField(SCHEMA)
@@ -34,6 +36,9 @@ object AudioCacheKey {
         digest.updateField(modelVersion)
         digest.updateInt(speed.toRawBits())
         digest.updateInt(sampleRate)
+        // Keep existing English audio reusable after the language-pack update. Every optional
+        // language receives a distinct suffix, so French/Arabic can never collide with English.
+        if (languageCode != DEFAULT_LANGUAGE_CODE) digest.updateField("lang:$languageCode")
         return digest.digest().toLowerHexString()
     }
 
@@ -48,6 +53,7 @@ object AudioCacheKey {
         modelVersion = modelVersion,
         speed = request.speed,
         sampleRate = sampleRate,
+        languageCode = request.languageCode,
     )
 
     /**
@@ -69,6 +75,7 @@ object AudioCacheKey {
             modelVersion = modelVersion,
             speed = request.speed,
             sampleRate = sampleRate,
+            languageCode = request.languageCode,
         )
     }
 
@@ -98,4 +105,5 @@ object AudioCacheKey {
     }
 
     private const val HEX_DIGITS = "0123456789abcdef"
+    private const val DEFAULT_LANGUAGE_CODE = "en"
 }

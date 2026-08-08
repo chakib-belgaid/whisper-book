@@ -3,7 +3,6 @@ package com.whisperbook.app.engine.tts
 import com.whisperbook.app.domain.model.CharacterAgeGroup
 import com.whisperbook.app.domain.model.CharacterColorRole
 import com.whisperbook.app.domain.model.CharacterGender
-import com.whisperbook.app.domain.model.NarrationPerspective
 import com.whisperbook.app.domain.model.StoryCharacter
 import com.whisperbook.app.domain.model.VocalAge
 import com.whisperbook.app.domain.model.VoiceDescriptor
@@ -19,12 +18,17 @@ object CharacterVoiceCaster {
     ): VoiceDescriptor {
         require(voices.isNotEmpty()) { "No voices are available for automatic casting" }
         val isNarrator = character.colorRole == CharacterColorRole.NARRATOR
-        val narratorHasProfile = character.narrationPerspective == NarrationPerspective.FIRST_PERSON &&
-            (
-                character.gender != CharacterGender.UNKNOWN && character.genderConfidence >= PROFILE_THRESHOLD ||
-                    character.ageGroup != CharacterAgeGroup.UNKNOWN && character.ageConfidence >= PROFILE_THRESHOLD
-                )
-        if (isNarrator && !narratorHasProfile) return preferredNarrator?.takeIf { it in voices } ?: voices.first()
+        val preferredAvailableNarrator = preferredNarrator?.let { preferred ->
+            voices.firstOrNull { voice -> voice.id == preferred.id }
+        }
+        val narratorHasCastableGender = character.gender != CharacterGender.UNKNOWN &&
+            character.genderConfidence >= PROFILE_THRESHOLD &&
+            voices.any { voice -> voice.gender == character.gender }
+        // Age can refine a gender-compatible narrator voice, but it must not replace the user's
+        // narrator preference when textual gender evidence is missing, weak, or unsupported.
+        if (isNarrator && !narratorHasCastableGender) {
+            return preferredAvailableNarrator ?: voices.first()
+        }
 
         return voices.maxWithOrNull(
             compareBy<VoiceDescriptor> { voice ->
@@ -35,18 +39,11 @@ object CharacterVoiceCaster {
     }
 
     private fun profileScore(character: StoryCharacter, voice: VoiceDescriptor): Float {
-        val genderScore = when (character.gender) {
-            CharacterGender.FEMALE -> when (voice.gender) {
-                CharacterGender.FEMALE -> GENDER_MATCH
-                CharacterGender.UNKNOWN, CharacterGender.NON_BINARY -> 0f
-                CharacterGender.MALE -> -GENDER_MISMATCH
-            }
-            CharacterGender.MALE -> when (voice.gender) {
-                CharacterGender.MALE -> GENDER_MATCH
-                CharacterGender.UNKNOWN, CharacterGender.NON_BINARY -> 0f
-                CharacterGender.FEMALE -> -GENDER_MISMATCH
-            }
-            CharacterGender.NON_BINARY, CharacterGender.UNKNOWN -> 0f
+        val genderScore = when {
+            character.gender == CharacterGender.UNKNOWN -> 0f
+            voice.gender == character.gender -> GENDER_MATCH
+            voice.gender == CharacterGender.UNKNOWN -> 0f
+            else -> -GENDER_MISMATCH
         } * character.genderConfidence.coerceIn(0f, 1f)
 
         val desiredVocalAge = when (character.ageGroup) {

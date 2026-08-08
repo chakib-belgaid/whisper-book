@@ -9,6 +9,7 @@ import com.whisperbook.app.domain.LocalTtsEngine
 import com.whisperbook.app.domain.SynthesisRequest
 import com.whisperbook.app.domain.model.AudioSegment
 import com.whisperbook.app.domain.model.AudioSegmentState
+import com.whisperbook.app.domain.model.AppSettings
 import com.whisperbook.app.domain.model.CharacterVoiceAssignment
 import com.whisperbook.app.domain.model.VoiceDescriptor
 import com.whisperbook.app.engine.audio.AppPrivateAudioSegmentStore
@@ -22,6 +23,9 @@ import com.whisperbook.app.playback.PlaybackQueueSource
 import java.io.File
 import java.util.concurrent.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.withContext
 
 /**
@@ -35,6 +39,7 @@ class LocalPlaybackQueueSource(
     private val voices: List<VoiceDescriptor> = SherpaKittenTtsEngine.KITTEN_VOICES,
     private val modelVersion: String = SherpaKittenTtsEngine.MODEL_VERSION,
     private val expectedSampleRate: Int = SherpaKittenTtsEngine.EXPECTED_SAMPLE_RATE,
+    private val settingsFlow: Flow<AppSettings> = flowOf(AppSettings()),
 ) : PlaybackQueueSource {
     override suspend fun load(bookId: String, chapterId: String?): Result<PlaybackChapterQueue> =
         withContext(Dispatchers.IO) {
@@ -120,6 +125,7 @@ class LocalPlaybackQueueSource(
             )
         }
         check(sourcePassages.isNotEmpty()) { "This chapter has no narratable passages" }
+        val settings = settingsFlow.first()
         val resolvedVoices = resolveVoices(
             chapterId = chapterHeader.id,
             speakerIds = sourcePassages.map(SourcePassage::speakerId).distinct(),
@@ -134,6 +140,7 @@ class LocalPlaybackQueueSource(
                 speed = resolvedVoice.assignment.speed,
                 modelVersion = resolvedVoice.assignment.modelVersion,
                 sampleRate = expectedSampleRate,
+                languageCode = settings.narrationLanguageCode,
             ).map { unit ->
                 ResolvedPassage(
                     queued = QueuedPassage(
@@ -233,10 +240,13 @@ class LocalPlaybackQueueSource(
             database.chapterVoiceAssignmentDao()
                 .getForChapterAndCharacter(chapterId, speakerId)
         }.associate { assignment -> assignment.characterId to assignment.toDomain() }
+        val preferredNarrator = settingsFlow.first().defaultNarratorVoiceId.let { preferredId ->
+            voices.firstOrNull { voice -> voice.id == preferredId }
+        }
         return speakerIds.associateWith { speakerId ->
             val stored = chapterAssignments[speakerId] ?: storedAssignments[speakerId]
             val voice = stored?.let { assignment -> voices.firstOrNull { it.id == assignment.voiceId } }
-                ?: defaultVoiceFor(speakerId, characters[speakerId])
+                ?: defaultVoiceFor(speakerId, characters[speakerId], preferredNarrator)
             val assignment = stored?.takeIf { it.voiceId == voice.id }
                 ?: CharacterVoiceAssignment(
                     characterId = speakerId,
@@ -327,12 +337,16 @@ class LocalPlaybackQueueSource(
         val request: SynthesisRequest,
     )
 
-    private fun defaultVoiceFor(speakerId: String, character: StoryCharacterEntity?): VoiceDescriptor =
+    private fun defaultVoiceFor(
+        speakerId: String,
+        character: StoryCharacterEntity?,
+        preferredNarrator: VoiceDescriptor?,
+    ): VoiceDescriptor =
         character?.let { storedCharacter ->
             CharacterVoiceCaster.select(
                 character = storedCharacter.toDomain(),
                 voices = voices,
-                preferredNarrator = voices.firstOrNull { it.id == "bella" },
+                preferredNarrator = preferredNarrator,
             )
         } ?: voices[Math.floorMod(speakerId.hashCode(), voices.size)]
 

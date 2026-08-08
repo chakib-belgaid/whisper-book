@@ -26,6 +26,7 @@ class LocalVoicePreviewPlayerTest {
         assertEquals("A short sample.", engine.request?.text)
         assertEquals(voice, engine.request?.voice)
         assertEquals(1.2f, engine.request?.speed)
+        assertEquals("en", engine.request?.languageCode)
         assertArrayEquals(shortArrayOf(10, -10, 20, -20), sink.pcm16)
         assertEquals(24_000, sink.sampleRate)
     }
@@ -49,6 +50,23 @@ class LocalVoicePreviewPlayerTest {
         assertEquals(1f, cache.requestedSpeed)
         assertArrayEquals(shortArrayOf(90, -90), sink.pcm16)
         assertEquals(44_100, sink.sampleRate)
+    }
+
+    @Test
+    fun localizedPreviewBypassesEnglishInstallationCache() = runTest {
+        val engine = FakePreviewTtsEngine()
+        val sink = RecordingPcmAudioSink()
+        val voice = VoiceDescriptor("luna", "Luna", 2)
+        val cache = FakeVoicePreviewClipCache(
+            VoicePreviewClip(shortArrayOf(90, -90), sampleRate = 44_100),
+        )
+        val player = LocalVoicePreviewPlayer(engine, sink, cache)
+
+        player.play("Bonjour.", voice, 1f, languageCode = "fr").getOrThrow()
+
+        assertEquals("fr", engine.request?.languageCode)
+        assertNull(cache.requestedVoice)
+        assertArrayEquals(shortArrayOf(10, -10, 20, -20), sink.pcm16)
     }
 }
 

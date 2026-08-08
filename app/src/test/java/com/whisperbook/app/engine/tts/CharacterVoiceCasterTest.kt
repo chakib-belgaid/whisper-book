@@ -40,7 +40,7 @@ class CharacterVoiceCasterTest {
     }
 
     @Test
-    fun `first person narrator profile can improve the default narrator cast`() {
+    fun `reliably inferred narrator gender overrides a conflicting voice preference`() {
         val preferred = voices.single { it.id == "bella" }
         val selected = CharacterVoiceCaster.select(
             character = character(
@@ -49,7 +49,7 @@ class CharacterVoiceCasterTest {
                 genderConfidence = 0.98f,
                 age = CharacterAgeGroup.OLDER_ADULT,
                 ageConfidence = 0.98f,
-                perspective = NarrationPerspective.FIRST_PERSON,
+                perspective = NarrationPerspective.THIRD_PERSON,
             ),
             voices = voices,
             preferredNarrator = preferred,
@@ -60,16 +60,52 @@ class CharacterVoiceCasterTest {
     }
 
     @Test
-    fun `third person and ambiguous narrators retain the preferred narrator voice`() {
+    fun `narrator without reliable gender retains the preferred narrator voice`() {
+        val preferred = voices.single { it.id == "jasper" }
+        val selected = CharacterVoiceCaster.select(
+            character = character(
+                role = CharacterColorRole.NARRATOR,
+                gender = CharacterGender.UNKNOWN,
+                genderConfidence = 0f,
+                age = CharacterAgeGroup.OLDER_ADULT,
+                ageConfidence = 0.98f,
+                perspective = NarrationPerspective.FIRST_PERSON,
+            ),
+            voices = voices,
+            preferredNarrator = preferred,
+        )
+
+        assertEquals(preferred, selected)
+    }
+
+    @Test
+    fun `weak narrator gender evidence retains the preferred narrator voice`() {
         val preferred = voices.single { it.id == "bella" }
         val selected = CharacterVoiceCaster.select(
             character = character(
                 role = CharacterColorRole.NARRATOR,
                 gender = CharacterGender.MALE,
-                genderConfidence = 0.98f,
+                genderConfidence = 0.59f,
                 age = CharacterAgeGroup.OLDER_ADULT,
                 ageConfidence = 0.98f,
-                perspective = NarrationPerspective.THIRD_PERSON,
+                perspective = NarrationPerspective.FIRST_PERSON,
+            ),
+            voices = voices,
+            preferredNarrator = preferred,
+        )
+
+        assertEquals(preferred, selected)
+    }
+
+    @Test
+    fun `narrator gender without a compatible embedded voice uses the preference`() {
+        val preferred = voices.single { it.id == "bella" }
+        val selected = CharacterVoiceCaster.select(
+            character = character(
+                role = CharacterColorRole.NARRATOR,
+                gender = CharacterGender.NON_BINARY,
+                genderConfidence = 0.99f,
+                perspective = NarrationPerspective.FIRST_PERSON,
             ),
             voices = voices,
             preferredNarrator = preferred,

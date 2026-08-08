@@ -278,6 +278,8 @@ private class ViewModelUiActions(
     override fun cycleSpeed() = viewModel.cycleSpeed()
     override fun cycleDefaultNarratorVoice() = viewModel.cycleDefaultNarratorVoice()
     override fun chooseDefaultNarratorVoice(voiceId: String) = viewModel.chooseDefaultNarratorVoice(voiceId)
+    override fun downloadLanguagePack(languageCode: String) = viewModel.downloadLanguagePack(languageCode).let { Unit }
+    override fun selectNarrationLanguage(languageCode: String) = viewModel.selectNarrationLanguage(languageCode).let { Unit }
     override fun cycleSleepTimer() = viewModel.cycleSleepTimer()
     override fun cycleVoice(characterId: String) = viewModel.cycleVoice(characterId)
     override fun assignVoice(

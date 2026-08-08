@@ -89,6 +89,7 @@ class WhisperbookAppContainer(context: Context) : WhisperbookServices, Closeable
         database = database,
         audioStore = audioSegmentStore,
         ttsEngineFactory = { sharedTtsEngine },
+        settingsFlow = settingsRepository.settings,
     )
     override val playbackGateway = ControllerBackedPlaybackGateway(appContext, playbackQueueSource)
 

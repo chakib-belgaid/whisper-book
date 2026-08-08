@@ -189,6 +189,28 @@ class WhisperbookViewModelTest {
     }
 
     @Test
+    fun downloadingFrenchPackSelectsItAndRefreshesLocalNarration() = runTest(dispatcher) {
+        val services = FakeServices()
+        val viewModel = WhisperbookViewModel(services)
+        viewModel.uiState.test {
+            awaitItem()
+            advanceUntilIdle()
+
+            viewModel.downloadLanguagePack("fr")
+            advanceUntilIdle()
+
+            val settings = services.settings.value
+            assertEquals("fr", settings.narrationLanguageCode)
+            assertTrue("fr" in settings.installedLanguagePackCodes)
+            assertEquals(
+                listOf("pause", "invalidate-queue:book-a:chapter-a", "regenerate:book-a:0"),
+                services.events.takeLast(3),
+            )
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
     fun deletingSelectedBookPausesPlaybackCancelsPreparationAndRemovesIt() = runTest(dispatcher) {
         val services = FakeServices().apply {
             playback.value = cursor(isPlaying = true)
@@ -518,7 +540,12 @@ private class FakeServices : WhisperbookServices {
     override val ttsModelVersion = "test-model"
 
     override val voicePreviewPlayer = object : VoicePreviewPlayer {
-        override suspend fun play(text: String, voice: VoiceDescriptor, speed: Float): Result<Unit> {
+        override suspend fun play(
+            text: String,
+            voice: VoiceDescriptor,
+            speed: Float,
+            languageCode: String,
+        ): Result<Unit> {
             events += "preview:${voice.id}:$text:$speed"
             return Result.success(Unit)
         }
@@ -571,6 +598,9 @@ private class FakeServices : WhisperbookServices {
         override suspend fun seekToPassage(passageId: String) { events += "passage:$passageId" }
         override suspend fun setSpeed(speed: Float) { events += "speed:$speed" }
         override suspend fun setSleepTimer(minutes: Int?) { events += "sleep:$minutes" }
+        override suspend fun invalidateQueuedChapters(bookId: String, chapterIds: Set<String>) {
+            events += "invalidate-queue:$bookId:${chapterIds.sorted().joinToString(",")}"
+        }
     }
 
     override val audioSegmentStore = object : AudioSegmentStore {

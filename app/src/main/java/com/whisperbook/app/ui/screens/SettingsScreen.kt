@@ -12,6 +12,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Bedtime
 import androidx.compose.material.icons.outlined.Inventory2
+import androidx.compose.material.icons.outlined.Language
 import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material.icons.outlined.RecordVoiceOver
 import androidx.compose.material.icons.outlined.Speed
@@ -28,6 +29,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.whisperbook.app.ui.theme.WhisperbookTheme
+import com.whisperbook.app.domain.model.NarrationLanguage
 
 @Composable
 fun SettingsScreen(
@@ -58,8 +60,33 @@ fun SettingsScreen(
             }
         }
         item {
-            GoldenSettingsSection("Offline models") {
-                GoldenSettingsRow("English voice pack", value = "Installed", icon = Icons.Outlined.Mic, installed = true)
+            GoldenSettingsSection("Language packs") {
+                NarrationLanguage.entries.forEachIndexed { index, language ->
+                    val installed = language.code in appState.installedLanguagePackCodes
+                    val selected = language.code == appState.narrationLanguageCode
+                    GoldenSettingsRow(
+                        title = "${language.displayName} · ${language.nativeName}",
+                        value = when {
+                            selected -> "Selected"
+                            installed -> "Use"
+                            else -> "Download"
+                        },
+                        icon = if (language == NarrationLanguage.ENGLISH) Icons.Outlined.Mic else Icons.Outlined.Language,
+                        installed = selected,
+                        onClick = when {
+                            selected -> null
+                            installed -> ({ appState.selectNarrationLanguage(language.code) })
+                            else -> ({ appState.downloadLanguagePack(language.code) })
+                        },
+                    )
+                    if (index < NarrationLanguage.entries.lastIndex) CompactDivider()
+                }
+                Text(
+                    "French and Arabic use Whisperbook's private on-device model. Add them only when you need them.",
+                    color = WhisperbookTheme.colors.ink.copy(alpha = 0.72f),
+                    style = WhisperbookTheme.typography.body.copy(fontSize = 11.sp, lineHeight = 15.sp),
+                    modifier = Modifier.padding(horizontal = 3.dp, vertical = 4.dp),
+                )
                 CompactDivider()
                 GoldenSettingsRow(
                     "Manage voices",

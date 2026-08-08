@@ -1,6 +1,6 @@
 # Offline TTS artifacts
 
-Whisperbook bundles its Android speech runtime and model files so the installed app never downloads a model. The app code pins the combined inference identity as `supertonic-3-int8-2026-05-11+sherpa-onnx-1.13.4`; changing either artifact must also change that identity so incompatible cached audio is regenerated.
+Whisperbook bundles its Android speech runtime and multilingual model files so the installed app never downloads model weights. English is enabled by default; the optional French (`fr`) and Arabic (`ar`) language-pack controls activate the corresponding Supertonic language code against those same local weights. The app code pins the combined inference identity as `supertonic-3-int8-2026-05-11+sherpa-onnx-1.13.4`; changing either artifact must also change that identity so incompatible cached audio is regenerated.
 
 ## sherpa-onnx Android runtime
 

@@ -44,7 +44,8 @@ class AudioCacheKeyTest {
             modelVersion: String = "v1",
             speed: Float = 1f,
             sampleRate: Int = 24_000,
-        ) = AudioCacheKey.create(text, voiceId, speakerIndex, modelVersion, speed, sampleRate)
+            languageCode: String = "en",
+        ) = AudioCacheKey.create(text, voiceId, speakerIndex, modelVersion, speed, sampleRate, languageCode)
 
         val baseline = key()
         assertNotEquals(baseline, key(text = "hello!"))
@@ -53,6 +54,7 @@ class AudioCacheKeyTest {
         assertNotEquals(baseline, key(modelVersion = "v2"))
         assertNotEquals(baseline, key(speed = 1.1f))
         assertNotEquals(baseline, key(sampleRate = 16_000))
+        assertNotEquals(baseline, key(languageCode = "fr"))
     }
 
     @Test

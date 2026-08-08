@@ -13,6 +13,7 @@ import com.whisperbook.app.domain.LocalTtsEngine
 import com.whisperbook.app.domain.SynthesisRequest
 import com.whisperbook.app.domain.SynthesisResult
 import com.whisperbook.app.domain.model.CharacterGender
+import com.whisperbook.app.domain.model.NarrationLanguage
 import com.whisperbook.app.domain.model.VocalAge
 import com.whisperbook.app.domain.model.VoiceDescriptor
 import java.util.concurrent.locks.ReentrantLock
@@ -81,7 +82,7 @@ class SherpaKittenTtsEngine(
                     val synthesisStartedAtMs = SystemClock.elapsedRealtime()
                     tts.generateWithConfig(
                         request.text.trim(),
-                        generationConfig(speaker.speakerIndex, request.speed),
+                        generationConfig(speaker.speakerIndex, request.speed, request.languageCode),
                     ).also { generated ->
                         val elapsedMs = SystemClock.elapsedRealtime() - synthesisStartedAtMs
                         val durationMs = pcmDurationMs(generated.samples.size, generated.sampleRate)
@@ -191,16 +192,19 @@ class SherpaKittenTtsEngine(
         return created
     }
 
-    private fun generationConfig(speakerIndex: Int, speed: Float) = GenerationConfig(
+    private fun generationConfig(speakerIndex: Int, speed: Float, languageCode: String) = GenerationConfig(
         sid = speakerIndex,
         speed = speed,
-        extra = mapOf("lang" to DEFAULT_LANGUAGE),
+        extra = mapOf("lang" to languageCode),
     )
 
     private fun validateRequest(request: SynthesisRequest) {
         if (request.text.isBlank()) throw TtsEngineException("Text to synthesize must not be blank")
         if (!request.speed.isFinite() || request.speed !in MIN_SPEED..MAX_SPEED) {
             throw TtsEngineException("Speaking speed must be between $MIN_SPEED and $MAX_SPEED")
+        }
+        if (request.languageCode !in NarrationLanguage.supportedCodes) {
+            throw TtsEngineException("Language '${request.languageCode}' is not installed in Whisperbook")
         }
     }
 
@@ -213,7 +217,6 @@ class SherpaKittenTtsEngine(
         // A single low-priority inference lane leaves Media3 and Compose responsive on older
         // mobile CPUs. More ONNX threads improve synthesis throughput but can starve audio I/O.
         private const val THREAD_COUNT = 1
-        private const val DEFAULT_LANGUAGE = "en"
         private const val LOG_TAG = "WhisperbookTts"
 
         /**

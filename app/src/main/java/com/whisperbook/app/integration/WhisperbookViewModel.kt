@@ -5,6 +5,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.whisperbook.app.domain.model.AppSettings
+import com.whisperbook.app.domain.model.NarrationLanguage
 import com.whisperbook.app.domain.model.Book
 import com.whisperbook.app.domain.model.Chapter
 import com.whisperbook.app.domain.model.CharacterVoiceAssignment
@@ -267,9 +268,10 @@ class WhisperbookViewModel(
                 ?: error("No embedded voices are available")
             if (snapshot.playback?.isPlaying == true) services.playbackGateway.pause()
             services.voicePreviewPlayer.play(
-                text = voicePreviewText(character.displayName),
+                text = voicePreviewText(character.displayName, snapshot.settings.narrationLanguageCode),
                 voice = voice,
                 speed = snapshot.settings.speakingSpeed,
+                languageCode = snapshot.settings.narrationLanguageCode,
             ).getOrThrow()
             "Played ${voice.displayName} for ${character.displayName}."
         }.also { voicePreviewJob = it }
@@ -283,9 +285,10 @@ class WhisperbookViewModel(
                 ?: error("That embedded voice is no longer available")
             if (snapshot.playback?.isPlaying == true) services.playbackGateway.pause()
             services.voicePreviewPlayer.play(
-                text = voicePreviewText(characterName),
+                text = voicePreviewText(characterName, snapshot.settings.narrationLanguageCode),
                 voice = voice,
                 speed = snapshot.settings.speakingSpeed,
+                languageCode = snapshot.settings.narrationLanguageCode,
             ).getOrThrow()
             "Played ${voice.displayName} preview."
         }.also { voicePreviewJob = it }
@@ -334,6 +337,23 @@ class WhisperbookViewModel(
     fun chooseDefaultNarratorVoice(voiceId: String) {
         if (services.availableVoices.none { it.id == voiceId }) return
         updateSettings { it.copy(defaultNarratorVoiceId = voiceId) }
+    }
+
+    fun downloadLanguagePack(languageCode: String): Job {
+        val language = NarrationLanguage.fromCode(languageCode) ?: return launchOperation {
+            error("That language pack is unavailable")
+        }
+        return changeNarrationLanguage(language, install = true)
+    }
+
+    fun selectNarrationLanguage(languageCode: String): Job {
+        val language = NarrationLanguage.fromCode(languageCode) ?: return launchOperation {
+            error("That language pack is unavailable")
+        }
+        if (language.code !in uiState.value.settings.installedLanguagePackCodes) {
+            return launchOperation { error("Download the ${language.displayName} language pack first") }
+        }
+        return changeNarrationLanguage(language, install = false)
     }
 
     fun cycleSleepTimer() {
@@ -503,6 +523,34 @@ class WhisperbookViewModel(
         storageRefreshVersion.value += 1L
     }
 
+    private fun changeNarrationLanguage(
+        language: NarrationLanguage,
+        install: Boolean,
+    ) = launchOperation(
+        if (install) "Adding ${language.displayName} language pack" else "Changing narration language",
+    ) {
+        val snapshot = uiState.value
+        services.settingsRepository.update { current ->
+            current.copy(
+                narrationLanguageCode = language.code,
+                installedLanguagePackCodes = current.installedLanguagePackCodes + language.code,
+            )
+        }
+        snapshot.selectedBook?.let { book ->
+            services.playbackGateway.pause()
+            services.playbackGateway.invalidateQueuedChapters(
+                bookId = book.id,
+                chapterIds = snapshot.chapters.mapTo(linkedSetOf()) { it.id },
+            )
+            services.preparationCoordinator.regenerateAudio(book.id, 0)
+        }
+        if (install) {
+            "${language.displayName} is installed and selected. Narration stays on this device."
+        } else {
+            "${language.displayName} narration selected. Existing chapters will refresh locally."
+        }
+    }
+
     private fun updateSettings(transform: (AppSettings) -> AppSettings) = launchOperation {
         services.settingsRepository.update(transform)
         null
@@ -540,12 +588,25 @@ class WhisperbookViewModel(
     }
 }
 
-internal fun voicePreviewText(characterName: String): String {
+internal fun voicePreviewText(characterName: String, languageCode: String = "en"): String {
     val name = characterName.trim().take(48).ifBlank { "this character" }
-    return if (name.equals("Narrator", ignoreCase = true)) {
-        "Once upon a time, every story began with a voice."
-    } else {
-        "Hello, I am $name. This is how I will sound in your story."
+    val narrator = name.equals("Narrator", ignoreCase = true)
+    return when (languageCode) {
+        "fr" -> if (narrator) {
+            "Il était une fois, chaque histoire commençait par une voix."
+        } else {
+            "Bonjour, je suis $name. Voici ma voix dans votre histoire."
+        }
+        "ar" -> if (narrator) {
+            "كان يا ما كان، كل حكاية تبدأ بصوت."
+        } else {
+            "مرحبًا، أنا $name. هكذا سيكون صوتي في حكايتك."
+        }
+        else -> if (narrator) {
+            "Once upon a time, every story began with a voice."
+        } else {
+            "Hello, I am $name. This is how I will sound in your story."
+        }
     }
 }
 

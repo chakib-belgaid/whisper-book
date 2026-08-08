@@ -167,6 +167,8 @@ data class PlaybackPreparationProgress(
 data class AppSettings(
     val onboardingComplete: Boolean = false,
     val defaultNarratorVoiceId: String = "bella",
+    val narrationLanguageCode: String = NarrationLanguage.ENGLISH.code,
+    val installedLanguagePackCodes: Set<String> = setOf(NarrationLanguage.ENGLISH.code),
     val speakingSpeed: Float = 1f,
     val sleepTimerMinutes: Int = 30,
     val keepScreenAwake: Boolean = false,
@@ -174,6 +176,24 @@ data class AppSettings(
     val autoScroll: Boolean = true,
     val audioCacheLimitBytes: Long = 2L * 1024 * 1024 * 1024,
 )
+
+/** Languages which Whisperbook exposes from the shared embedded Supertonic 3 model. */
+enum class NarrationLanguage(
+    val code: String,
+    val displayName: String,
+    val nativeName: String,
+) {
+    ENGLISH("en", "English", "English"),
+    FRENCH("fr", "French", "Français"),
+    ARABIC("ar", "Arabic", "العربية"),
+    ;
+
+    companion object {
+        val supportedCodes: Set<String> = entries.mapTo(linkedSetOf()) { it.code }
+
+        fun fromCode(code: String): NarrationLanguage? = entries.firstOrNull { it.code == code }
+    }
+}
 
 object BuiltInCharacters {
     const val NARRATOR_ID = "narrator"

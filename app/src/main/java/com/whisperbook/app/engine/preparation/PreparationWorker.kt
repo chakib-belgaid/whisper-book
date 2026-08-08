@@ -530,7 +530,11 @@ internal class PreparationStageRunner(
                         chapterId = chapterBatch.chapterId,
                         chapterOrdinal = chapterBatch.chapterOrdinal,
                         chapterTitle = chapterBatch.chapterTitle,
-                        passages = synthesisTasks(passage, voices),
+                        passages = synthesisTasks(
+                            passage = passage,
+                            voices = voices,
+                            languageCode = settings.narrationLanguageCode,
+                        ),
                     )
                     preparer.prepare(listOf(passageBatch))
                 }
@@ -847,6 +851,7 @@ internal class PreparationStageRunner(
     private suspend fun synthesisTasks(
         passage: PassageEntity,
         voices: List<com.whisperbook.app.domain.model.VoiceDescriptor>,
+        languageCode: String,
     ): List<PassageSynthesisTask> {
         val assignment = database.chapterVoiceAssignmentDao()
             .getForChapterAndCharacter(passage.chapterId, passage.speakerId)
@@ -870,6 +875,7 @@ internal class PreparationStageRunner(
             speed = assignment.speed,
             modelVersion = assignment.modelVersion,
             sampleRate = dependencies.expectedSampleRate,
+            languageCode = languageCode,
         ).map { unit ->
             PassageSynthesisTask(
                 passage = passage,

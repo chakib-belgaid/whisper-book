@@ -62,4 +62,32 @@ class SherpaKittenTtsEngineTest {
             engine.close()
         }
     }
+
+    @Test
+    fun frenchAndArabicLanguagePacksSynthesizeWithTheirLanguageCodes() = runBlocking {
+        val engine = SherpaKittenTtsEngine(ApplicationProvider.getApplicationContext())
+        try {
+            engine.warmUp().getOrThrow()
+            val voice = engine.voices().first()
+            listOf(
+                "fr" to "Il était une fois une bibliothèque silencieuse.",
+                "ar" to "كان يا ما كان، في مكتبة هادئة.",
+            ).forEach { (languageCode, text) ->
+                val audio = engine.synthesize(
+                    SynthesisRequest(
+                        text = text,
+                        voice = voice,
+                        speed = 1f,
+                        cacheKey = "instrumented-$languageCode-pack-test",
+                        languageCode = languageCode,
+                    ),
+                ).getOrThrow()
+
+                assertEquals(SherpaKittenTtsEngine.EXPECTED_SAMPLE_RATE, audio.sampleRate)
+                assertTrue(audio.pcm16.isNotEmpty())
+            }
+        } finally {
+            engine.close()
+        }
+    }
 }
