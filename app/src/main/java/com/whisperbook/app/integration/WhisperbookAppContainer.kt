@@ -119,7 +119,17 @@ class WhisperbookAppContainer(context: Context) : WhisperbookServices, Closeable
                 }
         }
         PlaybackRuntime.installCheckpointSink { cursor ->
-            database.playbackCheckpointDao().upsert(cursor.toEntity(System.currentTimeMillis()))
+            val checkpointedAt = System.currentTimeMillis()
+            database.playbackCheckpointDao().upsert(cursor.toEntity(checkpointedAt))
+            // Chapter generation can be cancelled when the listener switches books. Persist the
+            // book-scoped location immediately; only the percentage still waits for a final
+            // chapter duration below.
+            database.bookDao().updatePlaybackLocation(
+                bookId = cursor.bookId,
+                chapterId = cursor.chapterId,
+                passageId = cursor.passageId,
+                openedAtEpochMs = checkpointedAt,
+            )
             // The segment checkpoint is valid immediately, but the queued-prefix duration is not
             // a chapter denominator. Wait for the complete timeline before updating shelf progress.
             if (!cursor.chapterDurationIsFinal) return@installCheckpointSink
@@ -138,7 +148,7 @@ class WhisperbookAppContainer(context: Context) : WhisperbookServices, Closeable
                 chapterId = cursor.chapterId,
                 passageId = cursor.passageId,
                 progressFraction = bookProgress,
-                openedAtEpochMs = System.currentTimeMillis(),
+                openedAtEpochMs = checkpointedAt,
             )
         }
     }

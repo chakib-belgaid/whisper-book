@@ -59,14 +59,9 @@ fun WhisperbookNavHost(
                         appState.selectBook(it)
                         navController.navigate(WhisperbookDestination.BookDetails.route(it))
                     },
-                    onResume = {
-                        navController.navigate(
-                            if (!appState.canListen) {
-                                WhisperbookDestination.Processing.route
-                            } else {
-                                WhisperbookDestination.NowPlaying.route
-                            },
-                        )
+                    onResume = { bookId ->
+                        appState.selectBook(bookId)
+                        navController.navigate(WhisperbookDestination.NowPlaying.route)
                     },
                     onRemoveBook = appState::deleteBook,
                 )

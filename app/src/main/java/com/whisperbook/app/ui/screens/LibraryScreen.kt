@@ -53,7 +53,7 @@ fun LibraryScreen(
     appState: WhisperbookAppState,
     onImport: () -> Unit,
     onBook: (String) -> Unit,
-    onResume: () -> Unit,
+    onResume: (String) -> Unit,
     onRemoveBook: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -110,7 +110,7 @@ fun LibraryScreen(
                         StorySlider(current.progress, {}, enabled = false, modifier = Modifier.fillMaxWidth())
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                             EmbossedCircularButton(
-                                onClick = onResume,
+                                onClick = { onResume(current.id) },
                                 contentDescription = if (current.canListen) {
                                     "Resume ${current.title}"
                                 } else if (current.totalChapters > 0) {

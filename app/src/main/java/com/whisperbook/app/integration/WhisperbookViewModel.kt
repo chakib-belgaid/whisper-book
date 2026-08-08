@@ -44,8 +44,13 @@ class WhisperbookViewModel(
     private var voicePreviewJob: Job? = null
     private var chapterSelectionJob: Job? = null
     private var chapterSelectionRequest = 0L
+    private val selectedChapterIdsByBook = mutableMapOf<String, String>()
 
-    private val books = services.libraryRepository.observeBooks()
+    private val books = services.libraryRepository.observeBooks().stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.Eagerly,
+        initialValue = emptyList(),
+    )
     private val selectedBook: Flow<Book?> = combine(books, selectedBookId) { allBooks, bookId ->
         bookId?.let { id -> allBooks.firstOrNull { it.id == id } }
     }.distinctUntilChanged()
@@ -118,6 +123,10 @@ class WhisperbookViewModel(
     }
 
     val uiState: StateFlow<WhisperbookUiSnapshot> = combine(libraryState, sessionState, storageBytes) { library, session, bytes ->
+        val selectedBookId = library.selectedBook?.id
+        val selectedPlayback = session.playback?.takeIf { it.bookId == selectedBookId }
+        val selectedAudioProgress = session.pendingOperation.audioProgress
+            ?.takeIf { it.bookId == selectedBookId }
         WhisperbookUiSnapshot(
             books = library.books,
             selectedBook = library.selectedBook,
@@ -128,14 +137,16 @@ class WhisperbookViewModel(
             voices = services.availableVoices,
             preparation = session.preparation,
             settings = session.settings,
-            playback = session.playback,
+            // The Media3 service has one active queue, while every book has its own persisted
+            // checkpoint. Never project another book's live cursor onto the selected book's UI.
+            playback = selectedPlayback,
             loadingChapterId = session.pendingOperation.chapterId,
             isBusy = session.pendingOperation.operation.isBusy ||
-                session.pendingOperation.audioProgress != null,
-            statusMessage = session.pendingOperation.audioProgress?.let { progress ->
-                progress.statusMessage(library.chapters, session.playback)
+                selectedAudioProgress != null,
+            statusMessage = selectedAudioProgress?.let { progress ->
+                progress.statusMessage(library.chapters, selectedPlayback)
             } ?: session.pendingOperation.operation.statusMessage,
-            backgroundProgressFraction = session.pendingOperation.audioProgress?.progressFraction,
+            backgroundProgressFraction = selectedAudioProgress?.progressFraction,
             errorMessage = session.pendingOperation.operation.errorMessage,
             localStorageBytes = bytes,
             canRevertVoiceChange = session.revertibleVoiceChange != null,
@@ -153,7 +164,7 @@ class WhisperbookViewModel(
                 if (selected == null || currentBooks.none { it.id == selected }) {
                     val next = currentBooks.firstOrNull()
                     selectedBookId.value = next?.id
-                    selectedChapterId.value = next?.currentChapterId
+                    selectedChapterId.value = next?.let(::rememberedChapterId)
                 }
             }
         }
@@ -161,21 +172,31 @@ class WhisperbookViewModel(
             chapters.collect { currentChapters ->
                 val selected = selectedChapterId.value
                 if (selected == null || currentChapters.none { it.id == selected }) {
-                    selectedChapterId.value = currentChapters.firstOrNull()?.id
+                    selectedChapterId.value = currentChapters.firstOrNull()?.id.also { chapterId ->
+                        val bookId = selectedBookId.value
+                        if (bookId != null && chapterId != null) {
+                            selectedChapterIdsByBook[bookId] = chapterId
+                        }
+                    }
                 }
             }
         }
         viewModelScope.launch {
             services.playbackGateway.cursor.collect { cursor ->
                 cursor ?: return@collect
+                // Playback may keep publishing while the user browses another book. It must not
+                // pull navigation back to the active queue or replace that book's chapter choice.
+                if (cursor.bookId != selectedBookId.value) return@collect
                 loadingChapterId.value?.let { pendingChapterId ->
-                    if (cursor.bookId != selectedBookId.value || cursor.chapterId != pendingChapterId) {
+                    if (cursor.chapterId != pendingChapterId) {
                         return@collect
                     }
                     loadingChapterId.value = null
                 }
-                if (selectedBookId.value != cursor.bookId) selectedBookId.value = cursor.bookId
-                if (selectedChapterId.value != cursor.chapterId) selectedChapterId.value = cursor.chapterId
+                selectedChapterIdsByBook[cursor.bookId] = cursor.chapterId
+                if (selectedChapterId.value != cursor.chapterId) {
+                    selectedChapterId.value = cursor.chapterId
+                }
             }
         }
     }
@@ -184,13 +205,16 @@ class WhisperbookViewModel(
         if (bookId.isBlank() || selectedBookId.value == bookId) return
         cancelChapterSelection()
         selectedBookId.value = bookId
-        selectedChapterId.value = null
+        selectedChapterId.value = books.value
+            .firstOrNull { it.id == bookId }
+            ?.let(::rememberedChapterId)
     }
 
     fun selectChapter(chapterId: String) {
         if (chapterId.isBlank() || chapterId == selectedChapterId.value) return
         val bookId = selectedBookId.value ?: return
         if (uiState.value.chapters.none { it.id == chapterId }) return
+        selectedChapterIdsByBook[bookId] = chapterId
         selectedChapterId.value = chapterId
         openChapter(bookId, chapterId)
     }
@@ -202,6 +226,7 @@ class WhisperbookViewModel(
     fun importBook(uri: Uri) = launchOperation("Importing your book") {
         services.libraryRepository.importBook(uri).getOrThrow().also { bookId ->
             selectedBookId.value = bookId
+            selectedChapterIdsByBook.remove(bookId)
             selectedChapterId.value = null
             services.preparationCoordinator.enqueue(bookId)
         }
@@ -223,6 +248,7 @@ class WhisperbookViewModel(
         }
         services.preparationCoordinator.cancel(bookId)
         services.libraryRepository.deleteBook(bookId)
+        selectedChapterIdsByBook.remove(bookId)
         selectedBookId.value = null
         selectedChapterId.value = null
         "Book removed from this device."
@@ -295,6 +321,7 @@ class WhisperbookViewModel(
     }
 
     fun seekBy(deltaMs: Long) = launchOperation {
+        if (uiState.value.playback == null) return@launchOperation null
         services.playbackGateway.seekBy(deltaMs)
         null
     }
@@ -307,6 +334,7 @@ class WhisperbookViewModel(
     }
 
     fun seekToPassage(passageId: String) = launchOperation {
+        if (uiState.value.playback == null) return@launchOperation null
         services.playbackGateway.seekToPassage(passageId)
         null
     }
@@ -462,6 +490,7 @@ class WhisperbookViewModel(
     }
 
     private fun openChapter(bookId: String, chapterId: String): Job {
+        selectedChapterIdsByBook[bookId] = chapterId
         val chapterNumber = uiState.value.chapters.indexOfFirst { it.id == chapterId }
             .takeIf { it >= 0 }
             ?.plus(1)
@@ -512,6 +541,9 @@ class WhisperbookViewModel(
         loadingChapterId.value = null
         operation.value = OperationState()
     }
+
+    private fun rememberedChapterId(book: Book): String? =
+        selectedChapterIdsByBook[book.id] ?: book.currentChapterId
 
     private fun stopVoicePreview() {
         voicePreviewJob?.cancel()

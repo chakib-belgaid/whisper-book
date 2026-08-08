@@ -399,7 +399,9 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
             preparationFailed = false
         }
         chapterProgress = snapshot.chapterProgress
-        snapshot.playback?.let { playback ->
+        val selectedPlayback = snapshot.playback
+            ?.takeIf { playback -> snapshot.selectedBook == null || playback.bookId == snapshot.selectedBook.id }
+        selectedPlayback?.let { playback ->
             isPlaying = playback.isPlaying
             speed = playback.speed
             activePassageId = playback.passageId

@@ -1,5 +1,6 @@
 package com.whisperbook.app.ui
 
+import android.net.Uri
 import androidx.compose.runtime.remember
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -11,10 +12,16 @@ import androidx.compose.ui.test.performClick
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.rememberNavController
 import com.whisperbook.app.ui.navigation.WhisperbookDestination
+import com.whisperbook.app.domain.model.Book
+import com.whisperbook.app.domain.model.BookFormat
+import com.whisperbook.app.domain.model.Chapter
 import com.whisperbook.app.domain.model.PreparationStage
 import com.whisperbook.app.domain.model.PreparationState
+import com.whisperbook.app.domain.model.VoiceRegenerationScope
 import com.whisperbook.app.integration.WhisperbookUiSnapshot
 import com.whisperbook.app.ui.screens.WhisperbookAppState
+import com.whisperbook.app.ui.screens.WhisperbookUiActions
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Rule
 import org.junit.Test
@@ -185,6 +192,55 @@ class WhisperbookNavigationTest {
         composeRule.onNodeWithContentDescription("Remove The Moonlit Wood from library").assertExists()
     }
 
+    @Test
+    fun libraryNavigationSwitchesBooksAndReturnsToEachBooksOwnChapter() {
+        val bookA = navigationBook("book-a", "Book A", currentChapter = 2, chapterCount = 2)
+        val bookB = navigationBook("book-b", "Book B", currentChapter = 3, chapterCount = 3)
+        val books = listOf(bookA, bookB)
+        val chapters = mapOf(
+            bookA.id to navigationChapters(bookA.id, 2),
+            bookB.id to navigationChapters(bookB.id, 3),
+        )
+        val selectedBooks = mutableListOf<String>()
+        lateinit var appState: WhisperbookAppState
+        val actions = NavigationBookActions { bookId ->
+            selectedBooks += bookId
+            val book = books.first { it.id == bookId }
+            val bookChapters = chapters.getValue(bookId)
+            appState.synchronize(
+                WhisperbookUiSnapshot(
+                    books = books,
+                    selectedBook = book,
+                    chapters = bookChapters,
+                    selectedChapter = bookChapters.first { it.id == book.currentChapterId },
+                    preparation = PreparationState.Ready,
+                ),
+            )
+        }
+        appState = WhisperbookAppState(actions).apply {
+            synchronize(
+                WhisperbookUiSnapshot(
+                    books = books,
+                    selectedBook = bookA,
+                    chapters = chapters.getValue(bookA.id),
+                    selectedChapter = chapters.getValue(bookA.id)[1],
+                    preparation = PreparationState.Ready,
+                ),
+            )
+        }
+        setApp(WhisperbookDestination.Library.route, appState)
+
+        composeRule.onNodeWithContentDescription("Open Book B").performClick()
+        composeRule.onNodeWithContentDescription("Papercraft cover illustration for Book B").assertIsDisplayed()
+        composeRule.onNodeWithText("Chapter 3 of 3").assertIsDisplayed()
+
+        composeRule.runOnIdle { navController.popBackStack() }
+        composeRule.onNodeWithContentDescription("Resume Book A").performClick()
+        composeRule.onNodeWithContentDescription("Book A, chapter 2. Open book details").assertIsDisplayed()
+
+        assertEquals(listOf("book-b", "book-a"), selectedBooks)
+    }
+
     private fun setApp(
         startDestination: String = WhisperbookDestination.Welcome.route,
         appState: WhisperbookAppState = WhisperbookAppState(),
@@ -199,3 +255,71 @@ class WhisperbookNavigationTest {
         }
     }
 }
+
+private class NavigationBookActions(
+    private val onSelectBook: (String) -> Unit,
+) : WhisperbookUiActions {
+    override fun importBook(uri: Uri) = Unit
+    override fun retryPreparation() = Unit
+    override fun deleteSelectedBook() = Unit
+    override fun selectBook(bookId: String) = onSelectBook(bookId)
+    override fun selectChapter(chapterId: String) = Unit
+    override fun playPreviousChapter() = Unit
+    override fun playNextChapter() = Unit
+    override fun playSelectedChapter() = Unit
+    override fun playOrPause() = Unit
+    override fun seekByFraction(delta: Float) = Unit
+    override fun seekToFraction(fraction: Float) = Unit
+    override fun seekToPassage(passageId: String) = Unit
+    override fun cycleSpeed() = Unit
+    override fun cycleDefaultNarratorVoice() = Unit
+    override fun chooseDefaultNarratorVoice(voiceId: String) = Unit
+    override fun downloadLanguagePack(languageCode: String) = Unit
+    override fun selectNarrationLanguage(languageCode: String) = Unit
+    override fun cycleSleepTimer() = Unit
+    override fun cycleVoice(characterId: String) = Unit
+    override fun assignVoice(
+        characterId: String,
+        voiceId: String,
+        regenerationScope: VoiceRegenerationScope,
+    ) = Unit
+    override fun revertVoiceChange() = Unit
+    override fun previewCharacter(characterId: String) = Unit
+    override fun previewVoice(voiceId: String, characterName: String) = Unit
+    override fun setAutoScroll(enabled: Boolean) = Unit
+    override fun setKeepScreenAwake(enabled: Boolean) = Unit
+    override fun setLargerText(enabled: Boolean) = Unit
+    override fun completeOnboarding() = Unit
+}
+
+private fun navigationBook(
+    id: String,
+    title: String,
+    currentChapter: Int,
+    chapterCount: Int,
+) = Book(
+    id = id,
+    title = title,
+    author = "Test Author",
+    format = BookFormat.EPUB,
+    sourceUri = null,
+    privateSourcePath = null,
+    coverPath = null,
+    preparation = PreparationState.Ready,
+    currentChapterId = "$id-chapter-$currentChapter",
+    currentPassageId = null,
+    progressFraction = currentChapter.toFloat() / chapterCount,
+    lastOpenedAtEpochMs = 0L,
+    chapterCount = chapterCount,
+    currentChapterOrdinal = currentChapter - 1,
+)
+
+private fun navigationChapters(bookId: String, chapterCount: Int): List<Chapter> =
+    (1..chapterCount).map { number ->
+        Chapter(
+            id = "$bookId-chapter-$number",
+            bookId = bookId,
+            ordinal = number - 1,
+            title = "Chapter $number",
+        )
+    }
