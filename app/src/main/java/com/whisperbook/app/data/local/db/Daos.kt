@@ -90,6 +90,22 @@ interface BookDao {
         progressFraction: Float,
         openedAtEpochMs: Long,
     )
+
+    @Query(
+        """
+        UPDATE books
+        SET current_chapter_id = :chapterId,
+            current_passage_id = :passageId,
+            last_opened_at_epoch_ms = :openedAtEpochMs
+        WHERE id = :bookId
+        """,
+    )
+    suspend fun updatePlaybackLocation(
+        bookId: String,
+        chapterId: String,
+        passageId: String,
+        openedAtEpochMs: Long,
+    )
 }
 
 @Dao

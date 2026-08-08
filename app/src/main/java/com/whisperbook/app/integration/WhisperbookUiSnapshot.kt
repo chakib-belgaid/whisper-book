@@ -34,7 +34,9 @@ data class WhisperbookUiSnapshot(
     val hasBooks: Boolean get() = books.isNotEmpty()
     val isPlaying: Boolean get() = playback?.isPlaying == true
     val chapterProgress: Float
-        get() = playback?.let { cursor ->
+        get() = playback
+            ?.takeIf { cursor -> selectedBook == null || cursor.bookId == selectedBook.id }
+            ?.let { cursor ->
             if (cursor.chapterDurationMs <= 0L) 0f
             else cursor.chapterPositionMs.toFloat().div(cursor.chapterDurationMs).coerceIn(0f, 1f)
         } ?: selectedBook?.progressFraction.orZero()

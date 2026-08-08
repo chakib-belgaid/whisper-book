@@ -405,6 +405,168 @@ class WhisperbookViewModelTest {
     }
 
     @Test
+    fun switchingBooksRestoresEachBooksChapterAndIgnoresForeignPlaybackTicks() = runTest(dispatcher) {
+        val services = FakeServices().apply {
+            books.value = listOf(
+                book("book-a", currentChapterId = "a-2"),
+                book("book-b", currentChapterId = "b-3"),
+            )
+            chapters.value = mapOf(
+                "book-a" to listOf(
+                    Chapter("a-1", "book-a", 0, "A Beginning"),
+                    Chapter("a-2", "book-a", 1, "A Return"),
+                ),
+                "book-b" to listOf(
+                    Chapter("b-1", "book-b", 0, "B Beginning"),
+                    Chapter("b-2", "book-b", 1, "B Middle"),
+                    Chapter("b-3", "book-b", 2, "B Return"),
+                ),
+            )
+            characters.value = mapOf("book-a" to emptyList(), "book-b" to emptyList())
+        }
+        val viewModel = WhisperbookViewModel(services)
+        viewModel.uiState.test {
+            awaitItem()
+            advanceUntilIdle()
+            assertEquals("book-a", expectMostRecentItem().selectedBook?.id)
+            assertEquals("a-2", viewModel.uiState.value.selectedChapter?.id)
+
+            services.playback.value = cursor(
+                isPlaying = true,
+                bookId = "book-a",
+                chapterId = "a-2",
+                chapterPositionMs = 2_000L,
+            )
+            advanceUntilIdle()
+
+            viewModel.selectBook("book-b")
+            advanceUntilIdle()
+            assertEquals("book-b", expectMostRecentItem().selectedBook?.id)
+            assertEquals("b-3", viewModel.uiState.value.selectedChapter?.id)
+            assertEquals(null, viewModel.uiState.value.playback)
+
+            // The old book keeps ticking while its audio is active. That must not navigate back.
+            services.playback.value = cursor(
+                isPlaying = true,
+                bookId = "book-a",
+                chapterId = "a-2",
+                chapterPositionMs = 2_250L,
+            )
+            advanceUntilIdle()
+            assertEquals("book-b", viewModel.uiState.value.selectedBook?.id)
+            assertEquals("b-3", viewModel.uiState.value.selectedChapter?.id)
+
+            viewModel.playOrPause()
+            advanceUntilIdle()
+            assertEquals("playBook:book-b:b-3", services.events.last())
+
+            services.playback.value = cursor(
+                isPlaying = true,
+                bookId = "book-b",
+                chapterId = "b-3",
+                chapterPositionMs = 9_000L,
+            )
+            advanceUntilIdle()
+            viewModel.selectBook("book-a")
+            advanceUntilIdle()
+            assertEquals("a-2", viewModel.uiState.value.selectedChapter?.id)
+
+            viewModel.playOrPause()
+            advanceUntilIdle()
+            assertEquals("playBook:book-a:a-2", services.events.last())
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun unsavedChapterChoiceRemainsScopedToItsBookAcrossNavigation() = runTest(dispatcher) {
+        val services = FakeServices().apply {
+            books.value = listOf(
+                book("book-a", currentChapterId = "a-1"),
+                book("book-b", currentChapterId = "b-1"),
+            )
+            chapters.value = mapOf(
+                "book-a" to listOf(
+                    Chapter("a-1", "book-a", 0, "A Beginning"),
+                    Chapter("a-2", "book-a", 1, "A End"),
+                ),
+                "book-b" to listOf(
+                    Chapter("b-1", "book-b", 0, "B Beginning"),
+                    Chapter("b-2", "book-b", 1, "B Middle"),
+                    Chapter("b-3", "book-b", 2, "B End"),
+                ),
+            )
+            characters.value = mapOf("book-a" to emptyList(), "book-b" to emptyList())
+        }
+        val viewModel = WhisperbookViewModel(services)
+        viewModel.uiState.test {
+            awaitItem()
+            advanceUntilIdle()
+
+            viewModel.selectBook("book-b")
+            advanceUntilIdle()
+            viewModel.selectChapter("b-2")
+            advanceUntilIdle()
+            assertEquals("playBook:book-b:b-2", services.events.last())
+
+            viewModel.selectBook("book-a")
+            advanceUntilIdle()
+            viewModel.selectChapter("a-2")
+            advanceUntilIdle()
+            assertEquals("playBook:book-a:a-2", services.events.last())
+
+            viewModel.selectBook("book-b")
+            advanceUntilIdle()
+            assertEquals("b-2", viewModel.uiState.value.selectedChapter?.id)
+
+            viewModel.selectBook("book-a")
+            advanceUntilIdle()
+            assertEquals("a-2", viewModel.uiState.value.selectedChapter?.id)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun foreignPlaybackCannotSeekOrDriveTheSelectedBooksProgress() = runTest(dispatcher) {
+        val services = FakeServices().apply {
+            books.value = listOf(
+                book("book-a", currentChapterId = "a-1").copy(progressFraction = 0.25f),
+                book("book-b", currentChapterId = "b-1").copy(progressFraction = 0.75f),
+            )
+            chapters.value = mapOf(
+                "book-a" to listOf(Chapter("a-1", "book-a", 0, "A Beginning")),
+                "book-b" to listOf(Chapter("b-1", "book-b", 0, "B Beginning")),
+            )
+            characters.value = mapOf("book-a" to emptyList(), "book-b" to emptyList())
+            playback.value = cursor(
+                isPlaying = true,
+                bookId = "book-a",
+                chapterId = "a-1",
+                chapterPositionMs = 900L,
+            )
+        }
+        val viewModel = WhisperbookViewModel(services)
+        viewModel.uiState.test {
+            awaitItem()
+            advanceUntilIdle()
+
+            viewModel.selectBook("book-b")
+            advanceUntilIdle()
+            val selectedBook = expectMostRecentItem()
+            assertEquals(null, selectedBook.playback)
+            assertEquals(0.75f, selectedBook.chapterProgress)
+
+            val eventCount = services.events.size
+            viewModel.seekBy(15_000L)
+            viewModel.seekToFraction(0.5f)
+            viewModel.seekToPassage("b-passage")
+            advanceUntilIdle()
+            assertEquals(eventCount, services.events.size)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
     fun storageUsageIsNotRescannedForEveryProgressCheckpoint() = runTest(dispatcher) {
         val services = FakeServices()
         val viewModel = WhisperbookViewModel(services)
@@ -468,13 +630,18 @@ class WhisperbookViewModelTest {
         }
     }
 
-    private fun cursor(isPlaying: Boolean, chapterId: String = "chapter-a") = PlaybackCursor(
-        bookId = "book-a",
+    private fun cursor(
+        isPlaying: Boolean,
+        bookId: String = "book-a",
+        chapterId: String = "chapter-a",
+        chapterPositionMs: Long = 100L,
+    ) = PlaybackCursor(
+        bookId = bookId,
         chapterId = chapterId,
         passageId = "passage-a",
         segmentId = "segment-a",
         segmentPositionMs = 100,
-        chapterPositionMs = 100,
+        chapterPositionMs = chapterPositionMs,
         chapterDurationMs = 1_000,
         isPlaying = isPlaying,
         speed = 1f,
@@ -628,7 +795,7 @@ private class FakeServices : WhisperbookServices {
     }
 }
 
-private fun book(id: String) = Book(
+private fun book(id: String, currentChapterId: String = "chapter-a") = Book(
     id = id,
     title = "The Moonlit Wood",
     author = "E. Wren",
@@ -637,7 +804,7 @@ private fun book(id: String) = Book(
     privateSourcePath = null,
     coverPath = null,
     preparation = PreparationState.Ready,
-    currentChapterId = "chapter-a",
+    currentChapterId = currentChapterId,
     currentPassageId = null,
     progressFraction = 0f,
     lastOpenedAtEpochMs = 1L,

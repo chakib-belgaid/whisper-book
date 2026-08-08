@@ -402,6 +402,52 @@ class WhisperbookAppStateTest {
         assertEquals("passage-2", state.currentPassage?.id)
         assertEquals("The passage being read now.", state.currentPassage?.text)
     }
+
+    @Test
+    fun `foreign playback cursor does not overwrite the selected books ui state`() {
+        val selectedBook = Book(
+            id = "book-b",
+            title = "Book B",
+            author = "Author B",
+            format = BookFormat.EPUB,
+            sourceUri = null,
+            privateSourcePath = null,
+            coverPath = null,
+            preparation = PreparationState.Ready,
+            currentChapterId = "b-1",
+            currentPassageId = null,
+            progressFraction = 0.65f,
+            lastOpenedAtEpochMs = 2L,
+        )
+        val selectedChapter = Chapter("b-1", "book-b", 0, "Book B Chapter")
+        val state = WhisperbookAppState()
+
+        state.synchronize(
+            WhisperbookUiSnapshot(
+                books = listOf(selectedBook),
+                selectedBook = selectedBook,
+                chapters = listOf(selectedChapter),
+                selectedChapter = selectedChapter,
+                playback = PlaybackCursor(
+                    bookId = "book-a",
+                    chapterId = "a-4",
+                    passageId = "a-passage",
+                    segmentId = "a-segment",
+                    segmentPositionMs = 8_000L,
+                    chapterPositionMs = 40_000L,
+                    chapterDurationMs = 50_000L,
+                    isPlaying = true,
+                    speed = 1f,
+                ),
+            ),
+        )
+
+        assertEquals("Book B", state.currentBookTitle)
+        assertEquals("Book B Chapter", state.currentChapterTitle)
+        assertEquals(0.65f, state.chapterProgress)
+        assertFalse(state.isPlaying)
+        assertEquals(0L, state.chapterPositionMs)
+    }
 }
 
 private fun chapterWithPassage(
