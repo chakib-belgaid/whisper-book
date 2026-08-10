@@ -7,7 +7,6 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.wrapContentSize
@@ -19,9 +18,7 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.clearAndSetSemantics
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import com.whisperbook.app.R
 import com.whisperbook.app.ui.theme.WhisperbookTheme
 
@@ -68,29 +65,10 @@ fun TheatreHero(
                 .padding(top = 38.dp)
                 .clearAndSetSemantics { },
         )
-        Image(
-            painter = painterResource(R.drawable.theatre_frame),
-            contentDescription = null,
-            contentScale = ContentScale.FillBounds,
-            modifier = Modifier
-                .fillMaxSize()
-                .clearAndSetSemantics { },
+        TheatreFrameOverlay(
+            title = title,
+            modifier = Modifier.fillMaxSize(),
         )
-        if (title != null) {
-            AssetFittedText(
-                text = title,
-                color = colors.ink,
-                style = WhisperbookTheme.typography.title,
-                minFontSize = 10.sp,
-                maxLines = 2,
-                textAlign = TextAlign.Center,
-                modifier = Modifier
-                    .align(Alignment.TopCenter)
-                    .fillMaxWidth(TheatreTitleSafeWidthFraction)
-                    .height(44.dp)
-                    .padding(top = 8.dp),
-            )
-        }
         if (ribbonText != null) {
             RibbonTitle(
                 title = ribbonText,

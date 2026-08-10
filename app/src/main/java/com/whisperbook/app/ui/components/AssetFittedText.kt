@@ -12,9 +12,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.sp
 
-/** Horizontal portion of theatre_frame.png reserved for the center title plaque. */
-internal const val TheatreTitleSafeWidthFraction = 0.44f
-
 /**
  * Keeps dynamic copy inside decorative artwork by sizing the type against the
  * actual layout constraints. Text only truncates after reaching [minFontSize].

@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -50,15 +51,15 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.whisperbook.app.R
-import com.whisperbook.app.ui.components.AssetFittedText
 import com.whisperbook.app.ui.components.ChapterNavigationButton
 import com.whisperbook.app.ui.components.EmbossedCircularButton
 import com.whisperbook.app.ui.components.LeafOrnament
 import com.whisperbook.app.ui.components.PaperFold
 import com.whisperbook.app.ui.components.PaperProgressBar
 import com.whisperbook.app.ui.components.ParchmentPanel
-import com.whisperbook.app.ui.components.TheatreTitleSafeWidthFraction
+import com.whisperbook.app.ui.components.TheatreFrameOverlay
 import com.whisperbook.app.ui.components.paperClickable
+import com.whisperbook.app.ui.components.theatrePlaqueHeight
 import com.whisperbook.app.ui.theme.WhisperbookTheme
 
 @Composable
@@ -92,7 +93,11 @@ fun NowPlayingScreen(
     BoxWithConstraints(
         modifier = modifier.fillMaxSize().padding(contentPadding).testTag("now-playing-screen"),
     ) {
-        val theatreHeight = ((maxHeight - 49.dp) * .47f).coerceIn(205.dp, 245.dp)
+        val theatreHeight = if (maxHeight < 540.dp) {
+            ((maxHeight - 49.dp) * .42f).coerceIn(180.dp, 195.dp)
+        } else {
+            ((maxHeight - 49.dp) * .47f).coerceIn(205.dp, 245.dp)
+        }
         val passageInTheatre = maxHeight < 646.dp
         Column(Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
             PlayerHeader(onSettings = onSettings)
@@ -110,7 +115,7 @@ fun NowPlayingScreen(
                 onVoiceCast = onVoiceCast,
                 onCurrentChapter = onCurrentChapter,
                 onChooseChapter = { showChapterPicker = true },
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.heightIn(max = 360.dp),
             )
         }
     }
@@ -161,19 +166,14 @@ private fun PlayerTheatre(
     onCurrentChapter: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Box(
+    BoxWithConstraints(
         modifier = modifier
             .fillMaxWidth()
             .paperClickable(onClick = onBookDetails, role = Role.Button, fold = PaperFold.Card)
             .semantics { contentDescription = "$bookTitle, chapter $chapterNumber. Open book details" }
             .testTag("player-theatre"),
     ) {
-        Image(
-            painter = painterResource(R.drawable.theatre_frame),
-            contentDescription = null,
-            contentScale = ContentScale.Crop,
-            modifier = Modifier.fillMaxSize(),
-        )
+        val chapterBadgeTop = theatrePlaqueHeight(maxWidth) * 0.88f
         Image(
             painter = painterResource(R.drawable.scene_moonlit_wood),
             contentDescription = "$bookTitle chapter artwork",
@@ -189,27 +189,22 @@ private fun PlayerTheatre(
             contentScale = ContentScale.FillBounds,
             modifier = Modifier.fillMaxWidth().padding(horizontal = 42.dp).align(Alignment.TopCenter).padding(top = 55.dp).height(44.dp),
         )
-        AssetFittedText(
-            text = bookTitle,
-            color = WhisperbookTheme.colors.ink,
-            style = WhisperbookTheme.typography.display.copy(fontSize = 21.sp, lineHeight = 24.sp),
-            minFontSize = 10.sp,
-            maxLines = 2,
-            textAlign = TextAlign.Center,
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .fillMaxWidth(TheatreTitleSafeWidthFraction)
-                .height(38.dp)
-                .padding(top = 8.dp),
+        TheatreFrameOverlay(
+            title = bookTitle,
+            modifier = Modifier.fillMaxSize(),
+            titleStyle = WhisperbookTheme.typography.display.copy(fontSize = 21.sp, lineHeight = 24.sp),
+            plaqueModifier = Modifier.testTag("player-title-plaque"),
+            titleModifier = Modifier.testTag("player-book-title"),
         )
         Row(
             modifier = Modifier
                 .align(Alignment.TopCenter)
-                .padding(top = 39.dp)
+                .padding(top = chapterBadgeTop)
                 .clip(RoundedCornerShape(6.dp))
                 .background(WhisperbookTheme.colors.elara)
                 .border(1.dp, WhisperbookTheme.colors.ornament, RoundedCornerShape(6.dp))
-                .padding(horizontal = 17.dp, vertical = 3.dp),
+                .padding(horizontal = 17.dp, vertical = 3.dp)
+                .testTag("player-chapter-badge"),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             LeafOrnament(Modifier.size(width = 18.dp, height = 9.dp), WhisperbookTheme.colors.ornament)
@@ -364,22 +359,24 @@ private fun PlayerControlDeck(
                 modifier = Modifier.weight(1f),
             )
         }
-        Row(Modifier.fillMaxWidth().height(18.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-            LeafOrnament(Modifier.size(width = 22.dp, height = 10.dp), WhisperbookTheme.colors.outline)
-            Text("Cast for this chapter", color = WhisperbookTheme.colors.ink, style = WhisperbookTheme.typography.title.copy(fontSize = 13.sp, lineHeight = 16.sp), textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = 8.dp))
-            LeafOrnament(Modifier.size(width = 22.dp, height = 10.dp), WhisperbookTheme.colors.outline)
-        }
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(66.dp)
-                .paperClickable(onClick = onVoiceCast, role = Role.Button, fold = PaperFold.Card)
-                .semantics { contentDescription = "Open voice cast" },
-            horizontalArrangement = Arrangement.SpaceEvenly,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            appState.cast.take(3).forEach { member ->
-                PlayerCastMedallion(member.character, member.portraitRes, speakerColor(member.role))
+        if (appState.cast.isNotEmpty()) {
+            Row(Modifier.fillMaxWidth().height(18.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                LeafOrnament(Modifier.size(width = 22.dp, height = 10.dp), WhisperbookTheme.colors.outline)
+                Text("Cast for this chapter", color = WhisperbookTheme.colors.ink, style = WhisperbookTheme.typography.title.copy(fontSize = 13.sp, lineHeight = 16.sp), textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = 8.dp))
+                LeafOrnament(Modifier.size(width = 22.dp, height = 10.dp), WhisperbookTheme.colors.outline)
+            }
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(66.dp)
+                    .paperClickable(onClick = onVoiceCast, role = Role.Button, fold = PaperFold.Card)
+                    .semantics { contentDescription = "Open voice cast" },
+                horizontalArrangement = Arrangement.SpaceEvenly,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                appState.cast.take(3).forEach { member ->
+                    PlayerCastMedallion(member.character, member.portraitRes, speakerColor(member.role))
+                }
             }
         }
         Row(

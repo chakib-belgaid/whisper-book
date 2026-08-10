@@ -35,6 +35,7 @@ import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -44,6 +45,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.contentDescription
@@ -51,16 +54,16 @@ import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import com.whisperbook.app.R
 import com.whisperbook.app.ui.components.PapercraftButton
 import com.whisperbook.app.ui.components.PapercraftButtonVariant
 import com.whisperbook.app.ui.components.ParchmentPanel
-import com.whisperbook.app.ui.components.AssetFittedText
-import com.whisperbook.app.ui.components.TheatreTitleSafeWidthFraction
+import com.whisperbook.app.ui.components.TheatreFrameOverlay
 import com.whisperbook.app.ui.theme.WhisperbookTheme
-import androidx.core.content.ContextCompat
 import kotlinx.coroutines.delay
 import kotlin.math.roundToInt
 
@@ -70,6 +73,16 @@ private val PreparationLabels = listOf(
     "Assigning voices",
     "Ready to listen",
 )
+
+private const val ProcessingReferenceWidthDp = 400f
+private const val ProcessingMaximumScale = 1.8f
+
+/**
+ * Keeps the illustrated processing composition legible when Android display sizing exposes a
+ * phone as a very wide logical viewport. Regular phone widths remain exactly 1:1.
+ */
+internal fun processingContentScale(maxWidthDp: Float): Float =
+    (maxWidthDp / ProcessingReferenceWidthDp).coerceIn(1f, ProcessingMaximumScale)
 
 @Composable
 fun ProcessingScreen(
@@ -82,6 +95,7 @@ fun ProcessingScreen(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
+    val baseDensity = LocalDensity.current
     val notificationPermission = rememberLauncherForActivityResult(
         ActivityResultContracts.RequestPermission(),
     ) { }
@@ -94,101 +108,116 @@ fun ProcessingScreen(
         }
     }
 
-    Column(
-        modifier = modifier
-            .fillMaxSize()
-            .padding(contentPadding)
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 20.dp, vertical = 8.dp),
-        horizontalAlignment = Alignment.CenterHorizontally,
+    BoxWithConstraints(
+        modifier = modifier.fillMaxSize(),
     ) {
-        Text(
-            text = "Preparing your audiobook",
-            color = WhisperbookTheme.colors.onStage,
-            style = WhisperbookTheme.typography.display.copy(fontSize = 29.sp, lineHeight = 34.sp),
-            textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth(),
+        val contentScale = processingContentScale(maxWidth.value)
+        val responsiveDensity = Density(
+            density = baseDensity.density * contentScale,
+            fontScale = baseDensity.fontScale,
         )
-        Spacer(Modifier.height(5.dp))
+        CompositionLocalProvider(LocalDensity provides responsiveDensity) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(contentPadding)
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 20.dp, vertical = 8.dp)
+                    .testTag("processing-screen"),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    text = "Preparing your audiobook",
+                    color = WhisperbookTheme.colors.onStage,
+                    style = WhisperbookTheme.typography.display.copy(fontSize = 29.sp, lineHeight = 34.sp),
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth().testTag("processing-header"),
+                )
+                Spacer(Modifier.height(5.dp))
 
-        if (appState.preparationFailed || appState.importError != null) {
-            PreparationFailure(
-                message = appState.importError
-                    ?: "Preparation stopped before the audiobook was ready.",
-                isBusy = appState.isBusy,
-                onRetry = onRetry,
-                onBackToImport = onBackToImport,
-            )
-            return@Column
-        }
-
-        ProcessingTheatre(
-            title = appState.currentBookTitle,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Spacer(Modifier.height(1.dp))
-        Text(
-            text = "${(appState.preparationProgress * 100).roundToInt()}%",
-            color = WhisperbookTheme.colors.onStage,
-            style = WhisperbookTheme.typography.display.copy(fontSize = 53.sp, lineHeight = 55.sp),
-            textAlign = TextAlign.Center,
-            modifier = Modifier.semantics {
-                contentDescription = "${(appState.preparationProgress * 100).roundToInt()} percent prepared"
-            },
-        )
-        Spacer(Modifier.height(3.dp))
-        StoryProgressBar(appState.preparationProgress)
-        Spacer(Modifier.height(10.dp))
-
-        ParchmentPanel(
-            modifier = Modifier.fillMaxWidth(),
-            shape = RoundedCornerShape(18.dp),
-            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 11.dp),
-        ) {
-            PreparationStepper(
-                currentStage = appState.preparationStage,
-                failed = false,
-            )
-        }
-        Spacer(Modifier.height(10.dp))
-        PapercraftButton(
-            text = if (appState.preparationStage >= 3) {
-                "Listen now"
-            } else {
-                "Continue in background"
-            },
-            onClick = if (appState.preparationStage >= 3) {
-                onReady
-            } else {
-                {
-                    if (
-                        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                        ContextCompat.checkSelfPermission(
-                            context,
-                            Manifest.permission.POST_NOTIFICATIONS,
-                        ) != PackageManager.PERMISSION_GRANTED
-                    ) {
-                        notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
-                    }
-                    onContinueInBackground()
+                if (appState.preparationFailed || appState.importError != null) {
+                    PreparationFailure(
+                        message = appState.importError
+                            ?: "Preparation stopped before the audiobook was ready.",
+                        isBusy = appState.isBusy,
+                        onRetry = onRetry,
+                        onBackToImport = onBackToImport,
+                    )
+                    return@Column
                 }
-            },
-            variant = PapercraftButtonVariant.Accent,
-            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-            isLoading = appState.isBusy,
-            loadingDescription = appState.statusMessage ?: "Preparing your audiobook",
-        )
-        if (appState.preparationStage >= 3) {
-            Text(
-                text = "Playback starts with the opening lines while the rest records in the background.",
-                color = WhisperbookTheme.colors.onStage,
-                style = WhisperbookTheme.typography.label,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp),
-            )
+
+                ProcessingTheatre(
+                    title = appState.currentBookTitle,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(1.dp))
+                Text(
+                    text = "${(appState.preparationProgress * 100).roundToInt()}%",
+                    color = WhisperbookTheme.colors.onStage,
+                    style = WhisperbookTheme.typography.display.copy(fontSize = 53.sp, lineHeight = 55.sp),
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.semantics {
+                        contentDescription = "${(appState.preparationProgress * 100).roundToInt()} percent prepared"
+                    },
+                )
+                Spacer(Modifier.height(3.dp))
+                StoryProgressBar(appState.preparationProgress)
+                Spacer(Modifier.height(10.dp))
+
+                ParchmentPanel(
+                    modifier = Modifier.fillMaxWidth().testTag("processing-steps"),
+                    shape = RoundedCornerShape(18.dp),
+                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 11.dp),
+                ) {
+                    PreparationStepper(
+                        currentStage = appState.preparationStage,
+                        failed = false,
+                    )
+                }
+                Spacer(Modifier.height(10.dp))
+                PapercraftButton(
+                    text = if (appState.preparationStage >= 3) {
+                        "Listen now"
+                    } else {
+                        "Continue in background"
+                    },
+                    onClick = if (appState.preparationStage >= 3) {
+                        onReady
+                    } else {
+                        {
+                            if (
+                                Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                                ContextCompat.checkSelfPermission(
+                                    context,
+                                    Manifest.permission.POST_NOTIFICATIONS,
+                                ) != PackageManager.PERMISSION_GRANTED
+                            ) {
+                                notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                            }
+                            onContinueInBackground()
+                        }
+                    },
+                    variant = PapercraftButtonVariant.Accent,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp)
+                        .testTag("processing-primary-action"),
+                    isLoading = appState.isBusy,
+                    loadingDescription = appState.statusMessage ?: "Preparing your audiobook",
+                )
+                if (appState.preparationStage >= 3) {
+                    Text(
+                        text = "Playback starts with the opening lines while the rest records in the background.",
+                        color = WhisperbookTheme.colors.onStage,
+                        style = WhisperbookTheme.typography.label,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 18.dp),
+                    )
+                }
+                Spacer(Modifier.height(8.dp))
+                OnDevicePromise()
+            }
         }
-        Spacer(Modifier.height(8.dp))
-        OnDevicePromise()
     }
 }
 
@@ -200,17 +229,12 @@ private fun ProcessingTheatre(
     Box(
         modifier = modifier
             .height(225.dp)
+            .testTag("processing-theatre")
             .semantics(mergeDescendants = true) {
                 contentDescription = "$title is being prepared in the papercraft story workshop"
             },
         contentAlignment = Alignment.TopCenter,
     ) {
-        Image(
-            painter = painterResource(R.drawable.theatre_frame),
-            contentDescription = null,
-            contentScale = ContentScale.FillBounds,
-            modifier = Modifier.fillMaxSize(),
-        )
         Image(
             painter = painterResource(R.drawable.scene_book_machine),
             contentDescription = null,
@@ -222,17 +246,12 @@ private fun ProcessingTheatre(
                 .height(142.dp)
                 .clip(RoundedCornerShape(topStart = 60.dp, topEnd = 60.dp, bottomStart = 5.dp, bottomEnd = 5.dp)),
         )
-        AssetFittedText(
-            text = title,
-            color = WhisperbookTheme.colors.ink,
-            style = WhisperbookTheme.typography.title.copy(fontSize = 24.sp, lineHeight = 28.sp),
-            minFontSize = 10.sp,
-            maxLines = 2,
-            textAlign = TextAlign.Center,
-            modifier = Modifier
-                .fillMaxWidth(TheatreTitleSafeWidthFraction)
-                .height(50.dp)
-                .padding(top = 10.dp, bottom = 4.dp),
+        TheatreFrameOverlay(
+            title = title,
+            modifier = Modifier.fillMaxSize(),
+            titleStyle = WhisperbookTheme.typography.title.copy(fontSize = 24.sp, lineHeight = 28.sp),
+            plaqueModifier = Modifier.testTag("processing-title-plaque"),
+            titleModifier = Modifier.testTag("processing-book-title"),
         )
     }
 }
