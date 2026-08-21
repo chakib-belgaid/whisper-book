@@ -157,7 +157,7 @@ fun WhisperbookApp(
                             detail = if (operationTakesPriority) {
                                 "Running in the background — you can keep using the app."
                             } else {
-                                preparation?.message ?: "Recording privately on this device"
+                                preparation?.message ?: "Preparing privately on this device"
                             },
                             progressFraction = if (operationTakesPriority) {
                                 appState.backgroundProgressFraction
@@ -231,7 +231,7 @@ private fun BackgroundWorkStatus(
 
 private fun PreparationState.backgroundTitle(): String = when {
     stage == PreparationStage.PREPARING_AUDIO && totalUnits > 0 ->
-        "Recorded ${completedUnits.coerceIn(0, totalUnits)} of $totalUnits chapters"
+        "Prepared ${completedUnits.coerceIn(0, totalUnits)} of $totalUnits chapters"
     stage == PreparationStage.READING_CHAPTERS && totalUnits > 0 ->
         "Reading chapter ${completedUnits.coerceIn(0, totalUnits)} of $totalUnits"
     stage == PreparationStage.FINDING_CHARACTERS -> "Finding story voices"
@@ -266,6 +266,8 @@ private class ViewModelUiActions(
         viewModel.retryPreparation()
     }
     override fun deleteSelectedBook() = viewModel.deleteSelectedBook().let { Unit }
+    override fun exportSelectedBook(destination: android.net.Uri) =
+        viewModel.exportSelectedBook(destination).let { Unit }
     override fun selectBook(bookId: String) = viewModel.selectBook(bookId)
     override fun selectChapter(chapterId: String) = viewModel.selectChapter(chapterId)
     override fun playPreviousChapter() = viewModel.playPreviousChapter()
@@ -275,11 +277,17 @@ private class ViewModelUiActions(
     override fun seekByFraction(delta: Float) = viewModel.seekBy(if (delta < 0f) -15_000L else 15_000L).let { Unit }
     override fun seekToFraction(fraction: Float) = viewModel.seekToFraction(fraction).let { Unit }
     override fun seekToPassage(passageId: String) = viewModel.seekToPassage(passageId).let { Unit }
+    override fun correctPassageSpeaker(
+        passageId: String,
+        speakerId: String,
+        scope: com.whisperbook.app.domain.model.SpeakerCorrectionScope,
+    ) = viewModel.correctPassageSpeaker(passageId, speakerId, scope).let { Unit }
     override fun cycleSpeed() = viewModel.cycleSpeed()
-    override fun cycleDefaultNarratorVoice() = viewModel.cycleDefaultNarratorVoice()
-    override fun chooseDefaultNarratorVoice(voiceId: String) = viewModel.chooseDefaultNarratorVoice(voiceId)
-    override fun downloadLanguagePack(languageCode: String) = viewModel.downloadLanguagePack(languageCode).let { Unit }
-    override fun selectNarrationLanguage(languageCode: String) = viewModel.selectNarrationLanguage(languageCode).let { Unit }
+    override fun cycleNarrationChunkSize() = viewModel.cycleNarrationChunkSize()
+    override fun downloadLanguagePack(languageCode: String) =
+        viewModel.downloadLanguagePack(languageCode).let { Unit }
+    override fun selectNarrationLanguage(languageCode: String) =
+        viewModel.selectNarrationLanguage(languageCode).let { Unit }
     override fun cycleSleepTimer() = viewModel.cycleSleepTimer()
     override fun cycleVoice(characterId: String) = viewModel.cycleVoice(characterId)
     override fun assignVoice(

@@ -28,6 +28,7 @@ import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material.icons.filled.SkipPrevious
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.GraphicEq
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -69,9 +70,11 @@ fun SpeakerPassageCard(
     isActive: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    onChangeAttributedVoice: (() -> Unit)? = null,
     progress: Float = 0f,
     activeLabel: String = "Now speaking",
     playPassageDescription: String = "Play passage read by $speakerName",
+    changeAttributedVoiceDescription: String = "Correct attributed voice for $speakerName",
 ) {
     val colors = WhisperbookTheme.colors
     val shape = WhisperbookTheme.shapes.card
@@ -120,6 +123,23 @@ fun SpeakerPassageCard(
                     Spacer(Modifier.width(5.dp))
                     LeafOrnament(Modifier.size(width = 19.dp, height = 10.dp), accentColor.copy(alpha = .62f))
                     Spacer(Modifier.weight(1f))
+                    onChangeAttributedVoice?.let { onCorrect ->
+                        Row(
+                            modifier = Modifier
+                                .clip(RoundedCornerShape(50))
+                                .background(colors.paper)
+                                .border(1.dp, accentColor.copy(alpha = 0.55f), RoundedCornerShape(50))
+                                .paperClickable(onClick = onCorrect, role = Role.Button, fold = PaperFold.Control)
+                                .semantics { contentDescription = changeAttributedVoiceDescription }
+                                .padding(horizontal = 7.dp, vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Icon(Icons.Outlined.Edit, contentDescription = null, tint = accentColor, modifier = Modifier.size(14.dp))
+                            Spacer(Modifier.width(3.dp))
+                            Text("Correct", color = accentColor, style = WhisperbookTheme.typography.label.copy(fontSize = 10.sp))
+                        }
+                        Spacer(Modifier.width(6.dp))
+                    }
                     if (isActive) {
                         Icon(Icons.Outlined.GraphicEq, contentDescription = null, tint = accentColor, modifier = Modifier.size(19.dp))
                         Spacer(Modifier.width(4.dp))

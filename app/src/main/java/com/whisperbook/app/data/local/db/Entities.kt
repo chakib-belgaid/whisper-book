@@ -38,6 +38,12 @@ data class BookEntity(
     val progressFraction: Float,
     @ColumnInfo(name = "last_opened_at_epoch_ms")
     val lastOpenedAtEpochMs: Long,
+    @ColumnInfo(name = "narration_language_code", defaultValue = "'en'")
+    val narrationLanguageCode: String = "en",
+    @ColumnInfo(name = "narration_profile_revision", defaultValue = "-1")
+    val narrationProfileRevision: Long = 0L,
+    @ColumnInfo(name = "narration_profile_seeded", defaultValue = "0")
+    val narrationProfileSeeded: Boolean = true,
 )
 
 @Entity(
@@ -55,6 +61,7 @@ data class BookEntity(
     indices = [
         Index(value = ["book_id"]),
         Index(value = ["book_id", "ordinal"], unique = true),
+        Index(value = ["id", "book_id"], unique = true),
     ],
 )
 data class ChapterEntity(
@@ -83,6 +90,7 @@ data class ChapterEntity(
     indices = [
         Index(value = ["book_id"]),
         Index(value = ["book_id", "display_name"]),
+        Index(value = ["id", "book_id"], unique = true),
     ],
 )
 data class StoryCharacterEntity(
@@ -193,32 +201,42 @@ data class VoiceAssignmentEntity(
     val speed: Float,
 )
 
-/** A chapter-specific voice kept when a later voice change starts partway through a book. */
+/** One row in the complete, authoritative voice set for a custom chapter. */
 @Entity(
     tableName = "chapter_voice_assignments",
     primaryKeys = ["chapter_id", "character_id"],
     foreignKeys = [
         ForeignKey(
-            entity = ChapterEntity::class,
+            entity = BookEntity::class,
             parentColumns = ["id"],
-            childColumns = ["chapter_id"],
+            childColumns = ["book_id"],
+            onDelete = ForeignKey.CASCADE,
+            onUpdate = ForeignKey.CASCADE,
+        ),
+        ForeignKey(
+            entity = ChapterEntity::class,
+            parentColumns = ["id", "book_id"],
+            childColumns = ["chapter_id", "book_id"],
             onDelete = ForeignKey.CASCADE,
             onUpdate = ForeignKey.CASCADE,
         ),
         ForeignKey(
             entity = StoryCharacterEntity::class,
-            parentColumns = ["id"],
-            childColumns = ["character_id"],
+            parentColumns = ["id", "book_id"],
+            childColumns = ["character_id", "book_id"],
             onDelete = ForeignKey.CASCADE,
             onUpdate = ForeignKey.CASCADE,
         ),
     ],
     indices = [
-        Index(value = ["chapter_id"]),
-        Index(value = ["character_id"]),
+        Index(value = ["book_id"]),
+        Index(value = ["chapter_id", "book_id"]),
+        Index(value = ["character_id", "book_id"]),
     ],
 )
 data class ChapterVoiceAssignmentEntity(
+    @ColumnInfo(name = "book_id")
+    val bookId: String = "",
     @ColumnInfo(name = "chapter_id")
     val chapterId: String,
     @ColumnInfo(name = "character_id")

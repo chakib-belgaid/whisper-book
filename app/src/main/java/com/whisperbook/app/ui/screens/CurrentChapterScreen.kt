@@ -29,6 +29,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -54,6 +55,11 @@ import com.whisperbook.app.ui.components.paperClickable
 import com.whisperbook.app.ui.components.paperToggleable
 import com.whisperbook.app.ui.theme.WhisperbookTheme
 
+private data class PendingSpeakerCorrection(
+    val passage: PassageUi,
+    val target: CastMemberUi,
+)
+
 @Composable
 fun CurrentChapterScreen(
     contentPadding: PaddingValues,
@@ -66,6 +72,8 @@ fun CurrentChapterScreen(
     val activeIndex = appState.passages.indexOfFirst { it.id == appState.activePassageId }.coerceAtLeast(0)
     var hasObservedInitialPassage by rememberSaveable { mutableStateOf(false) }
     var showChapterPicker by rememberSaveable { mutableStateOf(false) }
+    var correctingPassageId by rememberSaveable { mutableStateOf<String?>(null) }
+    var pendingSpeakerCorrection by remember { mutableStateOf<PendingSpeakerCorrection?>(null) }
     LaunchedEffect(activeIndex, appState.autoScroll) {
         if (!hasObservedInitialPassage) {
             hasObservedInitialPassage = true
@@ -124,6 +132,9 @@ fun CurrentChapterScreen(
                         accentColor = speakerColor(passage.speaker),
                         isActive = passage.id == appState.activePassageId,
                         onClick = { appState.selectPassage(passage.id) },
+                        onChangeAttributedVoice = appState.cast
+                            .takeIf { it.isNotEmpty() && passage.speakerId.isNotBlank() }
+                            ?.let { { correctingPassageId = passage.id } },
                         progress = if (passage.id == appState.activePassageId && appState.activePassageDurationMs > 0L) {
                             appState.activePassagePositionMs.toFloat()
                                 .div(appState.activePassageDurationMs)
@@ -138,7 +149,7 @@ fun CurrentChapterScreen(
         }
         if (appState.passages.isNotEmpty()) {
             val active = appState.passages[activeIndex]
-            val cast = appState.cast.firstOrNull { member -> member.role == active.speaker }
+            val cast = appState.cast.firstOrNull { member -> member.id == active.speakerId }
             FloatingMiniPlayer(
                 speakerName = active.speakerName,
                 voiceName = cast?.voice ?: "Automatic",
@@ -166,6 +177,37 @@ fun CurrentChapterScreen(
                 showChapterPicker = false
                 appState.selectChapter(chapter.id)
             },
+        )
+    }
+    correctingPassageId?.let { passageId ->
+        appState.passages.firstOrNull { it.id == passageId }?.let { passage ->
+            AttributedSpeakerPickerSheet(
+                passage = passage,
+                cast = appState.cast,
+                onDismiss = { correctingPassageId = null },
+                onSpeakerSelected = { target ->
+                    correctingPassageId = null
+                    if (target.id != passage.speakerId) {
+                        pendingSpeakerCorrection = PendingSpeakerCorrection(passage, target)
+                    }
+                },
+            )
+        }
+    }
+    pendingSpeakerCorrection?.let { pending ->
+        SpeakerCorrectionScopeDialog(
+            passage = pending.passage,
+            target = pending.target,
+            bookTitle = appState.currentBookTitle,
+            onConfirm = { scope ->
+                pendingSpeakerCorrection = null
+                appState.correctPassageSpeaker(
+                    passageId = pending.passage.sourcePassageId,
+                    speakerId = pending.target.id,
+                    scope = scope,
+                )
+            },
+            onDismiss = { pendingSpeakerCorrection = null },
         )
     }
 }

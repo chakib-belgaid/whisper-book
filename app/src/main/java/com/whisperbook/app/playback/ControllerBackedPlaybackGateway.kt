@@ -16,6 +16,7 @@ import com.google.common.util.concurrent.ListenableFuture
 import com.whisperbook.app.domain.PlaybackGateway
 import com.whisperbook.app.domain.model.PlaybackCursor
 import com.whisperbook.app.domain.model.PlaybackPreparationProgress
+import com.whisperbook.app.domain.model.PlaybackNarrationReload
 import java.io.Closeable
 import java.util.concurrent.Executor
 import java.util.concurrent.atomic.AtomicLong
@@ -87,7 +88,14 @@ class ControllerBackedPlaybackGateway(
     override val cursor: StateFlow<PlaybackCursor?> = PlaybackRuntime.cursor
     override val preparationProgress = MutableStateFlow<PlaybackPreparationProgress?>(null)
 
-    override suspend fun playBook(bookId: String, chapterId: String?) {
+    override suspend fun playBook(bookId: String, chapterId: String?) =
+        playBookInternal(bookId, chapterId, autoPlay = true)
+
+    private suspend fun playBookInternal(
+        bookId: String,
+        chapterId: String?,
+        autoPlay: Boolean,
+    ) {
         Log.i(LOG_TAG, "playBook book=$bookId chapter=$chapterId")
         val requestedAtMs = SystemClock.elapsedRealtime()
         val generation = queueGeneration.incrementAndGet()
@@ -125,7 +133,13 @@ class ControllerBackedPlaybackGateway(
                             progressivelyPreparingChapterId = queue.chapterId
                             PlaybackRuntime.markChapterPreparing(bookId, queue.chapterId, generation)
                         }
-                        applyProgressiveQueue(generation, queue, firstQueueReady, requestedAtMs)
+                        applyProgressiveQueue(
+                            generation,
+                            queue,
+                            firstQueueReady,
+                            requestedAtMs,
+                            autoPlay,
+                        )
                     }
                 }.getOrThrow()
                 if (!firstQueueReady.isCompleted) {
@@ -238,6 +252,47 @@ class ControllerBackedPlaybackGateway(
         }
     }
 
+    override suspend fun invalidateNarrationProfile(
+        bookId: String,
+        chapterIds: Set<String>,
+    ): PlaybackNarrationReload? {
+        if (chapterIds.isEmpty()) return null
+        var reload: PlaybackNarrationReload? = null
+        withController { controller ->
+            val currentDescriptor = PlaybackMediaItems.descriptor(controller.currentMediaItem)
+            val currentCursor = cursor.value
+            val affectsCurrent = currentDescriptor?.bookId == bookId &&
+                currentDescriptor.chapterId in chapterIds
+            if (affectsCurrent) {
+                reload = PlaybackNarrationReload(
+                    bookId = bookId,
+                    chapterId = currentDescriptor.chapterId,
+                    passageId = currentCursor?.takeIf { it.bookId == bookId }?.passageId
+                        ?: currentDescriptor.passageId,
+                    wasPlaying = controller.playWhenReady,
+                )
+                queueGeneration.incrementAndGet()
+                chapterPreparationJob?.cancel()
+                chapterPreparationJob = null
+                nextChapterJob?.cancel()
+                nextChapterJob = null
+                prefetchedAfterChapterKey = null
+                preparationProgress.value = null
+                PlaybackRuntime.clearChapterPreparing()
+                controller.pause()
+                controller.clearMediaItems()
+            }
+        }
+        if (reload == null) invalidateQueuedChapters(bookId, chapterIds)
+        return reload
+    }
+
+    override suspend fun reloadNarrationProfile(reload: PlaybackNarrationReload) {
+        playBookInternal(reload.bookId, reload.chapterId, autoPlay = reload.wasPlaying)
+        seekToPassage(reload.passageId)
+        if (!reload.wasPlaying) pause()
+    }
+
     override fun close() {
         queueGeneration.incrementAndGet()
         chapterPreparationJob?.cancel()
@@ -317,6 +372,7 @@ class ControllerBackedPlaybackGateway(
         queue: PlaybackChapterQueue,
         firstQueueReady: CompletableDeferred<Unit>,
         requestedAtMs: Long,
+        autoPlay: Boolean,
     ) {
         val existingChapterSegments = if (!firstQueueReady.isCompleted) {
             0
@@ -346,7 +402,7 @@ class ControllerBackedPlaybackGateway(
                 val startPosition = queue.startSegmentPositionMs.coerceIn(0L, startDuration)
                 controller.setMediaItems(mediaItems, startIndex, startPosition)
                 controller.prepare()
-                controller.play()
+                if (autoPlay) controller.play()
                 Log.i(
                     LOG_TAG,
                     "first_audio_ready book=${queue.bookId} chapter=${queue.chapterId} " +

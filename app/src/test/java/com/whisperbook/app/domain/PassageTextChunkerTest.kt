@@ -60,4 +60,11 @@ class PassageTextChunkerTest {
 
         assertEquals(listOf(PassageTextChunk("passage-short", "A short opening line.")), chunks)
     }
+
+    @Test
+    fun `invalid configurable narration size falls back to default`() {
+        assertEquals(NarrationTextChunker.MAX_CHARS, NarrationTextChunker.normalizeMaxChars(0))
+        assertEquals(80, NarrationTextChunker.normalizeMaxChars(80))
+        assertEquals(240, NarrationTextChunker.normalizeMaxChars(240))
+    }
 }

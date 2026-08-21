@@ -28,6 +28,8 @@ data class WhisperbookUiSnapshot(
     val statusMessage: String? = null,
     val backgroundProgressFraction: Float? = null,
     val errorMessage: String? = null,
+    val isExportingBook: Boolean = false,
+    val bookExportMessage: String? = null,
     val localStorageBytes: Long = 0L,
     val canRevertVoiceChange: Boolean = false,
 ) {

@@ -17,6 +17,7 @@ import com.whisperbook.app.domain.ExtractedChapter
 import com.whisperbook.app.domain.ExtractedPublication
 import com.whisperbook.app.domain.ImportedBook
 import com.whisperbook.app.domain.LocalTtsEngine
+import com.whisperbook.app.domain.NarrationTextChunker
 import com.whisperbook.app.domain.PublicationExtractor
 import com.whisperbook.app.domain.SpeakerAttributor
 import com.whisperbook.app.domain.SynthesisRequest
@@ -34,11 +35,13 @@ import com.whisperbook.app.domain.model.VoiceDescriptor
 import com.whisperbook.app.engine.audio.AppPrivateAudioSegmentStore
 import com.whisperbook.app.engine.metadata.AppPrivateCharacterMetadataCatalog
 import java.io.File
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -61,6 +64,7 @@ class PreparationStageRunnerAndroidTest {
             speed = 0.9f,
         )
         val existingChapterVoice = ChapterVoiceAssignmentEntity(
+            bookId = BOOK_ID,
             chapterId = CHAPTER_TWO_ID,
             characterId = existingCharacter.id,
             voiceId = "chapter-two-manual-voice",
@@ -143,6 +147,7 @@ class PreparationStageRunnerAndroidTest {
             assertEquals(
                 existingChapterVoice,
                 database.chapterVoiceAssignmentDao().getForChapterAndCharacter(
+                    BOOK_ID,
                     CHAPTER_TWO_ID,
                     existingCharacter.id,
                 ),
@@ -175,7 +180,7 @@ class PreparationStageRunnerAndroidTest {
     }
 
     @Test
-    fun unknownGenderNarratorUsesTheDefaultNarratorVoicePreference() = runBlocking {
+    fun unknownGenderNarratorUsesTheBuiltInInitialNarratorVoice() = runBlocking {
         val database = Room.inMemoryDatabaseBuilder(context, WhisperBookDatabase::class.java).build()
 
         try {
@@ -199,9 +204,9 @@ class PreparationStageRunnerAndroidTest {
                     speakerAttributor = StreamingChapterAttributor(),
                     ttsEngineFactory = LocalTtsEngineFactory { PreferenceVoiceCatalogEngine },
                     audioSegmentStore = AppPrivateAudioSegmentStore(context),
-                    settingsFlow = flowOf(AppSettings(defaultNarratorVoiceId = "jasper")),
+                    settingsFlow = flowOf(AppSettings()),
                     modelVersion = TEST_MODEL_VERSION,
-                    narratorVoiceId = "bella",
+                    narratorVoiceId = "jasper",
                 ),
             )
 
@@ -220,7 +225,77 @@ class PreparationStageRunnerAndroidTest {
     }
 
     @Test
-    fun tinyBookStreamsAttributionMetadataVoicesAndDurableAudioChapterByChapter() = runBlocking {
+    fun changedProfileRevisionCannotMaterializeAStaleChapterVoiceSet() = runBlocking {
+        val database = Room.inMemoryDatabaseBuilder(context, WhisperBookDatabase::class.java).build()
+        val testRoot = File(context.cacheDir, "profile-revision-${System.nanoTime()}")
+        check(testRoot.mkdirs())
+        var changeRevisionDuringLaterAttribution = false
+        val attributor = StreamingChapterAttributor { chapterOrdinal ->
+            if (changeRevisionDuringLaterAttribution && chapterOrdinal == 1) {
+                assertEquals(1, database.bookDao().incrementNarrationProfileRevision(BOOK_ID))
+            }
+        }
+        val runner = PreparationStageRunner(
+            dependencies = PreparationDependencies(
+                database = database,
+                publicationExtractor = NeverUsedPublicationExtractor,
+                speakerAttributor = attributor,
+                ttsEngineFactory = LocalTtsEngineFactory { RecordingTtsEngine() },
+                audioSegmentStore = AppPrivateAudioSegmentStore(File(testRoot, "audio")),
+                modelVersion = TEST_MODEL_VERSION,
+                expectedSampleRate = TEST_SAMPLE_RATE,
+                narratorVoiceId = "bella",
+            ),
+        )
+
+        try {
+            database.bookDao().insert(testBook())
+            database.chapterDao().insertAll(
+                listOf(
+                    ChapterEntity(CHAPTER_ONE_ID, BOOK_ID, 0, "Opening"),
+                    ChapterEntity(CHAPTER_TWO_ID, BOOK_ID, 1, "Later"),
+                ),
+            )
+            database.passageDao().insertAll(
+                listOf(
+                    provisionalPassage(
+                        id = "$CHAPTER_ONE_ID-passage-1",
+                        chapterId = CHAPTER_ONE_ID,
+                        text = "Morning arrived.",
+                    ),
+                    provisionalPassage(
+                        id = "$CHAPTER_TWO_ID-passage-1",
+                        chapterId = CHAPTER_TWO_ID,
+                        text = "Bob said hello.",
+                    ),
+                ),
+            )
+
+            runner.run(BOOK_ID, PreparationStage.FINDING_CHARACTERS, attemptCount = 0)
+            runner.run(BOOK_ID, PreparationStage.ASSIGNING_VOICES, attemptCount = 0)
+            changeRevisionDuringLaterAttribution = true
+
+            val failure = runCatching {
+                runner.run(BOOK_ID, PreparationStage.PREPARING_AUDIO, attemptCount = 0)
+            }.exceptionOrNull()
+
+            assertTrue(failure is CancellationException)
+            assertEquals(1L, database.bookDao().getById(BOOK_ID)?.narrationProfileRevision)
+            assertNull(
+                database.chapterVoiceAssignmentDao().getForChapterAndCharacter(
+                    BOOK_ID,
+                    CHAPTER_TWO_ID,
+                    "$BOOK_ID-character-bob",
+                ),
+            )
+        } finally {
+            database.close()
+            testRoot.deleteRecursively()
+        }
+    }
+
+    @Test
+    fun tinyBookAttributesEveryChapterButRecordsOnlyConfiguredOpeningChunk() = runBlocking {
         val database = Room.inMemoryDatabaseBuilder(context, WhisperBookDatabase::class.java).build()
         val testRoot = File(context.cacheDir, "preparation-pipeline-${System.nanoTime()}")
         check(testRoot.mkdirs())
@@ -231,6 +306,9 @@ class PreparationStageRunnerAndroidTest {
         )
         val attributor = StreamingChapterAttributor()
         val tts = RecordingTtsEngine()
+        val largeOpeningText = List(240) { index ->
+            "Opening sentence $index ends cleanly."
+        }.joinToString(" ")
 
         try {
             database.bookDao().insert(testBook())
@@ -245,7 +323,7 @@ class PreparationStageRunnerAndroidTest {
                     provisionalPassage(
                         id = "$CHAPTER_ONE_ID-passage-1",
                         chapterId = CHAPTER_ONE_ID,
-                        text = "Morning arrived.",
+                        text = largeOpeningText,
                     ),
                     provisionalPassage(
                         id = "$CHAPTER_TWO_ID-passage-1",
@@ -265,6 +343,7 @@ class PreparationStageRunnerAndroidTest {
                     modelVersion = TEST_MODEL_VERSION,
                     expectedSampleRate = TEST_SAMPLE_RATE,
                     narratorVoiceId = "bella",
+                    settingsFlow = flowOf(AppSettings(narrationChunkChars = 80)),
                 ),
                 nowEpochMs = { 456L },
             )
@@ -284,9 +363,13 @@ class PreparationStageRunnerAndroidTest {
                 assertEquals(1, passages.size)
                 assertTrue(passages.none { it.attributionRule == UNATTRIBUTED_RULE })
                 val segments = database.audioSegmentDao().observeForPassage(passages.single().id).first()
-                assertEquals(1, segments.size)
-                assertEquals("READY", segments.single().state)
-                assertTrue(segments.single().path?.let(::File)?.isFile == true)
+                if (chapterId == CHAPTER_ONE_ID) {
+                    assertEquals(1, segments.size)
+                    assertEquals("READY", segments.single().state)
+                    assertTrue(segments.single().path?.let(::File)?.isFile == true)
+                } else {
+                    assertTrue(segments.isEmpty())
+                }
             }
 
             val characters = database.storyCharacterDao().getEntitiesForBook(BOOK_ID)
@@ -299,7 +382,10 @@ class PreparationStageRunnerAndroidTest {
             assertTrue(metadata.complete)
             assertTrue(metadataCatalog.metadataFile(BOOK_ID).isFile)
 
-            assertEquals(2, tts.synthesisRequests.size)
+            assertEquals(1, tts.synthesisRequests.size)
+            val openingChunks = NarrationTextChunker.chunks("opening", largeOpeningText, maxChars = 80)
+            assertTrue(openingChunks.size >= 100)
+            assertEquals(openingChunks.first().text, tts.synthesisRequests.single().text)
             assertEquals(PreparationStage.READY.name, database.preparationJobDao().getForBook(BOOK_ID)?.stage)
 
             // The JSON file is derived data. A later-ordinal regeneration must repair a missing
@@ -328,7 +414,7 @@ class PreparationStageRunnerAndroidTest {
             )
             assertTrue(repairedMetadata.complete)
             assertEquals(2, attributor.calls.size)
-            assertEquals(2, tts.synthesisRequests.size)
+            assertEquals(1, tts.synthesisRequests.size)
         } finally {
             database.close()
             testRoot.deleteRecursively()
@@ -424,7 +510,9 @@ class PreparationStageRunnerAndroidTest {
         }
     }
 
-    private class StreamingChapterAttributor : SpeakerAttributor {
+    private class StreamingChapterAttributor(
+        private val beforeResult: suspend (chapterOrdinal: Int) -> Unit = {},
+    ) : SpeakerAttributor {
         val calls = mutableListOf<ChapterCall>()
 
         override suspend fun attribute(
@@ -439,6 +527,7 @@ class PreparationStageRunnerAndroidTest {
             chapter: ExtractedChapter,
             knownCharacters: List<StoryCharacter>,
         ): AttributedPublication {
+            beforeResult(chapterOrdinal)
             calls += ChapterCall(chapterId, chapterOrdinal, chapter, knownCharacters)
             val speaker = if (chapterOrdinal == 0) {
                 StoryCharacter(

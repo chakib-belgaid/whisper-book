@@ -21,14 +21,14 @@ class VoiceRegenerationDialogTest {
     val composeRule = createAndroidComposeRule<ComponentActivity>()
 
     @Test
-    fun userCanChooseWholeBookOrStartWithNextChapter() {
+    fun userCanChooseThisChapterAndLater() {
         var selected: VoiceRegenerationScope? = null
         composeRule.setContent {
             WhisperbookTheme {
                 VoiceRegenerationDialog(
                     characterName = "Narrator",
                     voiceName = "Jasper",
-                    canStartFromNextChapter = true,
+                    canApplyFromThisChapter = true,
                     onConfirm = { selected = it },
                     onDismiss = {},
                 )
@@ -36,19 +36,57 @@ class VoiceRegenerationDialogTest {
         }
 
         composeRule.onNodeWithTag("voice-regeneration-dialog").assertIsDisplayed()
-        composeRule.onNodeWithTag("regenerate-from-next-chapter").performClick()
+        composeRule.onNodeWithTag("regenerate-from-this-chapter").performClick()
 
-        assertEquals(VoiceRegenerationScope.FROM_NEXT_CHAPTER, selected)
+        assertEquals(VoiceRegenerationScope.FROM_THIS_CHAPTER, selected)
     }
 
     @Test
-    fun nextChapterChoiceIsDisabledAtTheEndOfTheBook() {
+    fun userCanChooseThisChapterOnly() {
+        var selected: VoiceRegenerationScope? = null
         composeRule.setContent {
             WhisperbookTheme {
                 VoiceRegenerationDialog(
                     characterName = "Narrator",
                     voiceName = "Jasper",
-                    canStartFromNextChapter = false,
+                    canApplyFromThisChapter = true,
+                    onConfirm = { selected = it },
+                    onDismiss = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("regenerate-this-chapter").performClick()
+        assertEquals(VoiceRegenerationScope.THIS_CHAPTER, selected)
+    }
+
+    @Test
+    fun userCanChooseWholeBook() {
+        var selected: VoiceRegenerationScope? = null
+        composeRule.setContent {
+            WhisperbookTheme {
+                VoiceRegenerationDialog(
+                    characterName = "Narrator",
+                    voiceName = "Jasper",
+                    canApplyFromThisChapter = true,
+                    onConfirm = { selected = it },
+                    onDismiss = {},
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("regenerate-whole-book").performClick()
+        assertEquals(VoiceRegenerationScope.WHOLE_BOOK, selected)
+    }
+
+    @Test
+    fun chapterAndLaterChoiceIsDisabledAtTheEndOfTheBook() {
+        composeRule.setContent {
+            WhisperbookTheme {
+                VoiceRegenerationDialog(
+                    characterName = "Narrator",
+                    voiceName = "Jasper",
+                    canApplyFromThisChapter = false,
                     onConfirm = {},
                     onDismiss = {},
                 )
@@ -56,6 +94,6 @@ class VoiceRegenerationDialogTest {
         }
 
         composeRule.onNodeWithTag("regenerate-whole-book").assertIsDisplayed()
-        composeRule.onNodeWithTag("regenerate-from-next-chapter").assertIsNotEnabled()
+        composeRule.onNodeWithTag("regenerate-from-this-chapter").assertIsNotEnabled()
     }
 }

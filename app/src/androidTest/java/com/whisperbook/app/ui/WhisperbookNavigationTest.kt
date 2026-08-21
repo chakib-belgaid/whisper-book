@@ -3,7 +3,9 @@ package com.whisperbook.app.ui
 import android.net.Uri
 import androidx.compose.runtime.remember
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onAllNodesWithContentDescription
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithTag
@@ -17,6 +19,7 @@ import com.whisperbook.app.domain.model.BookFormat
 import com.whisperbook.app.domain.model.Chapter
 import com.whisperbook.app.domain.model.PreparationStage
 import com.whisperbook.app.domain.model.PreparationState
+import com.whisperbook.app.domain.model.SpeakerCorrectionScope
 import com.whisperbook.app.domain.model.VoiceRegenerationScope
 import com.whisperbook.app.integration.WhisperbookUiSnapshot
 import com.whisperbook.app.ui.screens.WhisperbookAppState
@@ -81,6 +84,27 @@ class WhisperbookNavigationTest {
     }
 
     @Test
+    fun readAlongLetsTheUserCorrectAnAttributedVoiceAndChooseTheScope() {
+        val appState = WhisperbookAppState()
+        setApp(appState = appState)
+        composeRule.runOnIdle { navController.navigate(WhisperbookDestination.CurrentChapter.route()) }
+
+        composeRule.onNodeWithContentDescription("Correct attributed voice for Elara").performClick()
+        composeRule.onNodeWithTag("attributed-voice-picker").assertIsDisplayed()
+        composeRule.onNodeWithTag("attributed-speaker-fox").performClick()
+        composeRule.onNodeWithTag("speaker-correction-scope-dialog").assertIsDisplayed()
+        composeRule.onNodeWithTag("correct-this-phrase").assertIsDisplayed()
+        composeRule.onNodeWithTag("correct-matching-phrases").performClick()
+
+        composeRule.runOnIdle {
+            assertEquals("fox", appState.passages.first { it.id == "p2" }.speakerId)
+            assertEquals("Fox", appState.passages.first { it.id == "p2" }.speakerName)
+        }
+        composeRule.onAllNodesWithContentDescription("Correct attributed voice for Fox")
+            .assertCountEquals(2)
+    }
+
+    @Test
     fun voiceCast_omitsPersistentBottomNavigation() {
         setApp()
         composeRule.runOnIdle { navController.navigate(WhisperbookDestination.VoiceCast.route()) }
@@ -107,7 +131,7 @@ class WhisperbookNavigationTest {
         }
         setApp(WhisperbookDestination.Library.route, appState)
 
-        composeRule.onNodeWithText("Recorded 2 of 19 chapters").assertIsDisplayed()
+        composeRule.onNodeWithText("Prepared 2 of 19 chapters").assertIsDisplayed()
         composeRule.onNodeWithContentDescription("Listen").performClick()
         composeRule.onNodeWithText("Preparing your audiobook").assertIsDisplayed()
     }
@@ -130,17 +154,12 @@ class WhisperbookNavigationTest {
     }
 
     @Test
-    fun settings_defaultNarratorOpensAListThatCanBeTestedBeforeChoosing() {
+    fun settingsKeepsBookVoiceAndLanguageChoicesOutOfGlobalDefaults() {
         setApp(WhisperbookDestination.Settings.route)
 
-        composeRule.onNodeWithText("Default narrator").performClick()
-        composeRule.onNodeWithText("Choose a voice for Narrator").assertIsDisplayed()
-        composeRule.onNodeWithTag("voice-preview-jasper").performClick()
-        composeRule.onNodeWithTag("voice-picker").assertIsDisplayed()
-        composeRule.onNodeWithTag("voice-option-jasper").performClick()
-
-        composeRule.onNodeWithText("Jasper").assertIsDisplayed()
-        composeRule.onNodeWithTag("voice-picker").assertDoesNotExist()
+        composeRule.onNodeWithText("Playback & preparation").assertIsDisplayed()
+        composeRule.onNodeWithText("Default narrator").assertDoesNotExist()
+        composeRule.onNodeWithText("Language packs").assertDoesNotExist()
     }
 
     @Test
@@ -169,6 +188,8 @@ class WhisperbookNavigationTest {
     @Test
     fun bookDetails_removeFromLibraryRequiresConfirmation() {
         setApp(WhisperbookDestination.BookDetails.route())
+
+        composeRule.onNodeWithText("Export MP3").assertIsDisplayed()
 
         composeRule.onNodeWithContentDescription("Remove The Moonlit Wood from library").performClick()
         composeRule.onNodeWithText("Remove this book?").assertIsDisplayed()
@@ -262,6 +283,7 @@ private class NavigationBookActions(
     override fun importBook(uri: Uri) = Unit
     override fun retryPreparation() = Unit
     override fun deleteSelectedBook() = Unit
+    override fun exportSelectedBook(destination: Uri) = Unit
     override fun selectBook(bookId: String) = onSelectBook(bookId)
     override fun selectChapter(chapterId: String) = Unit
     override fun playPreviousChapter() = Unit
@@ -271,9 +293,13 @@ private class NavigationBookActions(
     override fun seekByFraction(delta: Float) = Unit
     override fun seekToFraction(fraction: Float) = Unit
     override fun seekToPassage(passageId: String) = Unit
+    override fun correctPassageSpeaker(
+        passageId: String,
+        speakerId: String,
+        scope: SpeakerCorrectionScope,
+    ) = Unit
     override fun cycleSpeed() = Unit
-    override fun cycleDefaultNarratorVoice() = Unit
-    override fun chooseDefaultNarratorVoice(voiceId: String) = Unit
+    override fun cycleNarrationChunkSize() = Unit
     override fun downloadLanguagePack(languageCode: String) = Unit
     override fun selectNarrationLanguage(languageCode: String) = Unit
     override fun cycleSleepTimer() = Unit

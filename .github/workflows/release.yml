@@ -1,0 +1,67 @@
+name: Publish Android APK
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  publish-apk:
+    name: Verify and publish APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Verify tag matches the Android version
+        shell: bash
+        run: |
+          tag_version="${GITHUB_REF_NAME#v}"
+          gradle_version="$(sed -n 's/^[[:space:]]*versionName = "\([^"]*\)"/\1/p' app/build.gradle.kts)"
+          if [[ -z "${gradle_version}" || "${tag_version}" != "${gradle_version}" ]]; then
+            echo "Tag ${GITHUB_REF_NAME} does not match Android versionName ${gradle_version:-<missing>}" >&2
+            exit 1
+          fi
+
+      - name: Test, lint, and build installable APK
+        run: ./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleDebug -PwhisperbookReleaseArtifact=true --stacktrace
+
+      - name: Prepare release files
+        shell: bash
+        run: |
+          mkdir -p release
+          artifact="release/whisperbook-${GITHUB_REF_NAME}-debug.apk"
+          cp app/build/outputs/apk/debug/app-debug.apk "${artifact}"
+          sha256sum "${artifact}" > "${artifact}.sha256"
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            release/whisperbook-${GITHUB_REF_NAME}-debug.apk \
+            release/whisperbook-${GITHUB_REF_NAME}-debug.apk.sha256 \
+            --title "Whisperbook ${GITHUB_REF_NAME}" \
+            --notes "Installable debug-signed Android APK for the initial Whisperbook release. The app runs offline, requires Android 8.0 or newer, and currently supports arm64 devices."

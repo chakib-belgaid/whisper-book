@@ -55,6 +55,25 @@ class NarrationSynthesisPlannerTest {
         assertTrue(english.request.cacheKey != french.request.cacheKey)
     }
 
+    @Test
+    fun `configured chunk size bounds every synthesis unit`() {
+        val text = List(40) { index -> "Sentence $index ends cleanly." }.joinToString(" ")
+
+        val units = NarrationSynthesisPlanner.plan(
+            passageId = "passage-1",
+            text = text,
+            voice = voice,
+            speed = 1f,
+            modelVersion = MODEL_VERSION,
+            sampleRate = SAMPLE_RATE,
+            maxChars = 80,
+        )
+
+        assertTrue(units.size > 1)
+        assertTrue(units.all { it.request.text.length <= 80 })
+        assertEquals(text, units.joinToString(" ") { it.request.text })
+    }
+
     private fun plan(text: String) = NarrationSynthesisPlanner.plan(
         passageId = "passage-1",
         text = text,

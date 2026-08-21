@@ -38,6 +38,9 @@ fun BookAggregate.toDomain(): Book {
         lastOpenedAtEpochMs = book.lastOpenedAtEpochMs,
         chapterCount = chapterCount.coerceAtLeast(0),
         currentChapterOrdinal = currentChapterOrdinal?.coerceAtLeast(0),
+        narrationLanguageCode = book.narrationLanguageCode,
+        narrationProfileRevision = book.narrationProfileRevision.coerceAtLeast(0L),
+        narrationProfileSeeded = book.narrationProfileSeeded,
     )
 }
 
@@ -54,6 +57,9 @@ fun Book.toEntity(sourceSha256: String? = null): BookEntity = BookEntity(
     currentPassageId = currentPassageId,
     progressFraction = progressFraction.normalized(default = 0f, minimum = 0f, maximum = 1f),
     lastOpenedAtEpochMs = lastOpenedAtEpochMs,
+    narrationLanguageCode = narrationLanguageCode,
+    narrationProfileRevision = narrationProfileRevision,
+    narrationProfileSeeded = narrationProfileSeeded,
 )
 
 fun PreparationJobEntity.toDomain(): PreparationState = PreparationState(
@@ -178,8 +184,9 @@ fun ChapterVoiceAssignmentEntity.toDomain(): CharacterVoiceAssignment = Characte
     speed = speed.normalized(default = 1f, minimum = MIN_SPEAKING_SPEED, maximum = MAX_SPEAKING_SPEED),
 )
 
-fun CharacterVoiceAssignment.toChapterEntity(chapterId: String): ChapterVoiceAssignmentEntity =
+fun CharacterVoiceAssignment.toChapterEntity(bookId: String, chapterId: String): ChapterVoiceAssignmentEntity =
     ChapterVoiceAssignmentEntity(
+        bookId = bookId,
         chapterId = chapterId,
         characterId = characterId,
         voiceId = voiceId,

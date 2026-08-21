@@ -7,11 +7,14 @@ import com.whisperbook.app.domain.model.Book
 import com.whisperbook.app.domain.model.BookFormat
 import com.whisperbook.app.domain.model.Chapter
 import com.whisperbook.app.domain.model.CharacterVoiceAssignment
+import com.whisperbook.app.domain.model.ChapterVoiceAssignmentSnapshot
 import com.whisperbook.app.domain.model.PlaybackCursor
 import com.whisperbook.app.domain.model.PlaybackPreparationProgress
+import com.whisperbook.app.domain.model.PlaybackNarrationReload
 import com.whisperbook.app.domain.model.PreparationState
 import com.whisperbook.app.domain.model.StoryCharacter
 import com.whisperbook.app.domain.model.VoiceDescriptor
+import com.whisperbook.app.domain.model.VoiceRegenerationScope
 import java.io.File
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
@@ -66,6 +69,10 @@ data class AudioRetentionGeneration(
     val segmentCount: Int,
     val passageIds: Set<String>,
     val previousAssignment: CharacterVoiceAssignment? = null,
+    val bookId: String? = null,
+    val previousChapterAssignments: List<ChapterVoiceAssignmentSnapshot> = emptyList(),
+    val voiceRegenerationScope: VoiceRegenerationScope = VoiceRegenerationScope.WHOLE_BOOK,
+    val fromChapterOrdinal: Int = 0,
 ) {
     init {
         require(id.isNotBlank())
@@ -74,6 +81,9 @@ data class AudioRetentionGeneration(
         require(segmentCount >= 0)
         require(passageIds.none(String::isBlank))
         require(previousAssignment == null || previousAssignment.characterId == characterId)
+        require(bookId == null || bookId.isNotBlank())
+        require(previousChapterAssignments.all { it.assignment.characterId == characterId })
+        require(fromChapterOrdinal >= 0)
     }
 
     val isScoped: Boolean get() = passageIds.isNotEmpty()
@@ -151,6 +161,10 @@ interface AudioSegmentStore {
         previousAssignment: CharacterVoiceAssignment? = null,
         passageIds: Set<String> = emptySet(),
         gracePeriodMs: Long = AudioRetentionGeneration.DEFAULT_GRACE_PERIOD_MS,
+        bookId: String? = null,
+        previousChapterAssignments: List<ChapterVoiceAssignmentSnapshot> = emptyList(),
+        scope: VoiceRegenerationScope = VoiceRegenerationScope.WHOLE_BOOK,
+        fromChapterOrdinal: Int = 0,
     ): AudioRetentionGeneration? {
         invalidateForCharacter(characterId)
         return null
@@ -186,7 +200,10 @@ interface LibraryRepository {
     fun observeBook(bookId: String): Flow<Book?>
     fun observeChapters(bookId: String): Flow<List<Chapter>>
     fun observeCharacters(bookId: String): Flow<List<StoryCharacter>>
-    suspend fun importBook(uri: Uri): Result<String>
+    suspend fun importBook(
+        uri: Uri,
+        narrationLanguageCode: String = "en",
+    ): Result<String>
     suspend fun updateVoiceAssignment(assignment: CharacterVoiceAssignment)
     suspend fun deleteBook(bookId: String)
 }
@@ -213,4 +230,16 @@ interface PlaybackGateway {
      * safely keep the default no-op.
      */
     suspend fun invalidateQueuedChapters(bookId: String, chapterIds: Set<String>) = Unit
+
+    /** Cancels stale progressive work and clears the current queue when its chapter is affected. */
+    suspend fun invalidateNarrationProfile(
+        bookId: String,
+        chapterIds: Set<String>,
+    ): PlaybackNarrationReload? {
+        invalidateQueuedChapters(bookId, chapterIds)
+        return null
+    }
+
+    /** Rebuilds a queue after a narration profile change and restores source-passage position. */
+    suspend fun reloadNarrationProfile(reload: PlaybackNarrationReload) = Unit
 }

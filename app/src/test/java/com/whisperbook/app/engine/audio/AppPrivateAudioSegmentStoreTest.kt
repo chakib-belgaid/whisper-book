@@ -2,8 +2,10 @@ package com.whisperbook.app.engine.audio
 
 import com.whisperbook.app.domain.SynthesisRequest
 import com.whisperbook.app.domain.SynthesisResult
+import com.whisperbook.app.domain.model.ChapterVoiceAssignmentSnapshot
 import com.whisperbook.app.domain.model.CharacterVoiceAssignment
 import com.whisperbook.app.domain.model.VoiceDescriptor
+import com.whisperbook.app.domain.model.VoiceRegenerationScope
 import java.io.File
 import org.junit.Assert.assertEquals
 import kotlinx.coroutines.test.runTest
@@ -142,6 +144,47 @@ class AppPrivateAudioSegmentStoreTest {
         val restartedStore = AppPrivateAudioSegmentStore(root = root, nowEpochMs = { 4_001L })
         val restored = requireNotNull(restartedStore.restoreRetainedGeneration(retained.id))
         assertEquals(previousAssignment, restored.previousAssignment)
+    }
+
+    @Test
+    fun `retention round trips heterogeneous chapter casts and prior template`() = runTest {
+        val root = File(temporaryFolder.root, "chapter-cast-snapshot")
+        val priorTemplate = CharacterVoiceAssignment("character-a", "jasper", "test-v1", 1f)
+        val priorChapterCasts = listOf(
+            ChapterVoiceAssignmentSnapshot(
+                "chapter-1",
+                CharacterVoiceAssignment("character-a", "bella", "test-v1", 0.9f),
+            ),
+            ChapterVoiceAssignmentSnapshot(
+                "chapter-2",
+                CharacterVoiceAssignment("character-a", "bruno", "test-v1", 1.1f),
+            ),
+        )
+        val store = AppPrivateAudioSegmentStore(
+            root = root,
+            nowEpochMs = { 5_000L },
+            generationId = { "heterogeneous-generation" },
+        )
+
+        val retained = requireNotNull(
+            store.retainForCharacter(
+                characterId = "character-a",
+                previousAssignment = priorTemplate,
+                bookId = "book-a",
+                previousChapterAssignments = priorChapterCasts,
+                scope = VoiceRegenerationScope.FROM_THIS_CHAPTER,
+                fromChapterOrdinal = 1,
+            ),
+        )
+        val restarted = AppPrivateAudioSegmentStore(root = root, nowEpochMs = { 5_001L })
+        val discovered = requireNotNull(restarted.latestRetainedVoiceChange("character-a"))
+
+        assertEquals(retained.id, discovered.id)
+        assertEquals("book-a", discovered.bookId)
+        assertEquals(priorTemplate, discovered.previousAssignment)
+        assertEquals(priorChapterCasts, discovered.previousChapterAssignments)
+        assertEquals(VoiceRegenerationScope.FROM_THIS_CHAPTER, discovered.voiceRegenerationScope)
+        assertEquals(1, discovered.fromChapterOrdinal)
     }
 
     private fun request(text: String) = SynthesisRequest(

@@ -1,5 +1,7 @@
 package com.whisperbook.app.ui.screens
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -15,8 +17,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.outlined.AutoStories
 import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Groups
-import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -24,12 +26,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.whisperbook.app.R
+import com.whisperbook.app.engine.export.defaultBookMp3FileName
 import com.whisperbook.app.ui.components.EmbossedCircularButton
 import com.whisperbook.app.ui.components.PapercraftButton
 import com.whisperbook.app.ui.components.ParchmentPanel
@@ -43,11 +47,18 @@ fun BookDetailsScreen(
     onBack: () -> Unit,
     onListen: () -> Unit,
     onVoiceCast: () -> Unit,
-    onSettings: () -> Unit,
     onRemove: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var showRemoveConfirmation by rememberSaveable { mutableStateOf(false) }
+    val suggestedExportName = remember(appState.currentBookTitle) {
+        defaultBookMp3FileName(appState.currentBookTitle)
+    }
+    val exportPicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("audio/mpeg"),
+    ) { destination ->
+        destination?.let(appState::exportSelectedBook)
+    }
     if (showRemoveConfirmation) {
         RemoveBookDialog(
             bookTitle = appState.currentBookTitle,
@@ -79,17 +90,12 @@ fun BookDetailsScreen(
         verticalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         StageTopBar("Book details", onBack = onBack, trailing = {
-            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                EmbossedCircularButton(
-                    onClick = { showRemoveConfirmation = true },
-                    contentDescription = "Remove ${appState.currentBookTitle} from library",
-                    size = 44.dp,
-                ) {
-                    Icon(Icons.Outlined.DeleteOutline, contentDescription = null, tint = WhisperbookTheme.colors.error)
-                }
-                EmbossedCircularButton(onClick = onSettings, contentDescription = "Settings", size = 44.dp) {
-                    Icon(Icons.Outlined.Settings, null)
-                }
+            EmbossedCircularButton(
+                onClick = { showRemoveConfirmation = true },
+                contentDescription = "Remove ${appState.currentBookTitle} from library",
+                size = 44.dp,
+            ) {
+                Icon(Icons.Outlined.DeleteOutline, contentDescription = null, tint = WhisperbookTheme.colors.error)
             }
         })
         BookTheatreHero(
@@ -121,6 +127,24 @@ fun BookDetailsScreen(
                 enabled = appState.canListen,
                 modifier = Modifier.fillMaxWidth(),
                 trailingIcon = { Icon(Icons.Filled.PlayArrow, null) },
+            )
+            PapercraftButton(
+                text = "Export MP3",
+                onClick = { exportPicker.launch(suggestedExportName) },
+                enabled = appState.canListen && !appState.isBusy,
+                isLoading = appState.isExportingBook,
+                loadingDescription = appState.statusMessage ?: "Exporting book as MP3",
+                variant = com.whisperbook.app.ui.components.PapercraftButtonVariant.Parchment,
+                modifier = Modifier.fillMaxWidth(),
+                leadingIcon = { Icon(Icons.Outlined.Download, contentDescription = null) },
+            )
+            Text(
+                text = appState.bookExportMessage
+                    ?: "Saves one offline MP3. Missing narration is generated first.",
+                color = WhisperbookTheme.colors.inkMuted,
+                style = WhisperbookTheme.typography.label,
+                textAlign = TextAlign.Center,
+                modifier = Modifier.fillMaxWidth(),
             )
             Spacer(Modifier.height(4.dp))
             Row(

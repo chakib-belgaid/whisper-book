@@ -9,6 +9,9 @@ val releaseKeystorePath = providers.environmentVariable("WHISPERBOOK_KEYSTORE_PA
 val releaseKeystorePassword = providers.environmentVariable("WHISPERBOOK_KEYSTORE_PASSWORD").orNull
 val releaseKeyAlias = providers.environmentVariable("WHISPERBOOK_KEY_ALIAS").orNull
 val releaseKeyPassword = providers.environmentVariable("WHISPERBOOK_KEY_PASSWORD").orNull
+val releaseArtifactBuild = providers.gradleProperty("whisperbookReleaseArtifact")
+    .map(String::toBoolean)
+    .orElse(false)
 
 android {
     namespace = "com.whisperbook.app"
@@ -19,7 +22,7 @@ android {
         minSdk = 26
         targetSdk = 36
         versionCode = 1
-        versionName = "1.0.0"
+        versionName = "0.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
@@ -55,7 +58,7 @@ android {
     buildTypes {
         debug {
             applicationIdSuffix = ".debug"
-            versionNameSuffix = "-debug"
+            versionNameSuffix = if (releaseArtifactBuild.get()) "" else "-debug"
         }
         release {
             isMinifyEnabled = true
@@ -135,6 +138,10 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer:1.9.3")
     implementation("androidx.media3:media3-session:1.9.3")
     implementation("androidx.media3:media3-ui-compose-material3:1.9.3")
+
+    implementation("dev.ffmpegkit-maintained:ffmpeg-kit-audio:8.1.7")
+    // The maintained FFmpegKit AAR currently omits this runtime dependency from its POM.
+    implementation("com.arthenica:smart-exception-java:0.2.1")
 
     implementation("androidx.documentfile:documentfile:1.1.0")
     implementation("org.jsoup:jsoup:1.21.2")

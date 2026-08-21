@@ -11,17 +11,44 @@ Whisperbook is an offline-first Android reader that converts a local EPUB or PDF
 > [!IMPORTANT]
 > The app runtime deliberately has no `INTERNET` or `ACCESS_NETWORK_STATE` permission. A first development build still needs network access to resolve Gradle dependencies.
 
+## Download
+
+Download the installable APK and its SHA-256 checksum from the [latest GitHub release](https://github.com/chakib-belgaid/whisper-book/releases/latest). The initial `v0.1` artifact is debug-signed and installs as `com.whisperbook.app.debug`; it is intended for direct testing rather than Play Store distribution.
+
 ## See it working
 
-<p align="center">
-  <img src="./art/qa/emulator/01-welcome-fidelity-final.png" width="30%" alt="Whisperbook welcome screen">
-  &nbsp;
-  <img src="./art/qa/emulator/05-now-playing-actual-live.png" width="30%" alt="Whisperbook now-playing screen with local audiobook playback">
-  &nbsp;
-  <img src="./art/qa/emulator/09-current-chapter-playing-final.png" width="30%" alt="Whisperbook synchronized chapter read-along screen">
-</p>
+<table>
+  <tr>
+    <td align="center" width="33%">
+      <a href="./assets/readme/screenshots/welcome.webp"><img src="./assets/readme/screenshots/welcome.webp" width="100%" alt="Whisperbook welcome screen with a moonlit paper theatre and local book import action"></a><br>
+      <strong>Welcome</strong><br><sub>Import EPUB or PDF without an account.</sub>
+    </td>
+    <td align="center" width="33%">
+      <a href="./assets/readme/screenshots/library.webp"><img src="./assets/readme/screenshots/library.webp" width="100%" alt="Whisperbook library showing continue listening and more local books"></a><br>
+      <strong>Library</strong><br><sub>Resume each book from its own saved state.</sub>
+    </td>
+    <td align="center" width="33%">
+      <a href="./assets/readme/screenshots/book-details.webp"><img src="./assets/readme/screenshots/book-details.webp" width="100%" alt="Whisperbook book details with continue listening, MP3 export, chapters, and voice cast controls"></a><br>
+      <strong>Book details</strong><br><sub>Browse chapters, edit the cast, or export MP3.</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="33%">
+      <a href="./assets/readme/screenshots/now-playing.webp"><img src="./assets/readme/screenshots/now-playing.webp" width="100%" alt="Whisperbook now playing screen with speaker, playback, seek, speed, sleep timer, cast, and chapter controls"></a><br>
+      <strong>Now playing</strong><br><sub>Control playback while the active speaker stays visible.</sub>
+    </td>
+    <td align="center" width="33%">
+      <a href="./assets/readme/screenshots/voice-cast.webp"><img src="./assets/readme/screenshots/voice-cast.webp" width="100%" alt="Whisperbook voice cast screen with book language and per-character voice assignments"></a><br>
+      <strong>Voice cast</strong><br><sub>Preview and override voices for the selected book.</sub>
+    </td>
+    <td align="center" width="33%">
+      <a href="./assets/readme/screenshots/read-along.webp"><img src="./assets/readme/screenshots/read-along.webp" width="100%" alt="Whisperbook synchronized chapter view with speaker-labelled passages, correction controls, and playback"></a><br>
+      <strong>Read along</strong><br><sub>Follow, hear, and correct speaker-labelled passages.</sub>
+    </td>
+  </tr>
+</table>
 
-These are captured emulator builds, not design mockups. The full screen inventory lives in the [implementation map](design-system/IMPLEMENTATION_MAP.md).
+These are API 36 emulator captures of the production Compose surfaces using deterministic QA data, not static interface mockups. Select any screen to open it at full resolution. The complete journey and source mapping live in the [implementation map](design-system/IMPLEMENTATION_MAP.md).
 
 ## What it does
 
@@ -29,12 +56,14 @@ These are captured emulator builds, not design mockups. The full screen inventor
 | --- | --- |
 | Private import | Android Storage Access Framework, byte-signature validation, SHA-256 duplicate detection, and an app-private source copy |
 | Publication extraction | EPUB metadata/reading-order parsing, PDF text extraction, and bundled ML Kit OCR for image-only pages |
-| Character voices | Explainable dialogue heuristics, first-person narrator detection, confidence-bearing age/gender cues, profile-aware casting across eight embedded Supertonic 3 voices, and per-character overrides |
-| Language packs | English is ready by default; French and Arabic can be added and selected independently from Settings while synthesis remains private and on-device |
+| Character voices | Explainable dialogue heuristics, first-person narrator detection, confidence-bearing age/gender cues, profile-aware casting across eight embedded Supertonic 3 voices, and per-book or per-chapter overrides |
+| Editable attribution | Every read-along passage exposes its detected speaker; corrections can affect one phrase or matching phrases without changing the original publication |
+| Book language | English is ready by default; French and Arabic can be activated per book from Voice Cast while synthesis remains private and on-device |
 | Durable preparation | A staged WorkManager pipeline with persisted progress, restart recovery, chapter-scoped character discovery, opening-audio priority, and sequential prefetch |
 | Local audio | sherpa-onnx inference, 44.1 kHz WAV output, atomic writes, cache validation, retention, and bounded cleanup |
 | Playback | Media3 foreground service, chapter queueing, automatic continuation, 15-second seek, speed control, sleep timer, and audio-focus handling |
 | Read-along | Active-passage tracking, speaker labels and portraits, live progress, optional auto-scroll, and playback checkpoints |
+| MP3 export | A cancellable, progress-reporting offline export that completes missing narration, reuses finalized audio, and writes one book-level MP3 through Android's document picker |
 | Privacy | No runtime networking permission, no accounts, no analytics, no cloud fallback, and Android backup/transfer disabled |
 
 ## How a book becomes audio
@@ -43,7 +72,7 @@ These are captured emulator builds, not design mockups. The full screen inventor
   <img src="./docs/architecture/diagrams/offline-pipeline.svg" width="100%" alt="Seven-stage offline pipeline from local book selection to checkpointed audiobook playback">
 </p>
 
-The opening chapter is attributed, cast, and streamed first, so listening can start without scanning every chapter for characters. Later chapters are analyzed and generated sequentially. A versioned `characters.json` mirror in app-private storage records each completed chapter's character contribution for restart-safe, idempotent progress; Room remains authoritative for characters and voice choices. The editable diagrams.net source is [offline-pipeline.drawio](docs/architecture/diagrams/offline-pipeline.drawio).
+The opening chapter is attributed, cast, and streamed first, so listening can start without scanning every chapter for characters. Later chapters are analyzed and generated sequentially. A versioned `characters.json` mirror in app-private storage records each completed chapter's character contribution for restart-safe, idempotent progress; Room remains authoritative for characters and voice choices. MP3 export reuses these finalized chapter segments and generates only missing narration before encoding. The editable diagrams.net source is [offline-pipeline.drawio](docs/architecture/diagrams/offline-pipeline.drawio).
 
 ## Architecture
 
@@ -66,7 +95,7 @@ whisper-book/
 │       │   ├── assets/tts/       Bundled Supertonic 3 model
 │       │   ├── java/.../data/    Room, DataStore, repositories
 │       │   ├── java/.../domain/  Models and ports
-│       │   ├── java/.../engine/  Import, extraction, attribution, TTS
+│       │   ├── java/.../engine/  Import, extraction, attribution, TTS, export
 │       │   ├── java/.../playback/Media3 service and queue
 │       │   └── java/.../ui/      Compose screens and design system
 │       ├── test/                 JVM tests
@@ -87,7 +116,7 @@ whisper-book/
 - Android SDK 36 and build-tools 36
 - An arm64 Android device or emulator running Android 8.0 / API 26 or newer
 
-The TTS runtime and multilingual model are committed under `app/libs/` and `app/src/main/assets/tts/`; no first-launch model download is required. English is enabled by default. French and Arabic are optional language-pack choices under **Settings → Language packs** and reuse the same local multilingual model without adding a network permission.
+The TTS runtime and multilingual model are committed under `app/libs/` and `app/src/main/assets/tts/`; no first-launch model download is required. English is enabled by default. French and Arabic can be activated from each book's **Voice Cast** screen and reuse the same local multilingual model without adding a network permission.
 
 ```bash
 ./gradlew :app:assembleDebug
@@ -145,6 +174,7 @@ Without these variables, Gradle intentionally creates an unsigned release artifa
 - [Implementation map](design-system/IMPLEMENTATION_MAP.md) — screen-by-screen source and asset mapping
 - [Privacy](PRIVACY.md) — on-device data handling and permission policy
 - [TTS artifacts](docs/licenses/TTS_ARTIFACTS.md) — bundled runtime/model provenance and checksums
+- [FFmpegKit audio runtime](docs/licenses/FFMPEGKIT.md) — offline MP3 export runtime and license
 
 ## Licensing
 

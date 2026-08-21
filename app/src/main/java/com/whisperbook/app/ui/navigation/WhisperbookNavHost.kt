@@ -130,7 +130,6 @@ fun WhisperbookNavHost(
                         )
                     },
                     onVoiceCast = { navController.navigate(WhisperbookDestination.VoiceCast.route()) },
-                    onSettings = { navController.navigate(WhisperbookDestination.Settings.route) },
                     onRemove = {
                         appState.deleteSelectedBook()
                         navController.navigateToBottomDestination(WhisperbookDestination.Library.route)
@@ -157,7 +156,6 @@ fun WhisperbookNavHost(
                 SettingsScreen(
                     contentPadding = contentPadding,
                     appState = appState,
-                    onManageVoices = { navController.navigate(WhisperbookDestination.VoiceCast.route()) },
                 )
             }
         }

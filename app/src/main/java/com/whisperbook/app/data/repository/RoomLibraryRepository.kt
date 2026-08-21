@@ -12,6 +12,7 @@ import com.whisperbook.app.domain.LibraryRepository
 import com.whisperbook.app.domain.model.Book
 import com.whisperbook.app.domain.model.Chapter
 import com.whisperbook.app.domain.model.CharacterVoiceAssignment
+import com.whisperbook.app.domain.model.NarrationLanguage
 import com.whisperbook.app.domain.model.PreparationStage
 import com.whisperbook.app.domain.model.StoryCharacter
 import com.whisperbook.app.engine.metadata.CharacterMetadataCatalog
@@ -47,7 +48,10 @@ class RoomLibraryRepository(
             .observeForBook(bookId)
             .map { characters -> characters.map { it.toDomain() } }
 
-    override suspend fun importBook(uri: Uri): Result<String> {
+    override suspend fun importBook(uri: Uri, narrationLanguageCode: String): Result<String> {
+        val initialLanguage = narrationLanguageCode
+            .takeIf { it in NarrationLanguage.supportedCodes }
+            ?: NarrationLanguage.ENGLISH.code
         val imported = bookImporter.import(uri).getOrElse { error ->
             if (error is CancellationException) throw error
             return Result.failure(error)
@@ -73,6 +77,9 @@ class RoomLibraryRepository(
                         currentPassageId = null,
                         progressFraction = 0f,
                         lastOpenedAtEpochMs = now,
+                        narrationLanguageCode = initialLanguage,
+                        narrationProfileRevision = 0L,
+                        narrationProfileSeeded = true,
                     ),
                 )
                 database.preparationJobDao().upsert(

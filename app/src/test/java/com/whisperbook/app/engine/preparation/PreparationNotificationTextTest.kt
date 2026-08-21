@@ -18,7 +18,7 @@ class PreparationNotificationTextTest {
             ),
         )
 
-        assertEquals("Recorded 4 of 19 chapters", text)
+        assertEquals("Prepared 4 of 19 chapters", text)
     }
 
     @Test
@@ -31,7 +31,7 @@ class PreparationNotificationTextTest {
             ),
         )
 
-        assertEquals("Recorded 19 of 19 chapters", text)
+        assertEquals("Prepared 19 of 19 chapters", text)
     }
 
     @Test

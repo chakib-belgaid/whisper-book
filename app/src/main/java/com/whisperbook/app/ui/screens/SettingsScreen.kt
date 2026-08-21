@@ -11,34 +11,24 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Bedtime
-import androidx.compose.material.icons.outlined.Inventory2
-import androidx.compose.material.icons.outlined.Language
-import androidx.compose.material.icons.outlined.Mic
-import androidx.compose.material.icons.outlined.RecordVoiceOver
 import androidx.compose.material.icons.outlined.Speed
+import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.WbSunny
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.saveable.rememberSaveable
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.whisperbook.app.ui.theme.WhisperbookTheme
-import com.whisperbook.app.domain.model.NarrationLanguage
 
 @Composable
 fun SettingsScreen(
     contentPadding: PaddingValues,
     appState: WhisperbookAppState,
-    onManageVoices: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var showNarratorPicker by rememberSaveable { mutableStateOf(false) }
     LazyColumn(
         modifier = modifier.fillMaxSize().padding(contentPadding),
         contentPadding = PaddingValues(horizontal = 13.dp, vertical = 5.dp),
@@ -48,50 +38,20 @@ fun SettingsScreen(
             SettingsMoonHeader()
         }
         item {
-            GoldenSettingsSection("Voice & narration") {
-                GoldenSettingsRow(
-                    "Default narrator",
-                    value = appState.defaultNarratorVoice,
-                    icon = Icons.Outlined.RecordVoiceOver,
-                    onClick = { showNarratorPicker = true },
-                )
-                CompactDivider()
+            GoldenSettingsSection("Playback & preparation") {
                 GoldenSettingsRow("Speaking speed", value = "${appState.speed}×", icon = Icons.Outlined.Speed, onClick = appState::cycleSpeed)
-            }
-        }
-        item {
-            GoldenSettingsSection("Language packs") {
-                NarrationLanguage.entries.forEachIndexed { index, language ->
-                    val installed = language.code in appState.installedLanguagePackCodes
-                    val selected = language.code == appState.narrationLanguageCode
-                    GoldenSettingsRow(
-                        title = "${language.displayName} · ${language.nativeName}",
-                        value = when {
-                            selected -> "Selected"
-                            installed -> "Use"
-                            else -> "Download"
-                        },
-                        icon = if (language == NarrationLanguage.ENGLISH) Icons.Outlined.Mic else Icons.Outlined.Language,
-                        installed = selected,
-                        onClick = when {
-                            selected -> null
-                            installed -> ({ appState.selectNarrationLanguage(language.code) })
-                            else -> ({ appState.downloadLanguagePack(language.code) })
-                        },
-                    )
-                    if (index < NarrationLanguage.entries.lastIndex) CompactDivider()
-                }
-                Text(
-                    "French and Arabic use Whisperbook's private on-device model. Add them only when you need them.",
-                    color = WhisperbookTheme.colors.ink.copy(alpha = 0.72f),
-                    style = WhisperbookTheme.typography.body.copy(fontSize = 11.sp, lineHeight = 15.sp),
-                    modifier = Modifier.padding(horizontal = 3.dp, vertical = 4.dp),
-                )
                 CompactDivider()
                 GoldenSettingsRow(
-                    "Manage voices",
-                    icon = Icons.Outlined.Inventory2,
-                    onClick = onManageVoices,
+                    "Narration chunk size",
+                    value = "${appState.narrationChunkChars} chars",
+                    icon = Icons.Outlined.Tune,
+                    onClick = appState::cycleNarrationChunkSize,
+                )
+                Text(
+                    "Smaller chunks start sooner. Whisperbook records only the first chunk before you listen.",
+                    color = WhisperbookTheme.colors.ink.copy(alpha = 0.72f),
+                    style = WhisperbookTheme.typography.body.copy(fontSize = 12.sp, lineHeight = 16.sp),
+                    modifier = Modifier.padding(horizontal = 3.dp, vertical = 4.dp),
                 )
             }
         }
@@ -104,13 +64,13 @@ fun SettingsScreen(
                     Text(
                         "Books\nVoices",
                         color = WhisperbookTheme.colors.ink,
-                        style = WhisperbookTheme.typography.body.copy(fontSize = 13.sp, lineHeight = 17.sp),
+                        style = WhisperbookTheme.typography.body.copy(fontSize = 14.sp, lineHeight = 18.sp),
                         modifier = Modifier.weight(1f),
                     )
                     Text(
                         "${formatStorageBytes(appState.localStorageBytes)} used",
                         color = WhisperbookTheme.colors.action,
-                        style = WhisperbookTheme.typography.label.copy(fontSize = 12.sp),
+                        style = WhisperbookTheme.typography.label.copy(fontSize = 13.sp, lineHeight = 16.sp),
                         textAlign = TextAlign.End,
                     )
                 }
@@ -146,19 +106,6 @@ fun SettingsScreen(
         }
     }
 
-    if (showNarratorPicker) {
-        VoicePickerSheet(
-            characterName = "Narrator",
-            voices = appState.voiceOptions,
-            selectedVoiceName = appState.defaultNarratorVoice,
-            onDismiss = { showNarratorPicker = false },
-            onPreviewVoice = { voice -> appState.previewVoice(voice.id, "Narrator") },
-            onVoiceSelected = { voice ->
-                appState.chooseDefaultNarratorVoice(voice.id)
-                showNarratorPicker = false
-            },
-        )
-    }
 }
 
 internal fun formatStorageBytes(bytes: Long): String {

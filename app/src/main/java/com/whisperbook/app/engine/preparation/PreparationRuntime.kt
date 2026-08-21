@@ -19,6 +19,7 @@ import com.whisperbook.app.engine.metadata.CharacterMetadataCatalog
 import com.whisperbook.app.engine.tts.SherpaKittenTtsEngine
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.first
 
 fun interface LocalTtsEngineFactory {
     fun create(): LocalTtsEngine
@@ -37,14 +38,13 @@ data class PreparationDependencies(
     val expectedSampleRate: Int = SherpaKittenTtsEngine.EXPECTED_SAMPLE_RATE,
     val narratorVoiceId: String = "bella",
     val speakingSpeed: Float = 1f,
-    val audioPrefetchPassageCount: Int = DEFAULT_AUDIO_PREFETCH_PASSAGE_COUNT,
+    val awaitNarrationProfiles: suspend () -> Unit = {},
 ) {
     init {
         require(modelVersion.isNotBlank())
         require(expectedSampleRate > 0)
         require(narratorVoiceId.isNotBlank())
         require(speakingSpeed.isFinite() && speakingSpeed > 0f)
-        require(audioPrefetchPassageCount >= 1)
     }
 }
 
@@ -77,16 +77,24 @@ object PreparationRuntime {
         }
     }
 
-    private fun createProductionDependencies(context: Context): PreparationDependencies =
-        PreparationDependencies(
-            database = WhisperBookDatabase.create(context),
+    private fun createProductionDependencies(context: Context): PreparationDependencies {
+        val database = WhisperBookDatabase.create(context)
+        val settingsRepository = DataStoreSettingsRepository(context.whisperBookSettingsDataStore)
+        return PreparationDependencies(
+            database = database,
             publicationExtractor = OfflinePublicationExtractor(context),
             speakerAttributor = HeuristicSpeakerAttributor(),
             ttsEngineFactory = LocalTtsEngineFactory { SherpaKittenTtsEngine(context) },
             audioSegmentStore = AppPrivateAudioSegmentStore(context),
             characterMetadataCatalog = AppPrivateCharacterMetadataCatalog(context),
-            settingsFlow = DataStoreSettingsRepository(context.whisperBookSettingsDataStore).settings,
+            settingsFlow = settingsRepository.settings,
+            awaitNarrationProfiles = {
+                database.bookDao().seedLegacyNarrationProfiles(
+                    settingsRepository.legacyNarrationLanguageCode.first(),
+                )
+            },
         )
+    }
 }
 
 /** WorkerFactory option for applications that want constructor injection without Hilt. */
@@ -103,5 +111,3 @@ class PreparationWorkerFactory(
         null
     }
 }
-
-const val DEFAULT_AUDIO_PREFETCH_PASSAGE_COUNT = 8

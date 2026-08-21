@@ -8,6 +8,8 @@ import com.whisperbook.app.domain.SynthesisResult
 import com.whisperbook.app.domain.model.AudioSegment
 import com.whisperbook.app.domain.model.AudioSegmentState
 import com.whisperbook.app.domain.model.CharacterVoiceAssignment
+import com.whisperbook.app.domain.model.ChapterVoiceAssignmentSnapshot
+import com.whisperbook.app.domain.model.VoiceRegenerationScope
 import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileInputStream
@@ -97,6 +99,10 @@ class AppPrivateAudioSegmentStore internal constructor(
         previousAssignment: CharacterVoiceAssignment?,
         passageIds: Set<String>,
         gracePeriodMs: Long,
+        bookId: String?,
+        previousChapterAssignments: List<ChapterVoiceAssignmentSnapshot>,
+        scope: VoiceRegenerationScope,
+        fromChapterOrdinal: Int,
     ): AudioRetentionGeneration? = withContext(fileDispatcher) {
         mutex.withLock {
             require(characterId.isNotBlank()) { "characterId must not be blank" }
@@ -105,6 +111,11 @@ class AppPrivateAudioSegmentStore internal constructor(
                 "previousAssignment must belong to characterId"
             }
             require(passageIds.none(String::isBlank)) { "passageIds must not contain blank values" }
+            require(bookId == null || bookId.isNotBlank()) { "bookId must not be blank" }
+            require(previousChapterAssignments.all { it.assignment.characterId == characterId }) {
+                "chapter assignment snapshots must belong to characterId"
+            }
+            require(fromChapterOrdinal >= 0) { "fromChapterOrdinal must not be negative" }
 
             ensureRoot()
             cleanupExpiredLocked(nowEpochMs())
@@ -128,6 +139,10 @@ class AppPrivateAudioSegmentStore internal constructor(
                 segmentCount = targets.size,
                 passageIds = passageIds,
                 previousAssignment = previousAssignment,
+                bookId = bookId,
+                previousChapterAssignments = previousChapterAssignments,
+                voiceRegenerationScope = scope,
+                fromChapterOrdinal = fromChapterOrdinal,
             )
             val manifest = RetentionRecord(
                 generation = generation,
@@ -484,6 +499,16 @@ class AppPrivateAudioSegmentStore internal constructor(
                 setProperty("previousModelVersion", assignment.modelVersion)
                 setProperty("previousSpeed", assignment.speed.toString())
             }
+            generation.bookId?.let { setProperty("bookId", it) }
+            setProperty("voiceRegenerationScope", generation.voiceRegenerationScope.name)
+            setProperty("fromChapterOrdinal", generation.fromChapterOrdinal.toString())
+            setProperty("chapterAssignmentCount", generation.previousChapterAssignments.size.toString())
+            generation.previousChapterAssignments.forEachIndexed { index, snapshot ->
+                setProperty("chapterAssignment.$index.chapterId", snapshot.chapterId)
+                setProperty("chapterAssignment.$index.voiceId", snapshot.assignment.voiceId)
+                setProperty("chapterAssignment.$index.modelVersion", snapshot.assignment.modelVersion)
+                setProperty("chapterAssignment.$index.speed", snapshot.assignment.speed.toString())
+            }
         }
 
         companion object {
@@ -491,7 +516,7 @@ class AppPrivateAudioSegmentStore internal constructor(
                 val properties = Properties().apply {
                     FileInputStream(file).use(::load)
                 }
-                require(properties.getProperty("schema") == RETENTION_SCHEMA)
+                require(properties.getProperty("schema") in SUPPORTED_RETENTION_SCHEMAS)
                 val id = requireNotNull(properties.getProperty("id"))
                 require(GENERATION_ID_PATTERN.matches(id))
                 val characterId = requireNotNull(properties.getProperty("characterId"))
@@ -510,6 +535,29 @@ class AppPrivateAudioSegmentStore internal constructor(
                 } else {
                     null
                 }
+                val chapterAssignmentCount = properties.getProperty("chapterAssignmentCount")
+                    ?.toIntOrNull()
+                    ?.coerceAtLeast(0)
+                    ?: 0
+                val previousChapterAssignments = (0 until chapterAssignmentCount).map { index ->
+                    val chapterId = requireNotNull(properties.getProperty("chapterAssignment.$index.chapterId"))
+                    val chapterVoiceId = requireNotNull(properties.getProperty("chapterAssignment.$index.voiceId"))
+                    val chapterModelVersion = requireNotNull(
+                        properties.getProperty("chapterAssignment.$index.modelVersion"),
+                    )
+                    val chapterSpeed = requireNotNull(properties.getProperty("chapterAssignment.$index.speed")).toFloat()
+                    ChapterVoiceAssignmentSnapshot(
+                        chapterId,
+                        CharacterVoiceAssignment(characterId, chapterVoiceId, chapterModelVersion, chapterSpeed),
+                    )
+                }
+                val voiceScope = properties.getProperty("voiceRegenerationScope")
+                    ?.let { encoded -> VoiceRegenerationScope.entries.firstOrNull { it.name == encoded } }
+                    ?: VoiceRegenerationScope.WHOLE_BOOK
+                val fromChapterOrdinal = properties.getProperty("fromChapterOrdinal")
+                    ?.toIntOrNull()
+                    ?.coerceAtLeast(0)
+                    ?: 0
                 val segmentCount = requireNotNull(properties.getProperty("segmentCount")).toInt()
                 require(segmentCount >= 0)
                 return RetentionRecord(
@@ -521,6 +569,10 @@ class AppPrivateAudioSegmentStore internal constructor(
                         segmentCount = segmentCount,
                         passageIds = passageIds,
                         previousAssignment = previousAssignment,
+                        bookId = properties.getProperty("bookId"),
+                        previousChapterAssignments = previousChapterAssignments,
+                        voiceRegenerationScope = voiceScope,
+                        fromChapterOrdinal = fromChapterOrdinal,
                     ),
                     segmentKeys = segmentKeys,
                 )
@@ -535,8 +587,10 @@ class AppPrivateAudioSegmentStore internal constructor(
         const val RETENTION_FILE_PREFIX = "generation-"
         const val LEGACY_METADATA_SCHEMA = "whisperbook-segment-v1"
         const val METADATA_SCHEMA = "whisperbook-segment-v2"
-        const val RETENTION_SCHEMA = "whisperbook-audio-retention-v1"
+        const val LEGACY_RETENTION_SCHEMA = "whisperbook-audio-retention-v1"
+        const val RETENTION_SCHEMA = "whisperbook-audio-retention-v2"
         val SUPPORTED_METADATA_SCHEMAS = setOf(LEGACY_METADATA_SCHEMA, METADATA_SCHEMA)
+        val SUPPORTED_RETENTION_SCHEMAS = setOf(LEGACY_RETENTION_SCHEMA, RETENTION_SCHEMA)
         val GENERATION_ID_PATTERN = Regex("^[A-Za-z0-9_-]{1,128}$")
 
         fun File?.orEmptyLength(): Long = this?.length() ?: 0L

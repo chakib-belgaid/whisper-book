@@ -1,6 +1,7 @@
 package com.whisperbook.app.data.repository
 
 import androidx.datastore.preferences.core.mutablePreferencesOf
+import androidx.datastore.preferences.core.stringPreferencesKey
 import com.whisperbook.app.domain.model.AppSettings
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -15,9 +16,8 @@ class SettingsPreferencesCodecTest {
     fun `settings survive a preferences round trip`() {
         val expected = AppSettings(
             onboardingComplete = true,
-            defaultNarratorVoiceId = "willow",
-            narrationLanguageCode = "fr",
             installedLanguagePackCodes = setOf("en", "fr", "ar"),
+            narrationChunkChars = 240,
             speakingSpeed = 1.25f,
             sleepTimerMinutes = 45,
             keepScreenAwake = true,
@@ -38,7 +38,7 @@ class SettingsPreferencesCodecTest {
         SettingsPreferencesCodec.write(
             preferences,
             AppSettings(
-                defaultNarratorVoiceId = "",
+                narrationChunkChars = 999,
                 speakingSpeed = 9f,
                 sleepTimerMinutes = -4,
                 audioCacheLimitBytes = 1L,
@@ -47,7 +47,7 @@ class SettingsPreferencesCodecTest {
 
         val decoded = SettingsPreferencesCodec.decode(preferences)
 
-        assertEquals("bella", decoded.defaultNarratorVoiceId)
+        assertEquals(160, decoded.narrationChunkChars)
         assertEquals(2f, decoded.speakingSpeed)
         assertEquals(0, decoded.sleepTimerMinutes)
         assertEquals(64L * 1024L * 1024L, decoded.audioCacheLimitBytes)
@@ -62,19 +62,27 @@ class SettingsPreferencesCodecTest {
     }
 
     @Test
-    fun `language packs keep English installed and reject an uninstalled selection`() {
+    fun `language packs keep English installed and reject unsupported packs`() {
         val preferences = mutablePreferencesOf()
         SettingsPreferencesCodec.write(
             preferences,
             AppSettings(
-                narrationLanguageCode = "fr",
                 installedLanguagePackCodes = setOf("ar", "unsupported"),
             ),
         )
 
         val decoded = SettingsPreferencesCodec.decode(preferences)
 
-        assertEquals("en", decoded.narrationLanguageCode)
         assertEquals(setOf("en", "ar"), decoded.installedLanguagePackCodes)
+    }
+
+    @Test
+    fun `legacy global language is read only for the per-book migration`() {
+        val preferences = mutablePreferencesOf(
+            stringPreferencesKey("narration_language_code") to "fr",
+        )
+
+        assertEquals("fr", SettingsPreferencesCodec.decodeLegacyNarrationLanguageCode(preferences))
+        assertEquals(AppSettings(), SettingsPreferencesCodec.decode(preferences))
     }
 }

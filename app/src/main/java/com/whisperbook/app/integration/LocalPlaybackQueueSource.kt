@@ -15,7 +15,6 @@ import com.whisperbook.app.domain.model.VoiceDescriptor
 import com.whisperbook.app.engine.audio.AppPrivateAudioSegmentStore
 import com.whisperbook.app.engine.audio.LocalAudioGenerationCoordinator
 import com.whisperbook.app.engine.audio.NarrationSynthesisPlanner
-import com.whisperbook.app.engine.tts.CharacterVoiceCaster
 import com.whisperbook.app.engine.tts.SherpaKittenTtsEngine
 import com.whisperbook.app.playback.PlayableSegment
 import com.whisperbook.app.playback.PlaybackChapterQueue
@@ -40,6 +39,7 @@ class LocalPlaybackQueueSource(
     private val modelVersion: String = SherpaKittenTtsEngine.MODEL_VERSION,
     private val expectedSampleRate: Int = SherpaKittenTtsEngine.EXPECTED_SAMPLE_RATE,
     private val settingsFlow: Flow<AppSettings> = flowOf(AppSettings()),
+    private val awaitNarrationProfiles: suspend () -> Unit = {},
 ) : PlaybackQueueSource {
     override suspend fun load(bookId: String, chapterId: String?): Result<PlaybackChapterQueue> =
         withContext(Dispatchers.IO) {
@@ -96,8 +96,13 @@ class LocalPlaybackQueueSource(
         requestedChapterId: String?,
         onProgress: (suspend (PlaybackChapterQueue?, Int, Int) -> Unit)? = null,
     ): PlaybackChapterQueue {
+        awaitNarrationProfiles()
         val book = database.bookDao().getById(bookId)
             ?: error("This book is no longer in the library")
+        val expectedProfileRevision = book.narrationProfileRevision
+        check(book.narrationProfileSeeded && expectedProfileRevision >= 0) {
+            "This book's narration profile is still being migrated"
+        }
         val chapters = database.chapterDao().getHeadersForBook(bookId)
         check(chapters.isNotEmpty()) { "This book has no prepared chapters yet" }
         val chapterHeader = requestedChapterId
@@ -127,6 +132,7 @@ class LocalPlaybackQueueSource(
         check(sourcePassages.isNotEmpty()) { "This chapter has no narratable passages" }
         val settings = settingsFlow.first()
         val resolvedVoices = resolveVoices(
+            bookId = bookId,
             chapterId = chapterHeader.id,
             speakerIds = sourcePassages.map(SourcePassage::speakerId).distinct(),
             characters = characters,
@@ -140,7 +146,8 @@ class LocalPlaybackQueueSource(
                 speed = resolvedVoice.assignment.speed,
                 modelVersion = resolvedVoice.assignment.modelVersion,
                 sampleRate = expectedSampleRate,
-                languageCode = settings.narrationLanguageCode,
+                languageCode = book.narrationLanguageCode,
+                maxChars = settings.narrationChunkChars,
             ).map { unit ->
                 ResolvedPassage(
                     queued = QueuedPassage(
@@ -198,7 +205,10 @@ class LocalPlaybackQueueSource(
         try {
             val segments = ArrayList<PlayableSegment>(resolvedPassages.size)
             resolvedPassages.forEachIndexed { passageOrdinal, passage ->
+                requireNarrationProfileRevision(bookId, expectedProfileRevision)
                 val ready = resolvePassageAudio(
+                    bookId = bookId,
+                    expectedProfileRevision = expectedProfileRevision,
                     passage = passage,
                     persisted = persistedSegments[passage.request.cacheKey],
                     engineProvider = {
@@ -208,6 +218,7 @@ class LocalPlaybackQueueSource(
                         }
                     },
                 )
+                requireNarrationProfileRevision(bookId, expectedProfileRevision)
                 segments += PlayableSegment(
                     passageId = passage.queued.passageId,
                     passageOrdinal = passageOrdinal,
@@ -229,40 +240,37 @@ class LocalPlaybackQueueSource(
     }
 
     private suspend fun resolveVoices(
+        bookId: String,
         chapterId: String,
         speakerIds: List<String>,
         characters: Map<String, StoryCharacterEntity>,
     ): Map<String, ResolvedVoice> {
         check(voices.isNotEmpty()) { "No embedded voices are available" }
-        val storedAssignments = database.voiceAssignmentDao().getForCharacters(speakerIds)
+        check(characters.values.all { it.bookId == bookId }) {
+            "This chapter references a character outside its book"
+        }
+        val chapterAssignments = database.chapterVoiceAssignmentDao()
+            .getForChapter(bookId, chapterId)
             .associate { assignment -> assignment.characterId to assignment.toDomain() }
-        val chapterAssignments = speakerIds.mapNotNull { speakerId ->
-            database.chapterVoiceAssignmentDao()
-                .getForChapterAndCharacter(chapterId, speakerId)
-        }.associate { assignment -> assignment.characterId to assignment.toDomain() }
-        val preferredNarrator = settingsFlow.first().defaultNarratorVoiceId.let { preferredId ->
-            voices.firstOrNull { voice -> voice.id == preferredId }
+        check(chapterAssignments.keys.containsAll(speakerIds)) {
+            "This chapter's complete voice set is still being prepared"
         }
         return speakerIds.associateWith { speakerId ->
-            val stored = chapterAssignments[speakerId] ?: storedAssignments[speakerId]
-            val voice = stored?.let { assignment -> voices.firstOrNull { it.id == assignment.voiceId } }
-                ?: defaultVoiceFor(speakerId, characters[speakerId], preferredNarrator)
-            val assignment = stored?.takeIf { it.voiceId == voice.id }
-                ?: CharacterVoiceAssignment(
-                    characterId = speakerId,
-                    voiceId = voice.id,
-                    modelVersion = modelVersion,
-                    speed = 1f,
-                ).also { database.voiceAssignmentDao().upsert(it.toEntity()) }
+            val assignment = chapterAssignments.getValue(speakerId)
+            val voice = voices.firstOrNull { it.id == assignment.voiceId }
+                ?: error("An assigned local voice is unavailable")
             ResolvedVoice(voice, assignment)
         }
     }
 
     private suspend fun resolvePassageAudio(
+        bookId: String,
+        expectedProfileRevision: Long,
         passage: ResolvedPassage,
         persisted: AudioSegmentEntity?,
         engineProvider: suspend () -> LocalTtsEngine,
     ): AudioSegment {
+        requireNarrationProfileRevision(bookId, expectedProfileRevision)
         val cacheKey = passage.request.cacheKey
         persisted
             ?.takeIf { it.state == AudioSegmentState.READY.name }
@@ -270,6 +278,7 @@ class LocalPlaybackQueueSource(
             ?.takeIf { it.path?.let(::File)?.isFile == true }
             ?.let { return it }
         return LocalAudioGenerationCoordinator.run {
+            requireNarrationProfileRevision(bookId, expectedProfileRevision)
             val completed = database.audioSegmentDao().findByCacheKey(cacheKey)
                 ?.takeIf { it.state == AudioSegmentState.READY.name }
                 ?.toDomain()
@@ -277,9 +286,11 @@ class LocalPlaybackQueueSource(
                 ?: audioStore.find(cacheKey)
                     ?.takeIf { it.path?.let(::File)?.isFile == true }
             if (completed != null) {
+                requireNarrationProfileRevision(bookId, expectedProfileRevision)
                 database.audioSegmentDao().upsert(completed.toEntity())
                 return@run completed
             }
+            requireNarrationProfileRevision(bookId, expectedProfileRevision)
             database.audioSegmentDao().upsert(
                 AudioSegmentEntity(
                     id = cacheKey,
@@ -297,13 +308,17 @@ class LocalPlaybackQueueSource(
                 check(result.sampleRate == expectedSampleRate) {
                     "The embedded voice returned an unexpected sample rate"
                 }
+                requireNarrationProfileRevision(bookId, expectedProfileRevision)
                 audioStore.writeForPassage(
                     passage.queued.sourcePassageId,
                     passage.queued.speakerId,
                     passage.request,
                     result,
                 )
-                    .also { database.audioSegmentDao().upsert(it.toEntity()) }
+                    .also {
+                        requireNarrationProfileRevision(bookId, expectedProfileRevision)
+                        database.audioSegmentDao().upsert(it.toEntity())
+                    }
             } catch (cancellation: CancellationException) {
                 // A newer chapter selection canceled this request. Do not present that intentional
                 // interruption as a synthesis failure; a later request can resume the passage.
@@ -312,6 +327,13 @@ class LocalPlaybackQueueSource(
                 database.audioSegmentDao().updateState(cacheKey, AudioSegmentState.FAILED.name, null)
                 throw failure
             }
+        }
+    }
+
+    private suspend fun requireNarrationProfileRevision(bookId: String, expectedRevision: Long) {
+        val actualRevision = database.bookDao().getById(bookId)?.narrationProfileRevision
+        if (actualRevision != expectedRevision) {
+            throw CancellationException("The book narration profile changed during audio generation")
         }
     }
 
@@ -336,19 +358,6 @@ class LocalPlaybackQueueSource(
         val queued: QueuedPassage,
         val request: SynthesisRequest,
     )
-
-    private fun defaultVoiceFor(
-        speakerId: String,
-        character: StoryCharacterEntity?,
-        preferredNarrator: VoiceDescriptor?,
-    ): VoiceDescriptor =
-        character?.let { storedCharacter ->
-            CharacterVoiceCaster.select(
-                character = storedCharacter.toDomain(),
-                voices = voices,
-                preferredNarrator = preferredNarrator,
-            )
-        } ?: voices[Math.floorMod(speakerId.hashCode(), voices.size)]
 
     private companion object {
         const val SQL_QUERY_BATCH_SIZE = 900

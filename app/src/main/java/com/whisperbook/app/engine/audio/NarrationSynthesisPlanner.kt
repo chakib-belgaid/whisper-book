@@ -19,7 +19,8 @@ object NarrationSynthesisPlanner {
         modelVersion: String,
         sampleRate: Int,
         languageCode: String = "en",
-    ): List<NarrationSynthesisUnit> = NarrationTextChunker.chunks(passageId, text).map { chunk ->
+        maxChars: Int = NarrationTextChunker.MAX_CHARS,
+    ): List<NarrationSynthesisUnit> = NarrationTextChunker.chunks(passageId, text, maxChars).map { chunk ->
         val provisional = SynthesisRequest(
             text = chunk.text,
             voice = voice,

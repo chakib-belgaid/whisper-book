@@ -22,6 +22,7 @@ import com.whisperbook.app.data.local.db.ChapterEntity
 import com.whisperbook.app.data.local.db.PassageEntity
 import com.whisperbook.app.data.local.db.PreparationJobEntity
 import com.whisperbook.app.data.local.db.toAliasEntities
+import com.whisperbook.app.data.local.db.toChapterEntity
 import com.whisperbook.app.data.local.db.toDomain
 import com.whisperbook.app.data.local.db.toEntity
 import com.whisperbook.app.domain.ExtractedChapter
@@ -78,6 +79,7 @@ class PreparationWorker @JvmOverloads constructor(
         }
 
         return try {
+            dependencies.awaitNarrationProfiles()
             setForeground(
                 createForegroundInfo(
                     bookId,
@@ -147,7 +149,7 @@ class PreparationWorker @JvmOverloads constructor(
         )
         val notification = NotificationCompat.Builder(applicationContext, PREPARATION_CHANNEL_ID)
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentTitle("Recording your audiobook")
+            .setContentTitle("Preparing your audiobook")
             .setContentText(contentText)
             .setSubText(state.message?.takeIf { it != contentText })
             .setContentIntent(openApp)
@@ -407,6 +409,15 @@ internal class PreparationStageRunner(
                 attemptCount,
             )
             assignMissingVoices(bookId, voices, settings)
+            database.chapterDao().getHeadersForBook(bookId).firstOrNull()?.let { firstChapter ->
+                database.chapterDao().getById(firstChapter.id)?.let { chapter ->
+                    materializeChapterVoiceSet(
+                        bookId = bookId,
+                        chapter = chapter,
+                        expectedProfileRevision = requireBook(bookId).narrationProfileRevision,
+                    )
+                }
+            }
             checkpoint(
                 bookId,
                 PreparationState(
@@ -427,6 +438,18 @@ internal class PreparationStageRunner(
         attemptCount: Int,
         fromChapterOrdinal: Int,
     ) {
+        val narrationProfile = requireBook(bookId)
+        val expectedProfileRevision = narrationProfile.narrationProfileRevision
+        if (!narrationProfile.narrationProfileSeeded || expectedProfileRevision < 0) {
+            throw PreparationPipelineException(
+                "narration-profile-migration-pending",
+                "The book narration profile is still being migrated",
+                true,
+            )
+        }
+        val languageCode = narrationProfile.narrationLanguageCode
+            .takeIf { it in com.whisperbook.app.domain.model.NarrationLanguage.supportedCodes }
+            ?: com.whisperbook.app.domain.model.NarrationLanguage.ENGLISH.code
         val chapters = database.chapterDao().getHeadersForBook(bookId)
         if (chapters.isEmpty()) {
             throw PreparationPipelineException("chapters-missing", "Chapters must exist before audio is prepared", false)
@@ -489,9 +512,13 @@ internal class PreparationStageRunner(
             val settings = dependencies.settingsFlow.first()
             val preparer = SequentialChapterAudioPreparer(
                 isPassageReady = ::isPassageAudioDurable,
-                preparePassage = { task -> synthesizePassage(engine, task) },
+                preparePassage = { task ->
+                    synthesizePassage(bookId, expectedProfileRevision, engine, task)
+                },
             )
+            var openingChunkPrepared = false
             targets.forEachIndexed { targetIndex, chapterHeader ->
+                requireNarrationProfileRevision(bookId, expectedProfileRevision)
                 val completedChapters = completedBeforeStart + targetIndex
                 checkpoint(
                     bookId,
@@ -515,6 +542,7 @@ internal class PreparationStageRunner(
                     isFinalChapter = chapterHeader.ordinal == chapters.last().ordinal,
                 )
                 assignMissingVoices(bookId, voices, settings)
+                materializeChapterVoiceSet(bookId, chapter, expectedProfileRevision)
                 val chapterBatch = ChapterAudioBatch(
                     chapterId = chapter.chapter.id,
                     chapterOrdinal = chapter.chapter.ordinal,
@@ -522,21 +550,26 @@ internal class PreparationStageRunner(
                     passages = chapter.passages.sortedBy { it.ordinal },
                 )
 
-                // Resolve and generate one source passage at a time. Eagerly resolving every
-                // passage in a large book (or even a long opening chapter) delayed first audio
-                // behind unrelated Room lookups.
-                chapterBatch.passages.forEach { passage ->
-                    val passageBatch = ChapterAudioBatch(
+                // Background preparation records only the first narration chunk. The remaining
+                // chunks are generated progressively when the listener starts that chapter. We
+                // still attribute every chapter here so later chapters remain playable on demand.
+                if (!openingChunkPrepared) {
+                    val openingPassage = chapterBatch.passages.first()
+                    val openingTask = synthesisTasks(
+                        bookId = bookId,
+                        passage = openingPassage,
+                        voices = voices,
+                        languageCode = languageCode,
+                        maxChars = settings.narrationChunkChars,
+                    ).first()
+                    val openingBatch = ChapterAudioBatch(
                         chapterId = chapterBatch.chapterId,
                         chapterOrdinal = chapterBatch.chapterOrdinal,
                         chapterTitle = chapterBatch.chapterTitle,
-                        passages = synthesisTasks(
-                            passage = passage,
-                            voices = voices,
-                            languageCode = settings.narrationLanguageCode,
-                        ),
+                        passages = listOf(openingTask),
                     )
-                    preparer.prepare(listOf(passageBatch))
+                    preparer.prepare(listOf(openingBatch))
+                    openingChunkPrepared = true
                 }
 
                 val readyChapters = completedChapters + 1
@@ -801,8 +834,7 @@ internal class PreparationStageRunner(
         val assignments = database.voiceAssignmentDao()
             .getForCharacters(characters.map { it.character.id })
             .associateBy { it.characterId }
-        val narratorVoice = voices.firstOrNull { it.id == settings.defaultNarratorVoiceId }
-            ?: voices.firstOrNull { it.id == dependencies.narratorVoiceId }
+        val narratorVoice = voices.firstOrNull { it.id == dependencies.narratorVoiceId }
             ?: voices.first()
         val orderedCharacters = characters.sortedWith(
             compareBy(
@@ -849,17 +881,18 @@ internal class PreparationStageRunner(
     }
 
     private suspend fun synthesisTasks(
+        bookId: String,
         passage: PassageEntity,
         voices: List<com.whisperbook.app.domain.model.VoiceDescriptor>,
         languageCode: String,
+        maxChars: Int,
     ): List<PassageSynthesisTask> {
         val assignment = database.chapterVoiceAssignmentDao()
-            .getForChapterAndCharacter(passage.chapterId, passage.speakerId)
+            .getForChapterAndCharacter(bookId, passage.chapterId, passage.speakerId)
             ?.toDomain()
-            ?: database.voiceAssignmentDao().getForCharacter(passage.speakerId)?.toDomain()
             ?: throw PreparationPipelineException(
                 "voice-assignment-missing",
-                "A character is missing its local voice assignment",
+                "This chapter's complete voice set is still being prepared",
                 false,
             )
         val voice = voices.firstOrNull { it.id == assignment.voiceId }
@@ -876,6 +909,7 @@ internal class PreparationStageRunner(
             modelVersion = assignment.modelVersion,
             sampleRate = dependencies.expectedSampleRate,
             languageCode = languageCode,
+            maxChars = maxChars,
         ).map { unit ->
             PassageSynthesisTask(
                 passage = passage,
@@ -884,14 +918,69 @@ internal class PreparationStageRunner(
         }
     }
 
+    private suspend fun materializeChapterVoiceSet(
+        bookId: String,
+        chapter: ChapterAggregate,
+        expectedProfileRevision: Long,
+    ) = database.withTransaction {
+        // The active worker may have passed its loop-level check just before a narrator change.
+        // Keep this check and the insert in one Room transaction: either the old row commits first
+        // and regeneration replaces it, or the new revision commits first and this work cancels.
+        requireNarrationProfileRevision(bookId, expectedProfileRevision)
+        val speakerIds = chapter.passages.mapTo(linkedSetOf()) { it.speakerId }
+        if (speakerIds.isEmpty()) {
+            throw PreparationPipelineException("voice-set-empty", "A chapter has no speakers to cast", false)
+        }
+        val ownedCharacterIds = database.storyCharacterDao().getEntitiesForBook(bookId)
+            .mapTo(hashSetOf()) { it.id }
+        if (!ownedCharacterIds.containsAll(speakerIds)) {
+            throw PreparationPipelineException(
+                "voice-set-cross-book",
+                "A chapter references a character outside this book",
+                false,
+            )
+        }
+        val templates = database.voiceAssignmentDao().getForCharacters(speakerIds.toList())
+            .associateBy { it.characterId }
+        val existing = database.chapterVoiceAssignmentDao()
+            .getForChapter(bookId, chapter.chapter.id)
+            .associateBy { it.characterId }
+        val missing = speakerIds.filterNot(existing::containsKey).map { characterId ->
+            templates[characterId]?.toDomain()?.toChapterEntity(bookId, chapter.chapter.id)
+                ?: throw PreparationPipelineException(
+                    "voice-template-missing",
+                    "A character is missing its book voice template",
+                    false,
+                )
+        }
+        if (missing.isNotEmpty()) {
+            database.chapterVoiceAssignmentDao().upsertAll(missing)
+        }
+        val completed = database.chapterVoiceAssignmentDao()
+            .getForChapter(bookId, chapter.chapter.id)
+            .mapTo(hashSetOf()) { it.characterId }
+        if (!completed.containsAll(speakerIds)) {
+            throw PreparationPipelineException(
+                "voice-set-incomplete",
+                "The chapter voice set could not be completed",
+                true,
+            )
+        }
+    }
+
     private suspend fun synthesizePassage(
+        bookId: String,
+        expectedProfileRevision: Long,
         engine: com.whisperbook.app.domain.LocalTtsEngine,
         task: PassageSynthesisTask,
     ) {
+        requireNarrationProfileRevision(bookId, expectedProfileRevision)
         val passage = task.passage
         val request = task.request
         val segment = LocalAudioGenerationCoordinator.runBackground {
+            requireNarrationProfileRevision(bookId, expectedProfileRevision)
             durablePassageAudio(task) ?: run {
+                requireNarrationProfileRevision(bookId, expectedProfileRevision)
                 database.audioSegmentDao().upsert(
                     AudioSegmentEntity(
                         id = request.cacheKey,
@@ -912,6 +1001,7 @@ internal class PreparationStageRunner(
                             false,
                         )
                     }
+                    requireNarrationProfileRevision(bookId, expectedProfileRevision)
                     dependencies.audioSegmentStore.writeForPassage(
                         passage.id,
                         passage.speakerId,
@@ -930,7 +1020,15 @@ internal class PreparationStageRunner(
                 }
             }
         }
+        requireNarrationProfileRevision(bookId, expectedProfileRevision)
         database.audioSegmentDao().upsert(segment.toEntity())
+    }
+
+    private suspend fun requireNarrationProfileRevision(bookId: String, expectedRevision: Long) {
+        val actualRevision = database.bookDao().getById(bookId)?.narrationProfileRevision
+        if (actualRevision != expectedRevision) {
+            throw CancellationException("The book narration profile changed during audio generation")
+        }
     }
 
     private suspend fun isPassageAudioDurable(task: PassageSynthesisTask): Boolean {
@@ -1093,7 +1191,7 @@ private fun PreparationStage.notificationMessage(): String = when (this) {
 internal fun preparationNotificationText(state: PreparationState): String = when {
     state.stage == PreparationStage.PREPARING_AUDIO && state.totalUnits > 0 -> {
         val completed = state.completedUnits.coerceIn(0, state.totalUnits)
-        "Recorded $completed of ${state.totalUnits} chapters"
+        "Prepared $completed of ${state.totalUnits} chapters"
     }
     else -> state.message ?: state.stage.notificationMessage()
 }

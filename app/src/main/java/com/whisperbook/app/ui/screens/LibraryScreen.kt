@@ -1,6 +1,7 @@
 package com.whisperbook.app.ui.screens
 
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -35,7 +36,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.whisperbook.app.R
 import com.whisperbook.app.ui.components.EmbossedCircularButton
 import com.whisperbook.app.ui.components.OfflineBadge
@@ -85,91 +88,119 @@ fun LibraryScreen(
         if (appState.books.isEmpty()) {
             LibraryEmptyState(onImport = onImport, modifier = Modifier.weight(1f))
         } else {
-            val current = appState.books.first()
-            ParchmentPanel(
-                modifier = Modifier.fillMaxWidth(),
-                contentPadding = PaddingValues(12.dp),
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                SectionHeading("Continue Listening")
-                Spacer(Modifier.height(8.dp))
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    TheatreScene(
-                        sceneRes = R.drawable.scene_moonlit_wood,
-                        contentDescription = "Cover for ${current.title}",
-                        modifier = Modifier.width(128.dp),
-                        height = 126.dp,
-                        showCurtain = true,
-                    )
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Text(current.title, color = WhisperbookTheme.colors.ink, style = WhisperbookTheme.typography.title)
-                        Text(
-                            text = current.libraryProgressLabel(),
-                            color = WhisperbookTheme.colors.elara,
-                            style = WhisperbookTheme.typography.label,
+                val current = appState.books.first()
+                ParchmentPanel(
+                    modifier = Modifier.fillMaxWidth(),
+                    contentPadding = PaddingValues(12.dp),
+                ) {
+                    SectionHeading("Continue Listening")
+                    Spacer(Modifier.height(8.dp))
+                    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        TheatreScene(
+                            sceneRes = R.drawable.scene_moonlit_wood,
+                            contentDescription = "Cover for ${current.title}",
+                            modifier = Modifier.width(128.dp),
+                            height = 126.dp,
+                            showCurtain = true,
                         )
-                        StorySlider(current.progress, {}, enabled = false, modifier = Modifier.fillMaxWidth())
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            EmbossedCircularButton(
-                                onClick = { onResume(current.id) },
-                                contentDescription = if (current.canListen) {
-                                    "Resume ${current.title}"
-                                } else if (current.totalChapters > 0) {
-                                    "${current.title} is still preparing voices"
-                                } else {
-                                    "${current.title} is still finding chapters"
-                                },
-                                enabled = current.canListen,
-                                size = 52.dp,
-                            ) {
-                                Icon(Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(30.dp))
-                            }
-                            EmbossedCircularButton(
-                                onClick = { pendingRemoveBookId = current.id },
-                                contentDescription = "Remove ${current.title} from library",
-                                size = 52.dp,
-                            ) {
-                                Icon(Icons.Outlined.DeleteOutline, contentDescription = null, tint = WhisperbookTheme.colors.error)
+                        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(
+                                text = current.title,
+                                color = WhisperbookTheme.colors.ink,
+                                style = WhisperbookTheme.typography.title,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                text = current.libraryProgressLabel(),
+                                color = WhisperbookTheme.colors.elara,
+                                style = WhisperbookTheme.typography.label,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            StorySlider(current.progress, {}, enabled = false, modifier = Modifier.fillMaxWidth())
+                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                                EmbossedCircularButton(
+                                    onClick = { onResume(current.id) },
+                                    contentDescription = if (current.canListen) {
+                                        "Resume ${current.title}"
+                                    } else if (current.totalChapters > 0) {
+                                        "${current.title} is still preparing voices"
+                                    } else {
+                                        "${current.title} is still finding chapters"
+                                    },
+                                    enabled = current.canListen,
+                                    size = 52.dp,
+                                ) {
+                                    Icon(Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(30.dp))
+                                }
+                                EmbossedCircularButton(
+                                    onClick = { pendingRemoveBookId = current.id },
+                                    contentDescription = "Remove ${current.title} from library",
+                                    size = 52.dp,
+                                ) {
+                                    Icon(Icons.Outlined.DeleteOutline, contentDescription = null, tint = WhisperbookTheme.colors.error)
+                                }
                             }
                         }
                     }
                 }
-            }
-            SectionHeading("More stories", dark = false)
-            Row(
-                modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                appState.books.drop(1).forEach { book ->
-                    ParchmentPanel(
-                        modifier = Modifier
-                            .width(154.dp)
-                            .height(142.dp)
-                            .paperClickable(
-                                onClick = { onBook(book.id) },
-                                role = Role.Button,
-                                fold = PaperFold.Card,
-                            )
-                            .clip(RoundedCornerShape(14.dp))
-                            .semantics { contentDescription = "Open ${book.title}" },
-                        contentPadding = PaddingValues(12.dp),
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
+                SectionHeading("More stories", dark = false)
+                Row(
+                    modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    appState.books.drop(1).forEach { book ->
+                        ParchmentPanel(
+                            modifier = Modifier
+                                .width(160.dp)
+                                .height(154.dp)
+                                .paperClickable(
+                                    onClick = { onBook(book.id) },
+                                    role = Role.Button,
+                                    fold = PaperFold.Card,
+                                )
+                                .clip(RoundedCornerShape(14.dp))
+                                .semantics { contentDescription = "Open ${book.title}" },
+                            contentPadding = PaddingValues(12.dp),
                         ) {
-                            Icon(Icons.Outlined.AutoStories, contentDescription = null, tint = WhisperbookTheme.colors.action, modifier = Modifier.size(34.dp))
-                            EmbossedCircularButton(
-                                onClick = { pendingRemoveBookId = book.id },
-                                contentDescription = "Remove ${book.title} from library",
-                                size = 44.dp,
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically,
                             ) {
-                                Icon(Icons.Outlined.DeleteOutline, contentDescription = null, tint = WhisperbookTheme.colors.error)
+                                Icon(Icons.Outlined.AutoStories, contentDescription = null, tint = WhisperbookTheme.colors.action, modifier = Modifier.size(34.dp))
+                                EmbossedCircularButton(
+                                    onClick = { pendingRemoveBookId = book.id },
+                                    contentDescription = "Remove ${book.title} from library",
+                                    size = 44.dp,
+                                ) {
+                                    Icon(Icons.Outlined.DeleteOutline, contentDescription = null, tint = WhisperbookTheme.colors.error)
+                                }
                             }
+                            Spacer(Modifier.height(4.dp))
+                            Text(
+                                text = book.title,
+                                color = WhisperbookTheme.colors.ink,
+                                style = WhisperbookTheme.typography.title.copy(fontSize = 18.sp, lineHeight = 22.sp),
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                text = book.author,
+                                color = WhisperbookTheme.colors.inkMuted,
+                                style = WhisperbookTheme.typography.label,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
                         }
-                        Spacer(Modifier.height(4.dp))
-                        Text(book.title, color = WhisperbookTheme.colors.ink, style = WhisperbookTheme.typography.title, maxLines = 2)
-                        Text(book.author, color = WhisperbookTheme.colors.inkMuted, style = WhisperbookTheme.typography.label, maxLines = 1)
                     }
                 }
             }
@@ -182,7 +213,7 @@ internal fun LibraryBookUi.libraryProgressLabel(): String = when {
         "Preparation needs attention"
     preparation.stage == com.whisperbook.app.domain.model.PreparationStage.PREPARING_AUDIO &&
         preparation.totalUnits > 0 ->
-        "${preparation.completedUnits.coerceIn(0, preparation.totalUnits)} of ${preparation.totalUnits} chapters recorded"
+        "${preparation.completedUnits.coerceIn(0, preparation.totalUnits)} of ${preparation.totalUnits} chapters prepared"
     totalChapters <= 0 -> "Finding chapters…"
     preparation.stage != com.whisperbook.app.domain.model.PreparationStage.READY ->
         "$totalChapters chapters found · preparing audio"

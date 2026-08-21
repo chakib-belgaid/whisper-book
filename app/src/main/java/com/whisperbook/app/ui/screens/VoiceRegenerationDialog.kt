@@ -18,7 +18,7 @@ import com.whisperbook.app.ui.theme.WhisperbookTheme
 internal fun VoiceRegenerationDialog(
     characterName: String,
     voiceName: String,
-    canStartFromNextChapter: Boolean,
+    canApplyFromThisChapter: Boolean,
     onConfirm: (VoiceRegenerationScope) -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -27,13 +27,8 @@ internal fun VoiceRegenerationDialog(
         title = { Text("Where should $voiceName begin?") },
         text = {
             Text(
-                if (canStartFromNextChapter) {
-                    "Choose where to regenerate $characterName's narration. The previous audio stays " +
-                        "available for 24 hours, so you can keep listening while the new chapters are prepared."
-                } else {
-                    "This is the final chapter, so there is no next chapter to regenerate. " +
-                        "You can apply $voiceName to the whole book or keep the current voice."
-                },
+                "Choose which custom chapter voice sets should use $voiceName for $characterName. " +
+                    "Previous audio stays available for 24 hours while the selected chapters are prepared.",
             )
         },
         confirmButton = {
@@ -42,18 +37,24 @@ internal fun VoiceRegenerationDialog(
                 verticalArrangement = Arrangement.spacedBy(2.dp),
             ) {
                 TextButton(
-                    onClick = { onConfirm(VoiceRegenerationScope.WHOLE_BOOK) },
-                    modifier = Modifier.fillMaxWidth().testTag("regenerate-whole-book"),
+                    onClick = { onConfirm(VoiceRegenerationScope.THIS_CHAPTER) },
+                    modifier = Modifier.fillMaxWidth().testTag("regenerate-this-chapter"),
                     colors = ButtonDefaults.textButtonColors(contentColor = WhisperbookTheme.colors.action),
                 ) {
-                    Text("Regenerate whole book")
+                    Text("This chapter")
                 }
                 TextButton(
-                    onClick = { onConfirm(VoiceRegenerationScope.FROM_NEXT_CHAPTER) },
-                    enabled = canStartFromNextChapter,
-                    modifier = Modifier.fillMaxWidth().testTag("regenerate-from-next-chapter"),
+                    onClick = { onConfirm(VoiceRegenerationScope.FROM_THIS_CHAPTER) },
+                    enabled = canApplyFromThisChapter,
+                    modifier = Modifier.fillMaxWidth().testTag("regenerate-from-this-chapter"),
                 ) {
-                    Text("Start with next chapter")
+                    Text("This chapter and later")
+                }
+                TextButton(
+                    onClick = { onConfirm(VoiceRegenerationScope.WHOLE_BOOK) },
+                    modifier = Modifier.fillMaxWidth().testTag("regenerate-whole-book"),
+                ) {
+                    Text("Whole book")
                 }
                 TextButton(
                     onClick = onDismiss,

@@ -12,6 +12,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Language
+import androidx.compose.material.icons.outlined.Mic
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -22,14 +25,17 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.whisperbook.app.ui.components.LeafOrnament
 import com.whisperbook.app.ui.components.PapercraftButton
 import com.whisperbook.app.ui.components.ParchmentPanel
+import com.whisperbook.app.domain.model.NarrationLanguage
 import com.whisperbook.app.ui.theme.WhisperbookTheme
 
 private data class PendingVoiceChange(
@@ -62,6 +68,17 @@ fun VoiceCastScreen(
                 textAlign = TextAlign.Center,
                 modifier = Modifier.fillMaxWidth(),
             )
+            if (appState.currentBookTitle.isNotBlank() && appState.currentChapterTitle.isNotBlank()) {
+                Spacer(Modifier.height(2.dp))
+                Text(
+                    "${appState.currentBookTitle} · Chapter ${appState.currentChapterNumber}: " +
+                        appState.currentChapterTitle,
+                    color = WhisperbookTheme.colors.inkMuted,
+                    style = WhisperbookTheme.typography.label.copy(fontSize = 9.sp, lineHeight = 12.sp),
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
             val status = when {
                 appState.isBusy -> appState.statusMessage ?: "Preparing your voice preview…"
                 appState.importError != null -> appState.importError
@@ -74,6 +91,8 @@ fun VoiceCastScreen(
                     color = if (appState.importError != null) WhisperbookTheme.colors.action else WhisperbookTheme.colors.inkMuted,
                     style = WhisperbookTheme.typography.label.copy(fontSize = 10.sp, lineHeight = 13.sp),
                     textAlign = TextAlign.Center,
+                    maxLines = 3,
+                    overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
@@ -85,6 +104,49 @@ fun VoiceCastScreen(
                     Text("Revert voice change")
                 }
             }
+        }
+        Spacer(Modifier.height(5.dp))
+        ParchmentPanel(
+            modifier = Modifier.fillMaxWidth().testTag("book-language-settings"),
+            contentPadding = PaddingValues(horizontal = 9.dp, vertical = 7.dp),
+        ) {
+            SectionHeading("Book language")
+            Text(
+                "This choice applies only to ${appState.currentBookTitle.ifBlank { "this book" }}.",
+                color = WhisperbookTheme.colors.inkMuted,
+                style = WhisperbookTheme.typography.label.copy(fontSize = 10.sp, lineHeight = 13.sp),
+                modifier = Modifier.padding(bottom = 3.dp),
+            )
+            NarrationLanguage.entries.forEachIndexed { index, language ->
+                val installed = language.code in appState.installedLanguagePackCodes
+                val selected = language.code == appState.narrationLanguageCode
+                GoldenSettingsRow(
+                    title = "${language.displayName} · ${language.nativeName}",
+                    value = when {
+                        selected -> "Selected for book"
+                        installed -> "Use for book"
+                        else -> "Download & use"
+                    },
+                    icon = if (language == NarrationLanguage.ENGLISH) {
+                        Icons.Outlined.Mic
+                    } else {
+                        Icons.Outlined.Language
+                    },
+                    installed = selected,
+                    onClick = when {
+                        selected -> null
+                        installed -> ({ appState.selectNarrationLanguage(language.code) })
+                        else -> ({ appState.downloadLanguagePack(language.code) })
+                    },
+                )
+                if (index < NarrationLanguage.entries.lastIndex) CompactDivider()
+            }
+            Text(
+                "Changing language rebuilds this book's narration on device; other books stay unchanged.",
+                color = WhisperbookTheme.colors.ink.copy(alpha = 0.72f),
+                style = WhisperbookTheme.typography.body.copy(fontSize = 10.sp, lineHeight = 13.sp),
+                modifier = Modifier.padding(horizontal = 3.dp, vertical = 3.dp),
+            )
         }
         if (appState.cast.isEmpty()) {
             ParchmentPanel(
@@ -137,14 +199,14 @@ fun VoiceCastScreen(
             VoicePickerSheet(
                 characterName = member.character,
                 voices = appState.voiceOptions,
-                selectedVoiceName = member.voice,
+                selectedVoiceId = member.voiceId,
                 onDismiss = { choosingVoiceFor = null },
                 onPreviewVoice = { voice ->
                     appState.previewVoice(voice.id, member.character)
                 },
                 onVoiceSelected = { voice ->
                     choosingVoiceFor = null
-                    if (voice.displayName != member.voice) {
+                    if (voice.id != member.voiceId) {
                         pendingVoiceChange = PendingVoiceChange(member.id, member.character, voice)
                     }
                 },
@@ -156,7 +218,7 @@ fun VoiceCastScreen(
         VoiceRegenerationDialog(
             characterName = pending.characterName,
             voiceName = pending.voice.displayName,
-            canStartFromNextChapter = appState.hasNextChapter,
+            canApplyFromThisChapter = appState.hasNextChapter,
             onConfirm = { scope ->
                 pendingVoiceChange = null
                 appState.assignVoice(pending.characterId, pending.voice.id, scope)

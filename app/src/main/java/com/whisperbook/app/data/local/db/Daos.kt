@@ -42,6 +42,39 @@ interface BookDao {
     @Query("SELECT * FROM books WHERE id = :bookId LIMIT 1")
     suspend fun getById(bookId: String): BookEntity?
 
+    @Query(
+        """
+        UPDATE books
+        SET narration_language_code = :languageCode,
+            narration_profile_revision = CASE
+                WHEN narration_profile_revision < 0 THEN 0
+                ELSE narration_profile_revision
+            END,
+            narration_profile_seeded = 1
+        WHERE narration_profile_seeded = 0
+        """,
+    )
+    suspend fun seedLegacyNarrationProfiles(languageCode: String): Int
+
+    @Query(
+        """
+        UPDATE books
+        SET narration_language_code = :languageCode,
+            narration_profile_revision = narration_profile_revision + 1
+        WHERE id = :bookId
+        """,
+    )
+    suspend fun updateNarrationLanguage(bookId: String, languageCode: String): Int
+
+    @Query(
+        """
+        UPDATE books
+        SET narration_profile_revision = narration_profile_revision + 1
+        WHERE id = :bookId
+        """,
+    )
+    suspend fun incrementNarrationProfileRevision(bookId: String): Int
+
     @Query("SELECT COUNT(*) FROM books")
     suspend fun count(): Int
 
@@ -151,6 +184,31 @@ interface PassageDao {
     @Query("SELECT * FROM passages WHERE chapter_id = :chapterId ORDER BY ordinal ASC")
     suspend fun getForChapter(chapterId: String): List<PassageEntity>
 
+    @Query(
+        """
+        SELECT passages.* FROM passages
+        INNER JOIN chapters ON chapters.id = passages.chapter_id
+        WHERE chapters.book_id = :bookId
+        ORDER BY chapters.ordinal ASC, passages.ordinal ASC
+        """,
+    )
+    suspend fun getForBook(bookId: String): List<PassageEntity>
+
+    @Query(
+        """
+        UPDATE passages
+        SET speaker_id = :speakerId,
+            confidence = 1.0,
+            attribution_rule = :attributionRule
+        WHERE id IN (:passageIds)
+        """,
+    )
+    suspend fun updateSpeakerAttribution(
+        passageIds: List<String>,
+        speakerId: String,
+        attributionRule: String,
+    ): Int
+
     @Query("DELETE FROM passages WHERE chapter_id = :chapterId")
     suspend fun deleteForChapter(chapterId: String)
 }
@@ -197,28 +255,53 @@ interface ChapterVoiceAssignmentDao {
     @Query(
         """
         SELECT * FROM chapter_voice_assignments
-        WHERE chapter_id = :chapterId AND character_id = :characterId
+        WHERE book_id = :bookId AND chapter_id = :chapterId
+        ORDER BY character_id ASC
+        """,
+    )
+    fun observeForChapter(bookId: String, chapterId: String): Flow<List<ChapterVoiceAssignmentEntity>>
+
+    @Query(
+        """
+        SELECT * FROM chapter_voice_assignments
+        WHERE book_id = :bookId AND chapter_id = :chapterId
+        ORDER BY character_id ASC
+        """,
+    )
+    suspend fun getForChapter(bookId: String, chapterId: String): List<ChapterVoiceAssignmentEntity>
+
+    @Query(
+        """
+        SELECT * FROM chapter_voice_assignments
+        WHERE book_id = :bookId AND chapter_id = :chapterId AND character_id = :characterId
         LIMIT 1
         """,
     )
     suspend fun getForChapterAndCharacter(
+        bookId: String,
         chapterId: String,
         characterId: String,
     ): ChapterVoiceAssignmentEntity?
 
-    @Query("SELECT * FROM chapter_voice_assignments WHERE character_id = :characterId")
-    suspend fun getForCharacter(characterId: String): List<ChapterVoiceAssignmentEntity>
+    @Query(
+        """
+        SELECT * FROM chapter_voice_assignments
+        WHERE book_id = :bookId AND character_id = :characterId
+        ORDER BY chapter_id ASC
+        """,
+    )
+    suspend fun getForCharacter(bookId: String, characterId: String): List<ChapterVoiceAssignmentEntity>
 
     @Upsert
     suspend fun upsertAll(assignments: List<ChapterVoiceAssignmentEntity>)
 
-    @Query("DELETE FROM chapter_voice_assignments WHERE character_id = :characterId")
-    suspend fun deleteForCharacter(characterId: String)
+    @Query("DELETE FROM chapter_voice_assignments WHERE book_id = :bookId AND character_id = :characterId")
+    suspend fun deleteForCharacter(bookId: String, characterId: String)
 
     @Query(
         """
         DELETE FROM chapter_voice_assignments
-        WHERE character_id = :characterId
+        WHERE book_id = :bookId AND character_id = :characterId
           AND chapter_id IN (
               SELECT id FROM chapters
               WHERE book_id = :bookId AND ordinal >= :fromChapterOrdinal
@@ -230,6 +313,14 @@ interface ChapterVoiceAssignmentDao {
         bookId: String,
         fromChapterOrdinal: Int,
     )
+
+    @Query(
+        """
+        DELETE FROM chapter_voice_assignments
+        WHERE book_id = :bookId AND character_id = :characterId AND chapter_id = :chapterId
+        """,
+    )
+    suspend fun deleteForChapterAndCharacter(bookId: String, chapterId: String, characterId: String)
 }
 
 @Dao
@@ -289,6 +380,36 @@ interface AudioSegmentDao {
         bookId: String,
         fromChapterOrdinal: Int,
     ): List<String>
+
+    @Query(
+        """
+        SELECT passages.id FROM passages
+        INNER JOIN chapters ON chapters.id = passages.chapter_id
+        WHERE passages.speaker_id = :characterId
+          AND chapters.book_id = :bookId
+          AND chapters.id = :chapterId
+        """,
+    )
+    suspend fun getPassageIdsForCharacterInChapter(
+        characterId: String,
+        bookId: String,
+        chapterId: String,
+    ): List<String>
+
+    @Query("DELETE FROM audio_segments WHERE passage_id IN (:passageIds)")
+    suspend fun deleteForPassageIdsBatch(passageIds: List<String>)
+
+    @Query(
+        """
+        DELETE FROM audio_segments
+        WHERE passage_id IN (
+            SELECT passages.id FROM passages
+            INNER JOIN chapters ON chapters.id = passages.chapter_id
+            WHERE chapters.book_id = :bookId
+        )
+        """,
+    )
+    suspend fun deleteForBook(bookId: String)
 
     @Query(
         """

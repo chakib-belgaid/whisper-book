@@ -45,7 +45,7 @@ import com.whisperbook.app.ui.components.paperSelectable
 internal fun VoicePickerSheet(
     characterName: String,
     voices: List<VoiceOptionUi>,
-    selectedVoiceName: String,
+    selectedVoiceId: String,
     onDismiss: () -> Unit,
     onPreviewVoice: (VoiceOptionUi) -> Unit,
     onVoiceSelected: (VoiceOptionUi) -> Unit,
@@ -92,7 +92,7 @@ internal fun VoicePickerSheet(
                     verticalArrangement = Arrangement.spacedBy(5.dp),
                 ) {
                     items(voices, key = VoiceOptionUi::id) { voice ->
-                        val selected = voice.displayName == selectedVoiceName
+                        val selected = voice.id == selectedVoiceId
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()

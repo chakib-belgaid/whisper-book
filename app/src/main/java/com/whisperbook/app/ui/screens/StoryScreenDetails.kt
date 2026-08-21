@@ -457,7 +457,7 @@ private fun GoldenSettingsRibbon(title: String, modifier: Modifier = Modifier) {
         Text(
             title,
             color = WhisperbookTheme.colors.ink,
-            style = WhisperbookTheme.typography.body.copy(fontSize = 15.sp, lineHeight = 19.sp),
+            style = WhisperbookTheme.typography.body.copy(fontSize = 16.sp, lineHeight = 20.sp),
             textAlign = TextAlign.Center,
             maxLines = 1,
         )
@@ -489,7 +489,7 @@ internal fun GoldenSettingsRow(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .defaultMinSize(minHeight = 45.dp)
+            .defaultMinSize(minHeight = WhisperbookTheme.components.minimumTouchTarget)
             .then(interaction)
             .padding(horizontal = 3.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -509,7 +509,7 @@ internal fun GoldenSettingsRow(
         Text(
             title,
             color = WhisperbookTheme.colors.ink,
-            style = WhisperbookTheme.typography.body.copy(fontSize = 13.sp, lineHeight = 17.sp),
+            style = WhisperbookTheme.typography.body.copy(fontSize = 14.sp, lineHeight = 18.sp),
             modifier = Modifier.weight(1f),
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
@@ -518,7 +518,7 @@ internal fun GoldenSettingsRow(
             Text(
                 value,
                 color = WhisperbookTheme.colors.action,
-                style = WhisperbookTheme.typography.body.copy(fontSize = 11.sp, lineHeight = 15.sp),
+                style = WhisperbookTheme.typography.label.copy(fontSize = 13.sp, lineHeight = 16.sp),
                 maxLines = 1,
             )
         }

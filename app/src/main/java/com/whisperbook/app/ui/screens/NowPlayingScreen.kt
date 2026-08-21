@@ -24,6 +24,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.outlined.AutoStories
 import androidx.compose.material.icons.outlined.DarkMode
 import androidx.compose.material.icons.outlined.KeyboardArrowDown
+import androidx.compose.material.icons.outlined.Replay
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -36,6 +37,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
@@ -51,7 +53,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.whisperbook.app.R
-import com.whisperbook.app.ui.components.ChapterNavigationButton
 import com.whisperbook.app.ui.components.EmbossedCircularButton
 import com.whisperbook.app.ui.components.LeafOrnament
 import com.whisperbook.app.ui.components.PaperFold
@@ -147,7 +148,7 @@ private fun PlayerHeader(onSettings: () -> Unit) {
             Text(
                 "Stories, beautifully heard. Offline.",
                 color = WhisperbookTheme.colors.paper,
-                style = WhisperbookTheme.typography.body.copy(fontSize = 8.sp, lineHeight = 10.sp),
+                style = WhisperbookTheme.typography.label.copy(fontSize = 10.sp, lineHeight = 12.sp),
                 maxLines = 1,
             )
         }
@@ -241,7 +242,7 @@ private fun CompactOfflineBadge(modifier: Modifier = Modifier) {
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text("⌁", color = WhisperbookTheme.colors.paper, style = WhisperbookTheme.typography.body.copy(fontSize = 14.sp, lineHeight = 14.sp))
-        Text("Offline", color = WhisperbookTheme.colors.onStage, style = WhisperbookTheme.typography.body.copy(fontSize = 11.sp, lineHeight = 13.sp), maxLines = 1)
+        Text("Offline", color = WhisperbookTheme.colors.onStage, style = WhisperbookTheme.typography.label.copy(fontSize = 12.sp, lineHeight = 14.sp), maxLines = 1)
     }
 }
 
@@ -286,13 +287,13 @@ private fun PlayerControlDeck(
                 onValueChange = appState::seekTo,
                 modifier = Modifier.fillMaxWidth().height(15.dp).align(Alignment.TopCenter),
             )
-            Text(formatPlaybackClock(appState.chapterPositionMs), color = WhisperbookTheme.colors.ink, style = WhisperbookTheme.typography.body.copy(fontSize = 11.sp), modifier = Modifier.align(Alignment.BottomStart))
-            Text("−${formatPlaybackClock((appState.chapterDurationMs - appState.chapterPositionMs).coerceAtLeast(0L))}", color = WhisperbookTheme.colors.ink, style = WhisperbookTheme.typography.body.copy(fontSize = 11.sp), modifier = Modifier.align(Alignment.BottomEnd))
+            Text(formatPlaybackClock(appState.chapterPositionMs), color = WhisperbookTheme.colors.ink, style = WhisperbookTheme.typography.body.copy(fontSize = 12.sp, lineHeight = 14.sp), modifier = Modifier.align(Alignment.BottomStart))
+            Text("−${formatPlaybackClock((appState.chapterDurationMs - appState.chapterPositionMs).coerceAtLeast(0L))}", color = WhisperbookTheme.colors.ink, style = WhisperbookTheme.typography.body.copy(fontSize = 12.sp, lineHeight = 14.sp), modifier = Modifier.align(Alignment.BottomEnd))
         }
         Text(
             formatPlaybackRemaining((appState.chapterDurationMs - appState.chapterPositionMs).coerceAtLeast(0L)),
             color = WhisperbookTheme.colors.action,
-            style = WhisperbookTheme.typography.body.copy(fontSize = 12.sp, lineHeight = 14.sp),
+            style = WhisperbookTheme.typography.body.copy(fontSize = 13.sp, lineHeight = 15.sp),
             textAlign = TextAlign.Center,
             modifier = Modifier.fillMaxWidth(),
         )
@@ -307,11 +308,11 @@ private fun PlayerControlDeck(
             )
         }
         Row(Modifier.fillMaxWidth().height(62.dp), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceEvenly) {
-            PlayerTransport(
-                description = "Previous chapter",
+            PlayerSeekControl(
+                description = "Back 15 seconds",
                 forward = false,
-                enabled = appState.hasPreviousChapter,
-                onClick = appState::playPreviousChapter,
+                enabled = appState.canListen && !appState.isChapterLoading,
+                onClick = { appState.seekBy(-0.1f) },
             )
             EmbossedCircularButton(
                 onClick = appState::togglePlayback,
@@ -333,11 +334,11 @@ private fun PlayerControlDeck(
                     Icon(if (appState.isPlaying) Icons.Filled.Pause else Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(30.dp))
                 }
             }
-            PlayerTransport(
-                description = "Next chapter",
+            PlayerSeekControl(
+                description = "Forward 15 seconds",
                 forward = true,
-                enabled = appState.hasNextChapter,
-                onClick = appState::playNextChapter,
+                enabled = appState.canListen && !appState.isChapterLoading,
+                onClick = { appState.seekBy(0.1f) },
             )
         }
         Row(
@@ -362,7 +363,7 @@ private fun PlayerControlDeck(
         if (appState.cast.isNotEmpty()) {
             Row(Modifier.fillMaxWidth().height(18.dp), horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
                 LeafOrnament(Modifier.size(width = 22.dp, height = 10.dp), WhisperbookTheme.colors.outline)
-                Text("Cast for this chapter", color = WhisperbookTheme.colors.ink, style = WhisperbookTheme.typography.title.copy(fontSize = 13.sp, lineHeight = 16.sp), textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = 8.dp))
+                Text("Cast for this chapter", color = WhisperbookTheme.colors.ink, style = WhisperbookTheme.typography.title.copy(fontSize = 14.sp, lineHeight = 17.sp), textAlign = TextAlign.Center, modifier = Modifier.padding(horizontal = 8.dp))
                 LeafOrnament(Modifier.size(width = 22.dp, height = 10.dp), WhisperbookTheme.colors.outline)
             }
             Row(
@@ -392,9 +393,9 @@ private fun PlayerControlDeck(
         ) {
             Icon(Icons.Outlined.AutoStories, contentDescription = null, tint = WhisperbookTheme.colors.ink, modifier = Modifier.size(21.dp))
             Spacer(Modifier.width(7.dp))
-            Text("Chapters", color = WhisperbookTheme.colors.ink, style = WhisperbookTheme.typography.body.copy(fontSize = 13.sp))
+            Text("Chapters", color = WhisperbookTheme.colors.ink, style = WhisperbookTheme.typography.body.copy(fontSize = 14.sp, lineHeight = 17.sp))
             Spacer(Modifier.width(24.dp))
-            Text("${appState.currentChapterNumber} of ${appState.totalChapters}", color = WhisperbookTheme.colors.ink, style = WhisperbookTheme.typography.body.copy(fontSize = 13.sp))
+            Text("${appState.currentChapterNumber} of ${appState.totalChapters}", color = WhisperbookTheme.colors.ink, style = WhisperbookTheme.typography.body.copy(fontSize = 14.sp, lineHeight = 17.sp))
             Icon(Icons.Outlined.KeyboardArrowDown, contentDescription = null, tint = WhisperbookTheme.colors.inkMuted, modifier = Modifier.size(18.dp))
         }
     }
@@ -432,14 +433,14 @@ private fun CurrentPassageExcerpt(
         Text(
             text = passage.speakerName.uppercase(),
             color = accent,
-            style = WhisperbookTheme.typography.label.copy(fontSize = 9.sp, lineHeight = 11.sp),
+            style = WhisperbookTheme.typography.label.copy(fontSize = 10.sp, lineHeight = 12.sp),
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
         Text(
             text = passage.text,
             color = WhisperbookTheme.colors.ink,
-            style = WhisperbookTheme.typography.reader.copy(fontSize = 14.sp, lineHeight = 18.sp),
+            style = WhisperbookTheme.typography.reader.copy(fontSize = 15.sp, lineHeight = 19.sp),
             textAlign = TextAlign.Center,
             maxLines = maxLines,
             overflow = TextOverflow.Ellipsis,
@@ -465,7 +466,7 @@ private fun PlayerCastMedallion(name: String, portraitRes: Int, accent: Color) {
             Modifier.fillMaxWidth().height(19.dp).clip(RoundedCornerShape(2.dp)).background(accent).border(1.dp, WhisperbookTheme.colors.outline, RoundedCornerShape(2.dp)),
             contentAlignment = Alignment.Center,
         ) {
-            Text(name, color = WhisperbookTheme.colors.onStage, style = WhisperbookTheme.typography.body.copy(fontSize = 10.sp, lineHeight = 11.sp), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(name, color = WhisperbookTheme.colors.onStage, style = WhisperbookTheme.typography.body.copy(fontSize = 11.sp, lineHeight = 13.sp), maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
@@ -483,23 +484,41 @@ internal fun formatPlaybackRemaining(milliseconds: Long): String {
 }
 
 @Composable
-private fun PlayerTransport(
+private fun PlayerSeekControl(
     description: String,
     forward: Boolean,
     enabled: Boolean,
     onClick: () -> Unit,
 ) {
     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-        ChapterNavigationButton(
+        EmbossedCircularButton(
             onClick = onClick,
-            description = description,
-            forward = forward,
+            contentDescription = description,
             enabled = enabled,
-        )
+            size = 48.dp,
+            backgroundColor = WhisperbookTheme.colors.paper,
+            contentColor = if (enabled) WhisperbookTheme.colors.ink else WhisperbookTheme.colors.inkMuted,
+            borderColor = WhisperbookTheme.colors.outline,
+        ) {
+            Box(contentAlignment = Alignment.Center) {
+                Icon(
+                    imageVector = Icons.Outlined.Replay,
+                    contentDescription = null,
+                    modifier = Modifier
+                        .size(34.dp)
+                        .graphicsLayer { scaleX = if (forward) -1f else 1f },
+                )
+                Text(
+                    text = "15",
+                    color = if (enabled) WhisperbookTheme.colors.ink else WhisperbookTheme.colors.inkMuted,
+                    style = WhisperbookTheme.typography.label.copy(fontSize = 9.sp, lineHeight = 10.sp),
+                )
+            }
+        }
         Text(
-            if (forward) "Next chapter" else "Previous chapter",
+            if (forward) "Forward 15s" else "Back 15s",
             color = if (enabled) WhisperbookTheme.colors.ink else WhisperbookTheme.colors.inkMuted,
-            style = WhisperbookTheme.typography.body.copy(fontSize = 10.sp, lineHeight = 11.sp),
+            style = WhisperbookTheme.typography.label.copy(fontSize = 11.sp, lineHeight = 13.sp),
         )
     }
 }
@@ -524,7 +543,7 @@ private fun DeckSetting(
         if (leading != null) Spacer(Modifier.width(4.dp))
         Column(horizontalAlignment = Alignment.Start) {
             Text(primary, color = WhisperbookTheme.colors.ink, style = WhisperbookTheme.typography.body.copy(fontSize = 13.sp, lineHeight = 14.sp, fontWeight = FontWeight.Bold))
-            Text(secondary, color = WhisperbookTheme.colors.ink, style = WhisperbookTheme.typography.body.copy(fontSize = 9.sp, lineHeight = 10.sp))
+            Text(secondary, color = WhisperbookTheme.colors.ink, style = WhisperbookTheme.typography.label.copy(fontSize = 10.sp, lineHeight = 12.sp))
         }
         Spacer(Modifier.width(4.dp))
         Icon(Icons.Outlined.KeyboardArrowDown, contentDescription = null, tint = WhisperbookTheme.colors.inkMuted, modifier = Modifier.size(16.dp))

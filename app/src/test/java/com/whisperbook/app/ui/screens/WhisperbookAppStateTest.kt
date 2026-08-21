@@ -3,14 +3,18 @@ package com.whisperbook.app.ui.screens
 import com.whisperbook.app.R
 import com.whisperbook.app.domain.NarrationTextChunker
 import com.whisperbook.app.domain.model.BuiltInCharacters
+import com.whisperbook.app.domain.model.AppSettings
 import com.whisperbook.app.domain.model.Book
 import com.whisperbook.app.domain.model.BookFormat
 import com.whisperbook.app.domain.model.Chapter
+import com.whisperbook.app.domain.model.CharacterColorRole
 import com.whisperbook.app.domain.model.CharacterVoiceAssignment
 import com.whisperbook.app.domain.model.Passage
 import com.whisperbook.app.domain.model.PlaybackCursor
 import com.whisperbook.app.domain.model.PreparationStage
 import com.whisperbook.app.domain.model.PreparationState
+import com.whisperbook.app.domain.model.StoryCharacter
+import com.whisperbook.app.domain.model.VoiceDescriptor
 import com.whisperbook.app.integration.WhisperbookUiSnapshot
 import com.whisperbook.app.engine.tts.SherpaKittenTtsEngine
 import org.junit.Assert.assertEquals
@@ -57,7 +61,7 @@ class WhisperbookAppStateTest {
 
         assertEquals(37, state.totalChapters)
         assertEquals(37, state.books.single().totalChapters)
-        assertEquals("2 of 37 chapters recorded", state.books.single().libraryProgressLabel())
+        assertEquals("2 of 37 chapters prepared", state.books.single().libraryProgressLabel())
         assertTrue(state.isBookPreparing)
     }
 
@@ -154,7 +158,7 @@ class WhisperbookAppStateTest {
     }
 
     @Test
-    fun `chapter availability requires attribution and every speaker voice`() {
+    fun `selected chapter availability requires its authoritative speaker voices`() {
         val ready = chapterWithPassage("ready", 0, BuiltInCharacters.NARRATOR_ID, "narration")
         val unattributed = chapterWithPassage(
             "unattributed",
@@ -181,7 +185,9 @@ class WhisperbookAppStateTest {
             ),
         )
 
-        assertEquals(listOf(true, false, false, false), state.chapters.map(ChapterUi::isAvailable))
+        // Only the selected chapter's cast is observed. Persisted non-selected chapters are
+        // guaranteed complete by preparation and are gated here by attribution.
+        assertEquals(listOf(true, false, true, false), state.chapters.map(ChapterUi::isAvailable))
         assertTrue(state.canListen)
         assertFalse(state.hasNextChapter)
     }
@@ -212,6 +218,92 @@ class WhisperbookAppStateTest {
         )
 
         assertTrue(state.chapters.single().isAvailable)
+    }
+
+    @Test
+    fun `cast selection preserves stable voice id when display names match`() {
+        val chapter = chapterWithPassage("chapter-1", 0, BuiltInCharacters.NARRATOR_ID, "narration")
+        val state = WhisperbookAppState()
+
+        state.synchronize(
+            WhisperbookUiSnapshot(
+                chapters = listOf(chapter),
+                selectedChapter = chapter,
+                characters = listOf(
+                    StoryCharacter(
+                        id = BuiltInCharacters.NARRATOR_ID,
+                        bookId = "book-1",
+                        displayName = "Narrator",
+                        aliases = emptySet(),
+                        colorRole = CharacterColorRole.NARRATOR,
+                        dialogueLineCount = 1,
+                    ),
+                ),
+                voices = listOf(
+                    VoiceDescriptor("voice-a", "Same name", 0),
+                    VoiceDescriptor("voice-b", "Same name", 1),
+                ),
+                voiceAssignments = mapOf(
+                    BuiltInCharacters.NARRATOR_ID to CharacterVoiceAssignment(
+                        BuiltInCharacters.NARRATOR_ID,
+                        "voice-b",
+                        "test-model",
+                    ),
+                ),
+            ),
+        )
+
+        assertEquals("voice-b", state.cast.single().voiceId)
+    }
+
+    @Test
+    fun `cast follows selected chapter across books and returns to its frozen snapshot`() {
+        val state = WhisperbookAppState()
+        val voices = listOf(
+            VoiceDescriptor("bella", "Bella", 0),
+            VoiceDescriptor("jasper", "Jasper", 1),
+            VoiceDescriptor("bruno", "Bruno", 2),
+        )
+
+        fun synchronize(bookId: String, chapterId: String, voiceId: String) {
+            val chapter = Chapter(
+                id = chapterId,
+                bookId = bookId,
+                ordinal = if (chapterId.endsWith("2")) 1 else 0,
+                title = chapterId,
+                passages = listOf(
+                    Passage("$chapterId-p1", chapterId, 0, "Text", "$bookId-narrator", 1f, "rule"),
+                ),
+            )
+            val narrator = StoryCharacter(
+                id = "$bookId-narrator",
+                bookId = bookId,
+                displayName = "Narrator",
+                aliases = emptySet(),
+                colorRole = CharacterColorRole.NARRATOR,
+                dialogueLineCount = 1,
+            )
+            state.synchronize(
+                WhisperbookUiSnapshot(
+                    chapters = listOf(chapter),
+                    selectedChapter = chapter,
+                    characters = listOf(narrator),
+                    voices = voices,
+                    voiceAssignments = mapOf(
+                        narrator.id to CharacterVoiceAssignment(narrator.id, voiceId, "model"),
+                    ),
+                ),
+            )
+        }
+
+        synchronize("book-a", "a1", "bella")
+        assertEquals("bella", state.cast.single().voiceId)
+        synchronize("book-a", "a2", "jasper")
+        assertEquals("jasper", state.cast.single().voiceId)
+        synchronize("book-b", "b1", "bruno")
+        assertEquals("bruno", state.cast.single().voiceId)
+        synchronize("book-a", "a1", "bella")
+        assertEquals("bella", state.cast.single().voiceId)
     }
 
     @Test
@@ -302,6 +394,40 @@ class WhisperbookAppStateTest {
             state.passages.map { it.id },
         )
         assertEquals(text.trim(), state.passages.joinToString(" ") { it.text })
+    }
+
+    @Test
+    fun `changing narration chunk size reprojects reader passages`() {
+        val text = List(20) { index -> "Sentence $index ends cleanly." }.joinToString(" ")
+        val chapter = chapterWithPassage(
+            id = "chapter-1",
+            ordinal = 0,
+            speakerId = BuiltInCharacters.NARRATOR_ID,
+            attributionRule = "narration",
+            text = text,
+        )
+        val state = WhisperbookAppState()
+
+        state.synchronize(
+            WhisperbookUiSnapshot(
+                chapters = listOf(chapter),
+                selectedChapter = chapter,
+                settings = AppSettings(narrationChunkChars = 80),
+            ),
+        )
+        val smallChunkCount = state.passages.size
+        assertTrue(state.passages.all { it.text.length <= 80 })
+
+        state.synchronize(
+            WhisperbookUiSnapshot(
+                chapters = listOf(chapter),
+                selectedChapter = chapter,
+                settings = AppSettings(narrationChunkChars = 240),
+            ),
+        )
+
+        assertTrue(state.passages.size < smallChunkCount)
+        assertTrue(state.passages.all { it.text.length <= 240 })
     }
 
     @Test
@@ -455,6 +581,7 @@ private fun chapterWithPassage(
     ordinal: Int,
     speakerId: String,
     attributionRule: String,
+    text: String = "A chapter passage.",
 ): Chapter = Chapter(
     id = id,
     bookId = "book-1",
@@ -465,7 +592,7 @@ private fun chapterWithPassage(
             id = "$id-passage",
             chapterId = id,
             ordinal = 0,
-            text = "A chapter passage.",
+            text = text,
             speakerId = speakerId,
             confidence = 1f,
             attributionRule = attributionRule,

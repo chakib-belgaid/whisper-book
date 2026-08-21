@@ -11,6 +11,7 @@ import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import com.whisperbook.app.domain.SettingsRepository
+import com.whisperbook.app.domain.NarrationTextChunker
 import com.whisperbook.app.domain.model.AppSettings
 import com.whisperbook.app.domain.model.NarrationLanguage
 import java.io.IOException
@@ -31,6 +32,13 @@ class DataStoreSettingsRepository(
         }
         .map(SettingsPreferencesCodec::decode)
 
+    /** One-time compatibility input for books created before language belonged to each book. */
+    val legacyNarrationLanguageCode: Flow<String> = dataStore.data
+        .catch { error ->
+            if (error is IOException) emit(emptyPreferences()) else throw error
+        }
+        .map(SettingsPreferencesCodec::decodeLegacyNarrationLanguageCode)
+
     override suspend fun update(transform: (AppSettings) -> AppSettings) {
         dataStore.updateData { current ->
             current.toMutablePreferences().also { mutable ->
@@ -42,9 +50,9 @@ class DataStoreSettingsRepository(
 
 internal object SettingsPreferencesCodec {
     private val onboardingComplete = booleanPreferencesKey("onboarding_complete")
-    private val defaultNarratorVoiceId = stringPreferencesKey("default_narrator_voice_id")
     private val narrationLanguageCode = stringPreferencesKey("narration_language_code")
     private val installedLanguagePackCodes = stringSetPreferencesKey("installed_language_pack_codes")
+    private val narrationChunkChars = intPreferencesKey("narration_chunk_chars")
     private val speakingSpeed = floatPreferencesKey("speaking_speed")
     private val sleepTimerMinutes = intPreferencesKey("sleep_timer_minutes")
     private val keepScreenAwake = booleanPreferencesKey("keep_screen_awake")
@@ -57,16 +65,12 @@ internal object SettingsPreferencesCodec {
         val installedPacks = normalizeInstalledPacks(
             preferences[installedLanguagePackCodes] ?: defaults.installedLanguagePackCodes,
         )
-        val selectedLanguage = preferences[narrationLanguageCode]
-            ?.takeIf { it in installedPacks }
-            ?: defaults.narrationLanguageCode
         return AppSettings(
             onboardingComplete = preferences[onboardingComplete] ?: defaults.onboardingComplete,
-            defaultNarratorVoiceId = preferences[defaultNarratorVoiceId]
-                ?.takeIf(String::isNotBlank)
-                ?: defaults.defaultNarratorVoiceId,
-            narrationLanguageCode = selectedLanguage,
             installedLanguagePackCodes = installedPacks,
+            narrationChunkChars = NarrationTextChunker.normalizeMaxChars(
+                preferences[narrationChunkChars] ?: defaults.narrationChunkChars,
+            ),
             speakingSpeed = normalizeSpeakingSpeed(preferences[speakingSpeed] ?: defaults.speakingSpeed),
             sleepTimerMinutes = (preferences[sleepTimerMinutes] ?: defaults.sleepTimerMinutes)
                 .coerceIn(MIN_SLEEP_TIMER_MINUTES, MAX_SLEEP_TIMER_MINUTES),
@@ -80,13 +84,9 @@ internal object SettingsPreferencesCodec {
 
     fun write(preferences: MutablePreferences, settings: AppSettings) {
         preferences[onboardingComplete] = settings.onboardingComplete
-        preferences[defaultNarratorVoiceId] = settings.defaultNarratorVoiceId
-            .ifBlank { AppSettings().defaultNarratorVoiceId }
         val installedPacks = normalizeInstalledPacks(settings.installedLanguagePackCodes)
         preferences[installedLanguagePackCodes] = installedPacks
-        preferences[narrationLanguageCode] = settings.narrationLanguageCode
-            .takeIf { it in installedPacks }
-            ?: NarrationLanguage.ENGLISH.code
+        preferences[narrationChunkChars] = NarrationTextChunker.normalizeMaxChars(settings.narrationChunkChars)
         preferences[speakingSpeed] = normalizeSpeakingSpeed(settings.speakingSpeed)
         preferences[sleepTimerMinutes] = settings.sleepTimerMinutes
             .coerceIn(MIN_SLEEP_TIMER_MINUTES, MAX_SLEEP_TIMER_MINUTES)
@@ -95,6 +95,11 @@ internal object SettingsPreferencesCodec {
         preferences[autoScroll] = settings.autoScroll
         preferences[audioCacheLimitBytes] = settings.audioCacheLimitBytes.coerceAtLeast(MIN_AUDIO_CACHE_BYTES)
     }
+
+    fun decodeLegacyNarrationLanguageCode(preferences: Preferences): String =
+        preferences[narrationLanguageCode]
+            ?.takeIf { it in NarrationLanguage.supportedCodes }
+            ?: NarrationLanguage.ENGLISH.code
 
     private const val MIN_SPEAKING_SPEED = 0.5f
     private const val MAX_SPEAKING_SPEED = 2f

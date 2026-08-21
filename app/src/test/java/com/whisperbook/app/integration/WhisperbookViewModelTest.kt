@@ -3,6 +3,7 @@ package com.whisperbook.app.integration
 import android.net.Uri
 import app.cash.turbine.test
 import com.whisperbook.app.domain.AudioSegmentStore
+import com.whisperbook.app.domain.BookMp3Exporter
 import com.whisperbook.app.domain.LibraryRepository
 import com.whisperbook.app.domain.PlaybackGateway
 import com.whisperbook.app.domain.PreparationCoordinator
@@ -14,18 +15,24 @@ import com.whisperbook.app.domain.model.AppSettings
 import com.whisperbook.app.domain.model.AudioSegment
 import com.whisperbook.app.domain.model.Book
 import com.whisperbook.app.domain.model.BookFormat
+import com.whisperbook.app.domain.model.BookMp3ExportProgress
+import com.whisperbook.app.domain.model.BookMp3ExportResult
+import com.whisperbook.app.domain.model.BookMp3ExportStage
 import com.whisperbook.app.domain.model.Chapter
 import com.whisperbook.app.domain.model.CharacterColorRole
 import com.whisperbook.app.domain.model.CharacterVoiceAssignment
 import com.whisperbook.app.domain.model.PlaybackCursor
 import com.whisperbook.app.domain.model.PlaybackPreparationProgress
+import com.whisperbook.app.domain.model.Passage
 import com.whisperbook.app.domain.model.PreparationStage
 import com.whisperbook.app.domain.model.PreparationState
 import com.whisperbook.app.domain.model.RevertibleVoiceChange
 import com.whisperbook.app.domain.model.StoryCharacter
+import com.whisperbook.app.domain.model.SpeakerCorrectionScope
 import com.whisperbook.app.domain.model.VoiceDescriptor
 import com.whisperbook.app.domain.model.VoiceRegenerationRequest
 import com.whisperbook.app.domain.model.VoiceRegenerationScope
+import com.whisperbook.app.domain.model.speakerPhraseMatchKey
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -55,6 +62,27 @@ class WhisperbookViewModelTest {
 
     @After
     fun tearDown() = Dispatchers.resetMain()
+
+    @Test
+    fun databaseDetailsAreNotExposedAsOperationCopy() {
+        val databaseFailure = IllegalStateException(
+            "too many SQL variables (code 1 SQLITE_ERROR), while compiling: SELECT passages.id " +
+                "FROM passages WHERE chapter_id IN (?, ?, ?)",
+        )
+
+        assertEquals(
+            "The local operation could not finish. Please try again.",
+            userFacingOperationError(databaseFailure),
+        )
+        assertEquals(
+            "The local operation could not finish. Please try again.",
+            userFacingOperationError(IllegalStateException("too many SQL variables")),
+        )
+        assertEquals(
+            "Choose a book to listen to",
+            userFacingOperationError(IllegalStateException("Choose a book to listen to")),
+        )
+    }
 
     @Test
     fun productionFlowsSelectNewestBookAndItsChapter() = runTest(dispatcher) {
@@ -93,7 +121,7 @@ class WhisperbookViewModelTest {
     }
 
     @Test
-    fun changingVoiceFromNextChapterUsesTheChapterAfterTheCurrentSelection() = runTest(dispatcher) {
+    fun changingVoiceFromThisChapterUsesTheCurrentSelection() = runTest(dispatcher) {
         val services = FakeServices().apply {
             chapters.value = mapOf(
                 "book-a" to listOf(
@@ -110,11 +138,11 @@ class WhisperbookViewModelTest {
 
             viewModel.selectChapter("chapter-b")
             advanceUntilIdle()
-            viewModel.assignVoice("narrator", "jasper", VoiceRegenerationScope.FROM_NEXT_CHAPTER)
+            viewModel.assignVoice("narrator", "jasper", VoiceRegenerationScope.FROM_THIS_CHAPTER)
             advanceUntilIdle()
 
             assertEquals(
-                "voice-regeneration:book-a:narrator:jasper:FROM_NEXT_CHAPTER:2",
+                "voice-regeneration:book-a:narrator:jasper:FROM_THIS_CHAPTER:1",
                 services.events.last(),
             )
             cancelAndIgnoreRemainingEvents()
@@ -189,7 +217,7 @@ class WhisperbookViewModelTest {
     }
 
     @Test
-    fun downloadingFrenchPackSelectsItAndRefreshesLocalNarration() = runTest(dispatcher) {
+    fun downloadingFrenchPackInstallsItAndAppliesItToTheBrowsedBook() = runTest(dispatcher) {
         val services = FakeServices()
         val viewModel = WhisperbookViewModel(services)
         viewModel.uiState.test {
@@ -200,8 +228,97 @@ class WhisperbookViewModelTest {
             advanceUntilIdle()
 
             val settings = services.settings.value
-            assertEquals("fr", settings.narrationLanguageCode)
             assertTrue("fr" in settings.installedLanguagePackCodes)
+            assertEquals("fr", services.books.value.single().narrationLanguageCode)
+            assertEquals("book-language:book-a:fr", services.events.last())
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun changingLanguageUpdatesOnlyTheBrowsedBook() = runTest(dispatcher) {
+        val services = FakeServices().apply {
+            books.value = listOf(book("book-a"), book("book-b"))
+            settings.value = AppSettings(installedLanguagePackCodes = setOf("en", "fr"))
+        }
+        val viewModel = WhisperbookViewModel(services)
+        viewModel.uiState.test {
+            awaitItem()
+            advanceUntilIdle()
+
+            viewModel.selectBook("book-b")
+            advanceUntilIdle()
+            viewModel.selectNarrationLanguage("fr")
+            advanceUntilIdle()
+
+            assertEquals("en", services.books.value.first { it.id == "book-a" }.narrationLanguageCode)
+            assertEquals("fr", services.books.value.first { it.id == "book-b" }.narrationLanguageCode)
+            assertEquals("book-language:book-b:fr", services.events.last())
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun correctingMatchingPhrasesChangesOnlyEquivalentTextWithTheSameOldAttribution() = runTest(dispatcher) {
+        val repeated = Passage("passage-a", "chapter-a", 0, "Wait!", "narrator", .4f, "automatic")
+        val services = FakeServices().apply {
+            chapters.value = mapOf(
+                "book-a" to listOf(
+                    Chapter(
+                        "chapter-a",
+                        "book-a",
+                        0,
+                        "Opening",
+                        passages = listOf(
+                            repeated,
+                            repeated.copy(id = "passage-b", ordinal = 1, text = " wait "),
+                            repeated.copy(id = "passage-c", ordinal = 2, speakerId = "fox"),
+                        ),
+                    ),
+                ),
+            )
+            characters.value = mapOf(
+                "book-a" to listOf(
+                    StoryCharacter("narrator", "book-a", "Narrator", emptySet(), CharacterColorRole.NARRATOR, 2),
+                    StoryCharacter("elara", "book-a", "Elara", emptySet(), CharacterColorRole.ELARA_BURGUNDY, 1),
+                ),
+            )
+        }
+        val viewModel = WhisperbookViewModel(services)
+        viewModel.uiState.test {
+            awaitItem()
+            advanceUntilIdle()
+
+            viewModel.correctPassageSpeaker(
+                "passage-a",
+                "elara",
+                SpeakerCorrectionScope.MATCHING_PHRASES,
+            )
+            advanceUntilIdle()
+
+            val passages = services.chapters.value.getValue("book-a").single().passages
+            assertEquals(listOf("elara", "elara", "fox"), passages.map(Passage::speakerId))
+            assertTrue(services.events.last().endsWith(":MATCHING_PHRASES:2"))
+            assertEquals(
+                "2 matching phrases will now be read by Elara.",
+                viewModel.uiState.value.statusMessage,
+            )
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun changingChunkSizePersistsItAndRegeneratesOnlyTheOpeningAudio() = runTest(dispatcher) {
+        val services = FakeServices()
+        val viewModel = WhisperbookViewModel(services)
+        viewModel.uiState.test {
+            awaitItem()
+            advanceUntilIdle()
+
+            viewModel.cycleNarrationChunkSize()
+            advanceUntilIdle()
+
+            assertEquals(240, services.settings.value.narrationChunkChars)
             assertEquals(
                 listOf("pause", "invalidate-queue:book-a:chapter-a", "regenerate:book-a:0"),
                 services.events.takeLast(3),
@@ -263,25 +380,33 @@ class WhisperbookViewModelTest {
     }
 
     @Test
-    fun defaultNarratorCyclesThroughEmbeddedVoicesWithoutRequiringABookCharacter() = runTest(dispatcher) {
+    fun selectingTheBooksExistingLanguageHasNoSideEffects() = runTest(dispatcher) {
         val services = FakeServices()
         val viewModel = WhisperbookViewModel(services)
-
-        viewModel.cycleDefaultNarratorVoice()
         advanceUntilIdle()
 
-        assertEquals("jasper", services.settings.value.defaultNarratorVoiceId)
+        viewModel.selectNarrationLanguage("en")
+        advanceUntilIdle()
+
+        assertTrue(services.events.none { it.startsWith("book-language:") })
     }
 
     @Test
-    fun defaultNarratorCanBeSelectedDirectlyFromTheVoiceList() = runTest(dispatcher) {
-        val services = FakeServices()
+    fun languageCannotBeChangedWithoutABrowsedBook() = runTest(dispatcher) {
+        val services = FakeServices().apply { books.value = emptyList() }
         val viewModel = WhisperbookViewModel(services)
+        viewModel.uiState.test {
+            awaitItem()
+            advanceUntilIdle()
 
-        viewModel.chooseDefaultNarratorVoice("jasper")
-        advanceUntilIdle()
+            viewModel.downloadLanguagePack("fr")
+            advanceUntilIdle()
 
-        assertEquals("jasper", services.settings.value.defaultNarratorVoiceId)
+            assertTrue("fr" !in services.settings.value.installedLanguagePackCodes)
+            assertTrue(services.events.none { it.startsWith("book-language:") })
+            assertEquals("Choose a book before changing its language", viewModel.uiState.value.errorMessage)
+            cancelAndIgnoreRemainingEvents()
+        }
     }
 
     @Test
@@ -706,6 +831,33 @@ private class FakeServices : WhisperbookServices {
     )
     override val ttsModelVersion = "test-model"
 
+    override val bookMp3Exporter = object : BookMp3Exporter {
+        override suspend fun export(
+            bookId: String,
+            destination: Uri,
+            onProgress: (BookMp3ExportProgress) -> Unit,
+        ): BookMp3ExportResult {
+            onProgress(
+                BookMp3ExportProgress(
+                    stage = BookMp3ExportStage.PREPARING_AUDIO,
+                    progressFraction = 0.4f,
+                    chapterNumber = 1,
+                    totalChapters = 1,
+                ),
+            )
+            onProgress(
+                BookMp3ExportProgress(
+                    stage = BookMp3ExportStage.SAVING,
+                    progressFraction = 1f,
+                    chapterNumber = 1,
+                    totalChapters = 1,
+                ),
+            )
+            events += "export:$bookId"
+            return BookMp3ExportResult(chapterCount = 1, durationMs = 1_000L, bytesWritten = 4_096L)
+        }
+    }
+
     override val voicePreviewPlayer = object : VoicePreviewPlayer {
         override suspend fun play(
             text: String,
@@ -725,7 +877,10 @@ private class FakeServices : WhisperbookServices {
         override fun observeBook(bookId: String): Flow<Book?> = books.map { all -> all.firstOrNull { it.id == bookId } }
         override fun observeChapters(bookId: String): Flow<List<Chapter>> = chapters.map { it[bookId].orEmpty() }
         override fun observeCharacters(bookId: String): Flow<List<StoryCharacter>> = characters.map { it[bookId].orEmpty() }
-        override suspend fun importBook(uri: Uri): Result<String> = Result.failure(UnsupportedOperationException())
+        override suspend fun importBook(
+            uri: Uri,
+            narrationLanguageCode: String,
+        ): Result<String> = Result.failure(UnsupportedOperationException())
         override suspend fun updateVoiceAssignment(assignment: CharacterVoiceAssignment) {
             events += "assign:${assignment.characterId}:${assignment.voiceId}"
             assignments.value = assignments.value + (assignment.characterId to assignment)
@@ -780,9 +935,56 @@ private class FakeServices : WhisperbookServices {
         override suspend fun trimTo(limitBytes: Long) { events += "trim:$limitBytes" }
     }
 
-    override fun observeVoiceAssignments(
-        characterIds: List<String>,
-    ): Flow<Map<String, CharacterVoiceAssignment>> = assignments.map { all -> all.filterKeys(characterIds::contains) }
+    override fun observeChapterVoiceAssignments(
+        bookId: String,
+        chapterId: String,
+    ): Flow<Map<String, CharacterVoiceAssignment>> = assignments
+
+    override suspend fun applyNarrationLanguageToBook(bookId: String, languageCode: String) {
+        books.value = books.value.map { book ->
+            if (book.id == bookId) book.copy(
+                narrationLanguageCode = languageCode,
+                narrationProfileRevision = book.narrationProfileRevision + 1,
+            ) else book
+        }
+        events += "book-language:$bookId:$languageCode"
+    }
+
+    override suspend fun applySpeakerCorrection(
+        bookId: String,
+        passageId: String,
+        speakerId: String,
+        scope: SpeakerCorrectionScope,
+    ): Int {
+        val bookChapters = chapters.value[bookId].orEmpty()
+        val source = bookChapters.asSequence().flatMap { it.passages.asSequence() }
+            .first { it.id == passageId }
+        val sourceKey = speakerPhraseMatchKey(source.text)
+        var corrected = 0
+        chapters.value = chapters.value + (
+            bookId to bookChapters.map { chapter ->
+                chapter.copy(
+                    passages = chapter.passages.map { passage ->
+                        val matches = when (scope) {
+                            SpeakerCorrectionScope.THIS_PASSAGE -> passage.id == passageId
+                            SpeakerCorrectionScope.MATCHING_PHRASES ->
+                                passage.speakerId == source.speakerId &&
+                                    sourceKey.isNotBlank() &&
+                                    speakerPhraseMatchKey(passage.text) == sourceKey
+                        }
+                        if (matches) {
+                            corrected += 1
+                            passage.copy(speakerId = speakerId, confidence = 1f, attributionRule = "manual")
+                        } else {
+                            passage
+                        }
+                    },
+                )
+            }
+        )
+        events += "speaker-correction:$bookId:$passageId:$speakerId:$scope:$corrected"
+        return corrected
+    }
 
     override suspend fun applyVoiceRegeneration(request: VoiceRegenerationRequest): RevertibleVoiceChange {
         val previous = assignments.value.getValue(request.characterId)

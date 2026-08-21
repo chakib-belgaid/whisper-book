@@ -19,8 +19,10 @@ import com.whisperbook.app.domain.model.NarrationLanguage
 import com.whisperbook.app.domain.model.PreparationStage
 import com.whisperbook.app.domain.model.PreparationState
 import com.whisperbook.app.domain.model.StoryCharacter
+import com.whisperbook.app.domain.model.SpeakerCorrectionScope
 import com.whisperbook.app.domain.model.VoiceDescriptor
 import com.whisperbook.app.domain.model.VoiceRegenerationScope
+import com.whisperbook.app.domain.model.speakerPhraseMatchKey
 import com.whisperbook.app.integration.WhisperbookUiSnapshot
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
@@ -30,6 +32,7 @@ interface WhisperbookUiActions {
     fun importBook(uri: Uri)
     fun retryPreparation()
     fun deleteSelectedBook()
+    fun exportSelectedBook(destination: Uri)
     fun selectBook(bookId: String)
     fun selectChapter(chapterId: String)
     fun playPreviousChapter()
@@ -39,9 +42,9 @@ interface WhisperbookUiActions {
     fun seekByFraction(delta: Float)
     fun seekToFraction(fraction: Float)
     fun seekToPassage(passageId: String)
+    fun correctPassageSpeaker(passageId: String, speakerId: String, scope: SpeakerCorrectionScope)
     fun cycleSpeed()
-    fun cycleDefaultNarratorVoice()
-    fun chooseDefaultNarratorVoice(voiceId: String)
+    fun cycleNarrationChunkSize()
     fun downloadLanguagePack(languageCode: String)
     fun selectNarrationLanguage(languageCode: String)
     fun cycleSleepTimer()
@@ -89,6 +92,7 @@ data class CastMemberUi(
     val lines: Int,
     val portraitRes: Int,
     val role: SpeakerRole,
+    val voiceId: String = "",
 )
 
 @Immutable
@@ -105,6 +109,7 @@ data class PassageUi(
     val id: String,
     val speaker: SpeakerRole,
     val text: String,
+    val sourcePassageId: String = id,
     val speakerId: String = "",
     val speakerName: String = speaker.name,
 )
@@ -134,6 +139,7 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
     private var synchronizedCastVoices: List<VoiceDescriptor>? = null
     private var synchronizedPassageChapter: Chapter? = null
     private var synchronizedPassageCharacters: List<StoryCharacter>? = null
+    private var synchronizedPassageChunkChars: Int? = null
     private var passagesSynchronized = false
 
     val books = mutableStateListOf<LibraryBookUi>().apply {
@@ -170,10 +176,10 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
     val passages = mutableStateListOf<PassageUi>().apply {
         if (demoMode) addAll(
             listOf(
-                PassageUi("p1", SpeakerRole.Narrator, "The trees leaned close as the path narrowed beneath the moon."),
-                PassageUi("p2", SpeakerRole.Elara, "We should turn back before the lantern fades."),
-                PassageUi("p3", SpeakerRole.Fox, "The woods remember every traveler."),
-                PassageUi("p4", SpeakerRole.Narrator, "Beyond the trees, a glimmer of silver called to them, soft as a secret."),
+                PassageUi("p1", SpeakerRole.Narrator, "The trees leaned close as the path narrowed beneath the moon.", speakerId = "narrator"),
+                PassageUi("p2", SpeakerRole.Elara, "We should turn back before the lantern fades.", speakerId = "elara"),
+                PassageUi("p3", SpeakerRole.Fox, "The woods remember every traveler.", speakerId = "fox"),
+                PassageUi("p4", SpeakerRole.Narrator, "Beyond the trees, a glimmer of silver called to them, soft as a secret.", speakerId = "narrator"),
             ),
         )
     }
@@ -208,9 +214,15 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
         private set
     var backgroundProgressFraction by mutableStateOf<Float?>(null)
         private set
+    var isExportingBook by mutableStateOf(false)
+        private set
+    var bookExportMessage by mutableStateOf<String?>(null)
+        private set
     var preparationFailed by mutableStateOf(false)
         private set
     var currentBookTitle by mutableStateOf(if (demoMode) "The Moonlit Wood" else "")
+        private set
+    var currentBookId by mutableStateOf(if (demoMode) "demo-book" else "")
         private set
     var currentAuthor by mutableStateOf(if (demoMode) "E. Wren" else "")
         private set
@@ -232,9 +244,9 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
         private set
     var storageLimitBytes by mutableLongStateOf(2L * 1024L * 1024L * 1024L)
         private set
-    var defaultNarratorVoice by mutableStateOf("Bella")
-        private set
     var narrationLanguageCode by mutableStateOf(NarrationLanguage.ENGLISH.code)
+        private set
+    var narrationChunkChars by mutableIntStateOf(NarrationTextChunker.MAX_CHARS)
         private set
     var installedLanguagePackCodes by mutableStateOf(setOf(NarrationLanguage.ENGLISH.code))
         private set
@@ -283,12 +295,16 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
             synchronizedVoices = snapshot.voices
         }
         if (snapshot.selectedBook == null) {
+            currentBookId = ""
             currentBookTitle = ""
             currentAuthor = ""
+            narrationLanguageCode = NarrationLanguage.ENGLISH.code
         }
         snapshot.selectedBook?.let { selectedBook ->
+            currentBookId = selectedBook.id
             currentBookTitle = selectedBook.title
             currentAuthor = selectedBook.author ?: "Unknown author"
+            narrationLanguageCode = selectedBook.narrationLanguageCode
         }
         if (snapshot.selectedChapter == null) {
             currentChapterTitle = ""
@@ -325,7 +341,6 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
         ) {
             chapters.clear()
             chapters.addAll(snapshot.chapters.map { chapter ->
-                val speakerIds = chapter.passages.mapTo(linkedSetOf()) { it.speakerId }
                 ChapterUi(
                     number = chapter.ordinal + 1,
                     title = chapter.title,
@@ -334,7 +349,10 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
                     isLoading = chapter.id == snapshot.loadingChapterId,
                     isAvailable = chapter.passages.isNotEmpty() &&
                         chapter.passages.all { it.attributionRule != UNATTRIBUTED_RULE } &&
-                        speakerIds.all(snapshot.voiceAssignments::containsKey),
+                        (
+                            chapter.id != selectedChapterId ||
+                                chapter.passages.all { it.speakerId in snapshot.voiceAssignments }
+                        ),
                 )
             })
             synchronizedChapters = snapshot.chapters
@@ -349,7 +367,9 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
             snapshot.voices !== synchronizedCastVoices
         ) {
             cast.clear()
-            cast.addAll(snapshot.characters.map { character ->
+            cast.addAll(snapshot.characters.filter { character ->
+                character.id in snapshot.voiceAssignments
+            }.map { character ->
                 val role = character.colorRole.toSpeakerRole()
                 val assignment = snapshot.voiceAssignments[character.id]
                 val voice = snapshot.voices.firstOrNull { it.id == assignment?.voiceId }
@@ -365,6 +385,7 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
                         CharacterColorRole.FOX_ORANGE, CharacterColorRole.ORANGE -> com.whisperbook.app.R.drawable.portrait_fox
                     },
                     role = role,
+                    voiceId = assignment?.voiceId.orEmpty(),
                 )
             }.sortedWith(compareBy<CastMemberUi>({ it.role != SpeakerRole.Narrator }, { -it.lines }, { it.character })))
             synchronizedCharacters = snapshot.characters
@@ -376,6 +397,7 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
             passages.addAll(projectedPassages ?: projectPassages(snapshot))
             synchronizedPassageChapter = snapshot.selectedChapter
             synchronizedPassageCharacters = snapshot.characters
+            synchronizedPassageChunkChars = snapshot.settings.narrationChunkChars
             passagesSynchronized = true
         }
         snapshot.preparation?.let { preparation ->
@@ -423,23 +445,22 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
         sleepMinutes = snapshot.settings.sleepTimerMinutes
         localStorageBytes = snapshot.localStorageBytes.coerceAtLeast(0L)
         storageLimitBytes = snapshot.settings.audioCacheLimitBytes.coerceAtLeast(1L)
-        defaultNarratorVoice = snapshot.voices
-            .firstOrNull { it.id == snapshot.settings.defaultNarratorVoiceId }
-            ?.displayName
-            ?: "Bella"
-        narrationLanguageCode = snapshot.settings.narrationLanguageCode
+        narrationChunkChars = snapshot.settings.narrationChunkChars
         installedLanguagePackCodes = snapshot.settings.installedLanguagePackCodes
         importError = snapshot.errorMessage
         isBusy = snapshot.isBusy
         statusMessage = snapshot.statusMessage
         backgroundProgressFraction = snapshot.backgroundProgressFraction
+        isExportingBook = snapshot.isExportingBook
+        bookExportMessage = snapshot.bookExportMessage
         canRevertVoiceChange = snapshot.canRevertVoiceChange
     }
 
     private fun shouldSynchronizePassages(snapshot: WhisperbookUiSnapshot): Boolean =
         !passagesSynchronized ||
             snapshot.selectedChapter !== synchronizedPassageChapter ||
-            snapshot.characters !== synchronizedPassageCharacters
+            snapshot.characters !== synchronizedPassageCharacters ||
+            snapshot.settings.narrationChunkChars != synchronizedPassageChunkChars
 
     private fun projectPassages(snapshot: WhisperbookUiSnapshot): List<PassageUi> {
         val charactersById = snapshot.characters.associate { character ->
@@ -450,11 +471,16 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
         }
         return snapshot.selectedChapter?.passages.orEmpty().flatMap { passage ->
             val character = charactersById[passage.speakerId]
-            NarrationTextChunker.chunks(passage.id, passage.text).map { chunk ->
+            NarrationTextChunker.chunks(
+                passageId = passage.id,
+                text = passage.text,
+                maxChars = snapshot.settings.narrationChunkChars,
+            ).map { chunk ->
                 PassageUi(
                     id = chunk.id,
                     speaker = character?.role ?: SpeakerRole.Narrator,
                     text = chunk.text,
+                    sourcePassageId = passage.id,
                     speakerId = passage.speakerId,
                     speakerName = character?.name ?: "Narrator",
                 )
@@ -495,6 +521,10 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
 
     fun deleteSelectedBook() {
         productionActions?.deleteSelectedBook()
+    }
+
+    fun exportSelectedBook(destination: Uri) {
+        productionActions?.exportSelectedBook(destination)
     }
 
     fun deleteBook(bookId: String) {
@@ -563,31 +593,26 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
         productionActions?.cycleSpeed()
     }
 
-    fun cycleDefaultNarratorVoice() {
-        if (productionActions == null) {
-            val voices = listOf("Bella", "Jasper", "Luna", "Bruno", "Rosie", "Hugo", "Kiki", "Leo")
-            val index = voices.indexOf(defaultNarratorVoice).coerceAtLeast(0)
-            defaultNarratorVoice = voices[(index + 1) % voices.size]
-        }
-        productionActions?.cycleDefaultNarratorVoice()
-    }
-
-    fun chooseDefaultNarratorVoice(voiceId: String) {
-        val voice = voiceOptions.firstOrNull { it.id == voiceId } ?: return
-        defaultNarratorVoice = voice.displayName
-        productionActions?.chooseDefaultNarratorVoice(voiceId)
+    fun cycleNarrationChunkSize() {
+        val sizes = NarrationTextChunker.CONFIGURABLE_SIZES
+        val next = sizes.firstOrNull { it > narrationChunkChars } ?: sizes.first()
+        narrationChunkChars = next
+        passagesSynchronized = false
+        productionActions?.cycleNarrationChunkSize()
     }
 
     fun downloadLanguagePack(languageCode: String) {
         val language = NarrationLanguage.fromCode(languageCode) ?: return
-        installedLanguagePackCodes = installedLanguagePackCodes + language.code
-        narrationLanguageCode = language.code
+        if (productionActions == null) {
+            installedLanguagePackCodes = installedLanguagePackCodes + language.code
+            narrationLanguageCode = language.code
+        }
         productionActions?.downloadLanguagePack(language.code)
     }
 
     fun selectNarrationLanguage(languageCode: String) {
         if (languageCode !in installedLanguagePackCodes) return
-        narrationLanguageCode = languageCode
+        if (productionActions == null) narrationLanguageCode = languageCode
         productionActions?.selectNarrationLanguage(languageCode)
     }
 
@@ -602,6 +627,37 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
         val index = passages.indexOfFirst { it.id == id }
         if (index >= 0) chapterProgress = index / passages.size.toFloat()
         productionActions?.seekToPassage(id)
+    }
+
+    fun correctPassageSpeaker(
+        passageId: String,
+        speakerId: String,
+        scope: SpeakerCorrectionScope,
+    ) {
+        if (productionActions == null) {
+            val target = cast.firstOrNull { it.id == speakerId } ?: return
+            val source = passages.firstOrNull { it.sourcePassageId == passageId } ?: return
+            val sourceSpeakerId = source.speakerId
+            val sourceKey = speakerPhraseMatchKey(source.text)
+            passages.indices.forEach { index ->
+                val candidate = passages[index]
+                val matches = when (scope) {
+                    SpeakerCorrectionScope.THIS_PASSAGE -> candidate.sourcePassageId == passageId
+                    SpeakerCorrectionScope.MATCHING_PHRASES ->
+                        candidate.speakerId == sourceSpeakerId &&
+                            sourceKey.isNotBlank() &&
+                            speakerPhraseMatchKey(candidate.text) == sourceKey
+                }
+                if (matches) {
+                    passages[index] = candidate.copy(
+                        speaker = target.role,
+                        speakerId = target.id,
+                        speakerName = target.character,
+                    )
+                }
+            }
+        }
+        productionActions?.correctPassageSpeaker(passageId, speakerId, scope)
     }
 
     fun updateAutoScroll(value: Boolean) {
@@ -623,7 +679,7 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
         val index = cast.indexOfFirst { it.id == characterId }
         if (index < 0 || voiceOptions.isEmpty()) return
         val member = cast[index]
-        val currentIndex = voiceOptions.indexOfFirst { it.displayName == member.voice }.coerceAtLeast(0)
+        val currentIndex = voiceOptions.indexOfFirst { it.id == member.voiceId }.coerceAtLeast(0)
         val next = voiceOptions[(currentIndex + 1) % voiceOptions.size]
         assignVoice(characterId, next.id)
     }
@@ -638,6 +694,7 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
         if (index >= 0) {
             cast[index] = cast[index].copy(
                 voice = voice.displayName,
+                voiceId = voice.id,
                 portraitRes = voice.portraitRes,
             )
         }

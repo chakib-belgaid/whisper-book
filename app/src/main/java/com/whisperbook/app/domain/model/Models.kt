@@ -2,6 +2,7 @@ package com.whisperbook.app.domain.model
 
 import android.net.Uri
 import androidx.compose.runtime.Immutable
+import com.whisperbook.app.domain.NarrationTextChunker
 
 @Immutable
 data class Book(
@@ -19,6 +20,9 @@ data class Book(
     val lastOpenedAtEpochMs: Long,
     val chapterCount: Int = 0,
     val currentChapterOrdinal: Int? = null,
+    val narrationLanguageCode: String = NarrationLanguage.ENGLISH.code,
+    val narrationProfileRevision: Long = 0L,
+    val narrationProfileSeeded: Boolean = true,
 )
 
 enum class BookFormat { PDF, EPUB }
@@ -92,6 +96,21 @@ data class CharacterVoiceAssignment(
     val speed: Float = 1f,
 )
 
+@Immutable
+data class ChapterVoiceSet(
+    val bookId: String,
+    val chapterId: String,
+    val assignments: Map<String, CharacterVoiceAssignment>,
+) {
+    init {
+        require(bookId.isNotBlank())
+        require(chapterId.isNotBlank())
+        require(assignments.all { (characterId, assignment) ->
+            characterId.isNotBlank() && assignment.characterId == characterId
+        })
+    }
+}
+
 enum class PreparationStage {
     COPY_AND_VALIDATE,
     READING_CHAPTERS,
@@ -164,11 +183,18 @@ data class PlaybackPreparationProgress(
 }
 
 @Immutable
+data class PlaybackNarrationReload(
+    val bookId: String,
+    val chapterId: String,
+    val passageId: String,
+    val wasPlaying: Boolean,
+)
+
+@Immutable
 data class AppSettings(
     val onboardingComplete: Boolean = false,
-    val defaultNarratorVoiceId: String = "bella",
-    val narrationLanguageCode: String = NarrationLanguage.ENGLISH.code,
     val installedLanguagePackCodes: Set<String> = setOf(NarrationLanguage.ENGLISH.code),
+    val narrationChunkChars: Int = NarrationTextChunker.MAX_CHARS,
     val speakingSpeed: Float = 1f,
     val sleepTimerMinutes: Int = 30,
     val keepScreenAwake: Boolean = false,

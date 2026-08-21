@@ -17,6 +17,151 @@ class PassageDaoAndroidTest {
     private val context: Context = ApplicationProvider.getApplicationContext()
 
     @Test
+    fun manualSpeakerCorrectionBatchesLargeBooksAndStaysBookScoped() = runBlocking {
+        val database = Room.inMemoryDatabaseBuilder(context, WhisperBookDatabase::class.java).build()
+        val passageCount = 1_005
+
+        try {
+            database.bookDao().insert(testBook())
+            database.bookDao().insert(testBook("other-book"))
+            database.chapterDao().insertAll(
+                listOf(
+                    testChapter("book-chapter", 0),
+                    testChapter("other-chapter", 0, "other-book"),
+                ),
+            )
+            database.passageDao().insertAll(
+                (0 until passageCount).map { ordinal ->
+                    testPassage("passage-$ordinal", "book-chapter", ordinal, "Wait!")
+                } + testPassage("other-passage", "other-chapter", 0, "Wait!"),
+            )
+
+            val bookPassages = database.passageDao().getForBook("book")
+            val updated = database.passageDao().updateSpeakerAttributionBatched(
+                passageIds = bookPassages.map { it.id },
+                speakerId = "book-character-elara",
+                attributionRule = "manual-speaker:matching-phrases",
+            )
+
+            assertEquals(passageCount, updated)
+            assertTrue(database.passageDao().getForBook("book").all { passage ->
+                passage.speakerId == "book-character-elara" &&
+                    passage.confidence == 1f &&
+                    passage.attributionRule == "manual-speaker:matching-phrases"
+            })
+            assertEquals(
+                "book-character-narrator",
+                database.passageDao().getById("other-passage")?.speakerId,
+            )
+        } finally {
+            database.close()
+        }
+    }
+
+    @Test
+    fun narratorInvalidationAcross2450ChaptersStaysBelowTheSqlVariableLimit() = runBlocking {
+        val database = Room.inMemoryDatabaseBuilder(context, WhisperBookDatabase::class.java).build()
+        val chapterCount = 2_450
+        val narratorId = "book-character-narrator"
+        val sentinelOrdinals = listOf(0, 996, 997, 998, 999, chapterCount - 1)
+        val otherBookId = "other-book"
+
+        try {
+            database.bookDao().insert(testBook())
+            database.bookDao().insert(testBook(otherBookId))
+            database.chapterDao().insertAll(
+                (0 until chapterCount).map { ordinal ->
+                    testChapter(id = "book-chapter-$ordinal", ordinal = ordinal)
+                } + testChapter(
+                    id = "$otherBookId-chapter-0",
+                    ordinal = 0,
+                    bookId = otherBookId,
+                ),
+            )
+            database.passageDao().insertAll(
+                (0 until chapterCount).map { ordinal ->
+                    testPassage(
+                        id = "book-passage-$ordinal",
+                        chapterId = "book-chapter-$ordinal",
+                        ordinal = 0,
+                        text = "Narration $ordinal",
+                        speakerId = narratorId,
+                    )
+                } + listOf(
+                    testPassage(
+                        id = "other-speaker-passage",
+                        chapterId = "book-chapter-0",
+                        ordinal = 1,
+                        text = "Keep this speaker",
+                        speakerId = "book-character-other",
+                    ),
+                    testPassage(
+                        id = "other-book-passage",
+                        chapterId = "$otherBookId-chapter-0",
+                        ordinal = 0,
+                        text = "Keep this book",
+                        speakerId = narratorId,
+                    ),
+                ),
+            )
+            sentinelOrdinals.forEach { ordinal ->
+                database.audioSegmentDao().upsert(
+                    testAudioSegment(
+                        id = "book-audio-$ordinal",
+                        passageId = "book-passage-$ordinal",
+                        cacheKey = "book-cache-$ordinal",
+                    ),
+                )
+            }
+            database.audioSegmentDao().upsert(
+                testAudioSegment(
+                    id = "other-speaker-audio",
+                    passageId = "other-speaker-passage",
+                    cacheKey = "other-speaker-cache",
+                ),
+            )
+            database.audioSegmentDao().upsert(
+                testAudioSegment(
+                    id = "other-book-audio",
+                    passageId = "other-book-passage",
+                    cacheKey = "other-book-cache",
+                ),
+            )
+
+            val passageIds = database.audioSegmentDao()
+                .getPassageIdsForCharacterFromChapterOrdinal(narratorId, "book", 0)
+
+            assertEquals(chapterCount, passageIds.size)
+            assertEquals(chapterCount, passageIds.toSet().size)
+            assertTrue(sentinelOrdinals.all { "book-passage-$it" in passageIds })
+            assertEquals(
+                setOf("book-passage-999"),
+                database.audioSegmentDao().getPassageIdsForCharacterInChapter(
+                    narratorId,
+                    "book",
+                    "book-chapter-999",
+                ).toSet(),
+            )
+
+            database.audioSegmentDao().deleteForPassageIdsBatched(passageIds)
+
+            sentinelOrdinals.forEach { ordinal ->
+                assertNull(database.audioSegmentDao().findByCacheKey("book-cache-$ordinal"))
+            }
+            assertEquals(
+                "other-speaker-audio",
+                database.audioSegmentDao().findByCacheKey("other-speaker-cache")?.id,
+            )
+            assertEquals(
+                "other-book-audio",
+                database.audioSegmentDao().findByCacheKey("other-book-cache")?.id,
+            )
+        } finally {
+            database.close()
+        }
+    }
+
+    @Test
     fun deleteForChapterReplacesOnlyTheTargetChapterAndCascadesItsAudio() = runBlocking {
         val database = Room.inMemoryDatabaseBuilder(context, WhisperBookDatabase::class.java).build()
 
@@ -88,14 +233,14 @@ class PassageDaoAndroidTest {
         }
     }
 
-    private fun testBook() = BookEntity(
-        id = "book",
-        title = "Large book",
+    private fun testBook(id: String = "book") = BookEntity(
+        id = id,
+        title = "Large book $id",
         author = "Tester",
         format = BookFormat.EPUB.name,
         sourceUri = null,
-        privateSourcePath = "/private/book.epub",
-        sourceSha256 = "book-hash",
+        privateSourcePath = "/private/$id.epub",
+        sourceSha256 = "$id-hash",
         coverPath = null,
         currentChapterId = null,
         currentPassageId = null,
@@ -103,9 +248,9 @@ class PassageDaoAndroidTest {
         lastOpenedAtEpochMs = 1L,
     )
 
-    private fun testChapter(id: String, ordinal: Int) = ChapterEntity(
+    private fun testChapter(id: String, ordinal: Int, bookId: String = "book") = ChapterEntity(
         id = id,
-        bookId = "book",
+        bookId = bookId,
         ordinal = ordinal,
         title = "Chapter ${ordinal + 1}",
     )
@@ -115,12 +260,13 @@ class PassageDaoAndroidTest {
         chapterId: String,
         ordinal: Int,
         text: String,
+        speakerId: String = "book-character-narrator",
     ) = PassageEntity(
         id = id,
         chapterId = chapterId,
         ordinal = ordinal,
         text = text,
-        speakerId = "book-character-narrator",
+        speakerId = speakerId,
         confidence = 1f,
         attributionRule = "narration",
     )

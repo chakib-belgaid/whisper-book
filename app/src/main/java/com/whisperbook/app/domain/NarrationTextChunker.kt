@@ -11,11 +11,26 @@ package com.whisperbook.app.domain
  */
 object NarrationTextChunker {
     const val MAX_CHARS = 160
+    const val MIN_CONFIGURABLE_CHARS = 80
+    const val MAX_CONFIGURABLE_CHARS = 240
+    val CONFIGURABLE_SIZES = listOf(MIN_CONFIGURABLE_CHARS, MAX_CHARS, MAX_CONFIGURABLE_CHARS)
 
-    fun chunks(passageId: String, text: String): List<PassageTextChunk> =
-        PassageTextChunker.chunks(
+    fun chunks(
+        passageId: String,
+        text: String,
+        maxChars: Int = MAX_CHARS,
+    ): List<PassageTextChunk> {
+        require(maxChars in MIN_CONFIGURABLE_CHARS..MAX_CONFIGURABLE_CHARS) {
+            "maxChars must be between $MIN_CONFIGURABLE_CHARS and $MAX_CONFIGURABLE_CHARS"
+        }
+        return PassageTextChunker.chunks(
             passageId = passageId,
             text = text,
-            maxChars = MAX_CHARS,
+            maxChars = maxChars,
         )
+    }
+
+    fun normalizeMaxChars(value: Int): Int = value
+        .takeIf { it in MIN_CONFIGURABLE_CHARS..MAX_CONFIGURABLE_CHARS }
+        ?: MAX_CHARS
 }
