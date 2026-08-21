@@ -105,6 +105,8 @@ whisper-book/
 ├── design-system/                Approved screens and navigation map
 ├── docs/architecture/            Architecture guide and editable diagrams
 ├── docs/licenses/                Third-party artifact records
+├── LICENSE                       PolyForm Noncommercial 1.0.0 terms
+├── THIRD_PARTY_NOTICES.md        Bundled dependency rights and obligations
 └── qa-fixtures/                  Deterministic EPUB test fixture
 ```
 
@@ -175,7 +177,21 @@ Without these variables, Gradle intentionally creates an unsigned release artifa
 - [Privacy](PRIVACY.md) — on-device data handling and permission policy
 - [TTS artifacts](docs/licenses/TTS_ARTIFACTS.md) — bundled runtime/model provenance and checksums
 - [FFmpegKit audio runtime](docs/licenses/FFMPEGKIT.md) — offline MP3 export runtime and license
+- [Third-party notices](THIRD_PARTY_NOTICES.md) — commercial-use boundaries and release obligations
 
 ## Licensing
 
-Third-party runtimes, model assets, and fonts retain their own licenses under [docs/licenses](docs/licenses). This repository does not currently declare a top-level license for the Whisperbook application source; add one before distributing or accepting external contributions.
+Whisperbook's original source and first-party project materials are licensed
+under the [PolyForm Noncommercial License 1.0.0](LICENSE), with the required
+copyright notice in [NOTICE](NOTICE). Personal, educational, research, and
+other qualifying noncommercial uses are permitted under those terms.
+
+Commercial use by anyone other than the copyright holder requires a separate
+commercial license. The copyright holder remains free to use the original work
+commercially and to grant separate permissions. PolyForm Noncommercial is a
+source-available license with a commercial-use restriction; it is not an
+Apache, GNU, or OSI-approved open-source license.
+
+Third-party runtimes, model assets, fonts, and libraries are not covered by
+Whisperbook's PolyForm license. They retain their own terms under
+[docs/licenses](docs/licenses) and [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
