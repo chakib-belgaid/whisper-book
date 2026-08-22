@@ -16,6 +16,7 @@ import com.whisperbook.app.domain.model.CharacterGender
 import com.whisperbook.app.domain.model.NarrationLanguage
 import com.whisperbook.app.domain.model.VocalAge
 import com.whisperbook.app.domain.model.VoiceDescriptor
+import com.whisperbook.app.diagnostics.BetaDiagnostics
 import java.util.concurrent.locks.ReentrantLock
 import java.util.concurrent.Executors
 import kotlin.concurrent.withLock
@@ -95,6 +96,12 @@ class SherpaKittenTtsEngine(
                             LOG_TAG,
                             "synthesis_ready chars=${request.text.length} elapsedMs=$elapsedMs " +
                                 "audioMs=$durationMs rtfMilli=$realTimeFactorMilli",
+                        )
+                        BetaDiagnostics.recordSynthesis(
+                            chars = request.text.length,
+                            elapsedMs = elapsedMs,
+                            audioMs = durationMs,
+                            realTimeFactorMilli = realTimeFactorMilli,
                         )
                     }
                 } catch (failure: Throwable) {
@@ -187,6 +194,15 @@ class SherpaKittenTtsEngine(
             LOG_TAG,
             "runtime_ready elapsedMs=${SystemClock.elapsedRealtime() - runtimeStartedAtMs} " +
                 "sampleRate=$sampleRate speakers=$speakerCount threads=$THREAD_COUNT",
+        )
+        BetaDiagnostics.performance(
+            "tts_runtime_ready",
+            mapOf(
+                "elapsed_ms" to (SystemClock.elapsedRealtime() - runtimeStartedAtMs),
+                "sample_rate" to sampleRate,
+                "speakers" to speakerCount,
+                "threads" to THREAD_COUNT,
+            ),
         )
         runtime = created
         return created

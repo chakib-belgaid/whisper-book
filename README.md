@@ -103,6 +103,7 @@ whisper-book/
 ├── art/                          Source art and emulator evidence
 ├── assets/readme/                README visual identity
 ├── design-system/                Approved screens and navigation map
+├── docs/BETA_DIAGNOSTICS.md      Tester log collection and privacy boundary
 ├── docs/architecture/            Architecture guide and editable diagrams
 ├── docs/licenses/                Third-party artifact records
 ├── LICENSE                       PolyForm Noncommercial 1.0.0 terms
@@ -171,6 +172,7 @@ Without these variables, Gradle intentionally creates an unsigned release artifa
 ## Project documents
 
 - [Architecture](docs/architecture/README.md) — component responsibilities, flows, boundaries, and editable diagrams
+- [Beta diagnostics](docs/BETA_DIAGNOSTICS.md) — versioned crash/performance logs and tester sharing workflow
 - [Product contract](PRODUCT.md) — product goals, non-goals, and acceptance criteria
 - [Design system](DESIGN.md) — Woodland Paper Theatre principles and UI tokens
 - [Implementation map](design-system/IMPLEMENTATION_MAP.md) — screen-by-screen source and asset mapping

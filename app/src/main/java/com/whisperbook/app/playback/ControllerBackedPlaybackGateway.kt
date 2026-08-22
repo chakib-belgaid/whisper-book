@@ -13,6 +13,7 @@ import androidx.media3.session.MediaController
 import androidx.media3.session.SessionResult
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
+import com.whisperbook.app.diagnostics.BetaDiagnostics
 import com.whisperbook.app.domain.PlaybackGateway
 import com.whisperbook.app.domain.model.PlaybackCursor
 import com.whisperbook.app.domain.model.PlaybackPreparationProgress
@@ -97,6 +98,7 @@ class ControllerBackedPlaybackGateway(
         autoPlay: Boolean,
     ) {
         Log.i(LOG_TAG, "playBook book=$bookId chapter=$chapterId")
+        BetaDiagnostics.info("playback_requested", mapOf("has_chapter" to (chapterId != null)))
         val requestedAtMs = SystemClock.elapsedRealtime()
         val generation = queueGeneration.incrementAndGet()
         withContext(Dispatchers.Main.immediate) {
@@ -408,6 +410,14 @@ class ControllerBackedPlaybackGateway(
                     "first_audio_ready book=${queue.bookId} chapter=${queue.chapterId} " +
                         "elapsedMs=${SystemClock.elapsedRealtime() - requestedAtMs} " +
                         "bufferMs=${queue.durationMs}",
+                )
+                BetaDiagnostics.performance(
+                    "first_audio_ready",
+                    mapOf(
+                        "elapsed_ms" to (SystemClock.elapsedRealtime() - requestedAtMs),
+                        "buffered_audio_ms" to queue.durationMs,
+                        "segment_count" to queue.segments.size,
+                    ),
                 )
                 firstQueueReady.complete(Unit)
                 return@withController

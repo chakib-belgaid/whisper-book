@@ -20,6 +20,7 @@ import com.whisperbook.app.domain.model.StoryCharacter
 import com.whisperbook.app.domain.model.SpeakerCorrectionScope
 import com.whisperbook.app.domain.model.VoiceRegenerationRequest
 import com.whisperbook.app.domain.model.VoiceRegenerationScope
+import com.whisperbook.app.diagnostics.BetaDiagnostics
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
@@ -244,7 +245,7 @@ class WhisperbookViewModel(
 
     fun playNextChapter() = playAdjacentChapter(1)
 
-    fun importBook(uri: Uri) = launchOperation("Importing your book") {
+    fun importBook(uri: Uri) = launchOperation("Importing your book", "book_import") {
         services.libraryRepository.importBook(
             uri,
             NarrationLanguage.ENGLISH.code,
@@ -265,7 +266,7 @@ class WhisperbookViewModel(
         selectedBookId.value?.let(services.preparationCoordinator::cancel)
     }
 
-    fun deleteSelectedBook() = launchOperation("Removing book") {
+    fun deleteSelectedBook() = launchOperation("Removing book", "book_remove") {
         val bookId = selectedBookId.value ?: return@launchOperation null
         if (uiState.value.playback?.bookId == bookId) {
             services.playbackGateway.pause()
@@ -283,6 +284,8 @@ class WhisperbookViewModel(
         val book = uiState.value.selectedBook
             ?: return launchOperation { error("Choose a book to export") }
         return viewModelScope.launch {
+            val startedAtMs = monotonicNowMs()
+            BetaDiagnostics.info("book_mp3_export_started")
             operation.value = OperationState(
                 isBusy = true,
                 statusMessage = "Preparing ${book.title} for MP3 export",
@@ -306,10 +309,22 @@ class WhisperbookViewModel(
                     kind = OperationKind.BOOK_MP3_EXPORT,
                     targetBookId = book.id,
                 )
+                BetaDiagnostics.performance(
+                    "book_mp3_export_completed",
+                    mapOf(
+                        "elapsed_ms" to (monotonicNowMs() - startedAtMs),
+                        "bytes_written" to exported.bytesWritten,
+                    ),
+                )
             } catch (cancellation: CancellationException) {
                 operation.value = OperationState()
                 throw cancellation
             } catch (failure: Throwable) {
+                BetaDiagnostics.error(
+                    "book_mp3_export_failed",
+                    failure,
+                    mapOf("elapsed_ms" to (monotonicNowMs() - startedAtMs)),
+                )
                 operation.value = OperationState(
                     errorMessage = userFacingOperationError(
                         failure,
@@ -350,7 +365,7 @@ class WhisperbookViewModel(
 
     fun previewCharacter(characterId: String): Job {
         stopVoicePreview()
-        return launchOperation("Preparing voice preview") {
+        return launchOperation("Preparing voice preview", "voice_preview") {
             val snapshot = uiState.value
             val character = snapshot.characters.firstOrNull { it.id == characterId }
                 ?: error("That character is no longer available")
@@ -378,7 +393,7 @@ class WhisperbookViewModel(
 
     fun previewVoice(voiceId: String, characterName: String): Job {
         stopVoicePreview()
-        return launchOperation("Preparing voice preview") {
+        return launchOperation("Preparing voice preview", "voice_preview") {
             val snapshot = uiState.value
             val voice = services.availableVoices.firstOrNull { it.id == voiceId }
                 ?: error("That embedded voice is no longer available")
@@ -421,7 +436,7 @@ class WhisperbookViewModel(
         passageId: String,
         speakerId: String,
         scope: SpeakerCorrectionScope,
-    ): Job = launchOperation("Correcting the attributed voice") {
+    ): Job = launchOperation("Correcting the attributed voice", "speaker_correction") {
         val snapshot = uiState.value
         val book = snapshot.selectedBook ?: error("Choose a book before correcting a voice")
         val passage = snapshot.chapters.asSequence()
@@ -460,7 +475,10 @@ class WhisperbookViewModel(
         setNarrationChunkSize(sizes.firstOrNull { it > current } ?: sizes.first())
     }
 
-    fun setNarrationChunkSize(maxChars: Int) = launchOperation("Updating narration chunk size") {
+    fun setNarrationChunkSize(maxChars: Int) = launchOperation(
+        "Updating narration chunk size",
+        "narration_chunk_update",
+    ) {
         val normalized = NarrationTextChunker.normalizeMaxChars(maxChars)
         val snapshot = uiState.value
         services.settingsRepository.update { it.copy(narrationChunkChars = normalized) }
@@ -512,7 +530,7 @@ class WhisperbookViewModel(
         regenerationScope: VoiceRegenerationScope = VoiceRegenerationScope.WHOLE_BOOK,
     ): Job {
         stopVoicePreview()
-        return launchOperation("Updating the cast") {
+        return launchOperation("Updating the cast", "voice_assignment") {
             val snapshot = uiState.value
             val voice = services.availableVoices.firstOrNull { it.id == voiceId }
                 ?: error("That embedded voice is unavailable")
@@ -559,7 +577,7 @@ class WhisperbookViewModel(
         }
     }
 
-    fun revertVoiceChange(): Job = launchOperation("Restoring the previous voice") {
+    fun revertVoiceChange(): Job = launchOperation("Restoring the previous voice", "voice_assignment_revert") {
         val snapshot = uiState.value
         val book = snapshot.selectedBook ?: error("Choose a book before reverting its cast")
         val change = services.retainedVoiceChanges(book.id, snapshot.characters.map(StoryCharacter::id))
@@ -584,7 +602,7 @@ class WhisperbookViewModel(
     fun setKeepScreenAwake(enabled: Boolean) = updateSettings { it.copy(keepScreenAwake = enabled) }
     fun setLargerText(enabled: Boolean) = updateSettings { it.copy(largerText = enabled) }
 
-    fun setAudioCacheLimit(bytes: Long) = launchOperation("Optimizing local audio storage") {
+    fun setAudioCacheLimit(bytes: Long) = launchOperation("Optimizing local audio storage", "audio_cache_update") {
         services.settingsRepository.update { it.copy(audioCacheLimitBytes = bytes) }
         services.audioSegmentStore.trimTo(bytes)
         refreshStorageUsage()
@@ -701,9 +719,12 @@ class WhisperbookViewModel(
 
     private fun launchOperation(
         status: String? = null,
+        diagnosticEvent: String? = null,
         block: suspend () -> String?,
     ) = viewModelScope.launch {
+        val startedAtMs = monotonicNowMs()
         val isUserVisibleWork = status != null
+        diagnosticEvent?.let { BetaDiagnostics.info("${it}_started") }
         if (isUserVisibleWork) {
             operation.value = OperationState(isBusy = true, statusMessage = status)
         }
@@ -712,9 +733,20 @@ class WhisperbookViewModel(
             if (isUserVisibleWork || resultMessage != null) {
                 operation.value = OperationState(statusMessage = resultMessage)
             }
+            diagnosticEvent?.let { event ->
+                BetaDiagnostics.performance(
+                    "${event}_completed",
+                    mapOf("elapsed_ms" to (monotonicNowMs() - startedAtMs)),
+                )
+            }
         } catch (cancellation: CancellationException) {
             throw cancellation
         } catch (failure: Throwable) {
+            BetaDiagnostics.error(
+                event = diagnosticEvent?.let { "${it}_failed" } ?: "ui_operation_failed",
+                failure = failure,
+                details = mapOf("elapsed_ms" to (monotonicNowMs() - startedAtMs)),
+            )
             operation.value = OperationState(
                 errorMessage = userFacingOperationError(failure),
             )
@@ -729,6 +761,8 @@ class WhisperbookViewModel(
         }
     }
 }
+
+private fun monotonicNowMs(): Long = System.nanoTime() / 1_000_000L
 
 internal fun voicePreviewText(characterName: String, languageCode: String = "en"): String {
     val name = characterName.trim().take(48).ifBlank { "this character" }

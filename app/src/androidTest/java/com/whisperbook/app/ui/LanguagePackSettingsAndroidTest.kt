@@ -6,6 +6,7 @@ import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import com.whisperbook.app.BuildConfig
 import com.whisperbook.app.ui.screens.SettingsScreen
 import com.whisperbook.app.ui.screens.VoiceCastScreen
 import com.whisperbook.app.ui.screens.WhisperbookAppState
@@ -63,6 +64,10 @@ class LanguagePackSettingsAndroidTest {
         composeRule.onNodeWithText("Default narrator").assertDoesNotExist()
         composeRule.onNodeWithText("Language packs").assertDoesNotExist()
         composeRule.onNodeWithText("French · Français").assertDoesNotExist()
+        composeRule.onNodeWithText("Beta diagnostics").assertExists()
+        composeRule.onNodeWithText("Share diagnostic log").assertExists()
+        composeRule.onNodeWithText("Commit ID").assertExists()
+        composeRule.onNodeWithText(BuildConfig.GIT_COMMIT).assertExists()
         composeRule.runOnIdle { assertEquals(240, appState.narrationChunkChars) }
     }
 }

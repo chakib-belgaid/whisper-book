@@ -9,10 +9,15 @@ import androidx.activity.viewModels
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.core.view.doOnPreDraw
+import com.whisperbook.app.diagnostics.BetaDiagnostics
+import com.whisperbook.app.diagnostics.UiPerformanceMonitor
 import com.whisperbook.app.integration.WhisperbookViewModel
 import com.whisperbook.app.ui.WhisperbookApp
 
 class MainActivity : ComponentActivity() {
+    private lateinit var performanceMonitor: UiPerformanceMonitor
+
     private val viewModel: WhisperbookViewModel by viewModels {
         val application = application as WhisperbookApplication
         WhisperbookViewModel.Factory(application.container)
@@ -25,9 +30,21 @@ class MainActivity : ComponentActivity() {
             navigationBarStyle = SystemBarStyle.dark(android.graphics.Color.TRANSPARENT),
         )
         hideSystemChrome()
+        performanceMonitor = UiPerformanceMonitor()
         setContent {
             WhisperbookApp(viewModel = viewModel)
         }
+        window.decorView.doOnPreDraw { BetaDiagnostics.recordFirstFrame() }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        performanceMonitor.start()
+    }
+
+    override fun onPause() {
+        performanceMonitor.stop()
+        super.onPause()
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {

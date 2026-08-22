@@ -8,6 +8,7 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.database.sqlite.SQLiteException
 import android.os.Build
+import android.os.SystemClock
 import androidx.core.app.NotificationCompat
 import androidx.room.withTransaction
 import androidx.work.CoroutineWorker
@@ -40,6 +41,7 @@ import com.whisperbook.app.domain.model.PreparationStage
 import com.whisperbook.app.domain.model.PreparationState
 import com.whisperbook.app.domain.model.StoryCharacter
 import com.whisperbook.app.domain.model.VoiceDescriptor
+import com.whisperbook.app.diagnostics.BetaDiagnostics
 import com.whisperbook.app.engine.audio.LocalAudioGenerationCoordinator
 import com.whisperbook.app.engine.audio.NarrationSynthesisPlanner
 import com.whisperbook.app.engine.document.PdfImportException
@@ -77,6 +79,11 @@ class PreparationWorker @JvmOverloads constructor(
         val runner = PreparationStageRunner(dependencies) { state ->
             setForeground(createForegroundInfo(bookId, state))
         }
+        val startedAtMs = SystemClock.elapsedRealtime()
+        BetaDiagnostics.info(
+            "preparation_stage_started",
+            mapOf("stage" to stage.name, "attempt" to runAttemptCount),
+        )
 
         return try {
             dependencies.awaitNarrationProfiles()
@@ -87,11 +94,30 @@ class PreparationWorker @JvmOverloads constructor(
                 ),
             )
             runner.run(bookId, stage, runAttemptCount, fromChapterOrdinal)
+            BetaDiagnostics.performance(
+                "preparation_stage_completed",
+                mapOf(
+                    "stage" to stage.name,
+                    "attempt" to runAttemptCount,
+                    "elapsed_ms" to (SystemClock.elapsedRealtime() - startedAtMs),
+                ),
+            )
             Result.success()
         } catch (cancellation: CancellationException) {
             throw cancellation
         } catch (failure: Throwable) {
             val mapped = PreparationErrorMapper.map(failure)
+            BetaDiagnostics.error(
+                "preparation_stage_failed",
+                failure,
+                mapOf(
+                    "stage" to stage.name,
+                    "attempt" to runAttemptCount,
+                    "elapsed_ms" to (SystemClock.elapsedRealtime() - startedAtMs),
+                    "error_code" to mapped.code,
+                    "retryable" to mapped.retryable,
+                ),
+            )
             try {
                 runner.markFailed(bookId, mapped, runAttemptCount + 1)
             } catch (cancellation: CancellationException) {

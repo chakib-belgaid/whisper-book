@@ -44,6 +44,7 @@ import androidx.navigation.compose.rememberNavController
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.whisperbook.app.domain.model.PreparationStage
 import com.whisperbook.app.domain.model.PreparationState
+import com.whisperbook.app.diagnostics.BetaDiagnostics
 import com.whisperbook.app.integration.WhisperbookViewModel
 import com.whisperbook.app.ui.components.StorybookBottomBar
 import com.whisperbook.app.ui.components.StorybookDestination
@@ -108,6 +109,9 @@ fun WhisperbookApp(
         val backStackEntry by navController.currentBackStackEntryAsState()
         val currentRoute = backStackEntry?.destination?.route ?: startDestination
         val showBottomBar = currentRoute in WhisperbookDestination.bottomBarRoutes
+        LaunchedEffect(currentRoute) {
+            BetaDiagnostics.info("screen_view", mapOf("route" to currentRoute))
+        }
 
         WhisperBackdrop(modifier = modifier.fillMaxSize()) {
             Scaffold(

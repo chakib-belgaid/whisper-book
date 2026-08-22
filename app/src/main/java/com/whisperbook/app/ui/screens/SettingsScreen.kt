@@ -1,5 +1,6 @@
 package com.whisperbook.app.ui.screens
 
+import android.widget.Toast
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -11,6 +12,8 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Bedtime
+import androidx.compose.material.icons.outlined.Info
+import androidx.compose.material.icons.outlined.Share
 import androidx.compose.material.icons.outlined.Speed
 import androidx.compose.material.icons.outlined.Tune
 import androidx.compose.material.icons.outlined.WbSunny
@@ -18,9 +21,11 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.whisperbook.app.diagnostics.BetaDiagnostics
 import com.whisperbook.app.ui.theme.WhisperbookTheme
 
 @Composable
@@ -29,6 +34,7 @@ fun SettingsScreen(
     appState: WhisperbookAppState,
     modifier: Modifier = Modifier,
 ) {
+    val context = LocalContext.current
     LazyColumn(
         modifier = modifier.fillMaxSize().padding(contentPadding),
         contentPadding = PaddingValues(horizontal = 13.dp, vertical = 5.dp),
@@ -101,6 +107,38 @@ fun SettingsScreen(
                     leadingText = "Aa",
                     checked = appState.largerText,
                     onCheckedChange = appState::updateLargerText,
+                )
+            }
+        }
+        item {
+            GoldenSettingsSection("Beta diagnostics") {
+                GoldenSettingsRow(
+                    "Share diagnostic log",
+                    value = "On-device only",
+                    icon = Icons.Outlined.Share,
+                    onClick = {
+                        runCatching {
+                            context.startActivity(BetaDiagnostics.createShareChooser(context))
+                        }.onFailure {
+                            Toast.makeText(context, "Could not prepare the diagnostic log", Toast.LENGTH_LONG).show()
+                        }
+                    },
+                )
+                CompactDivider()
+                GoldenSettingsRow(
+                    "App version",
+                    value = BetaDiagnostics.versionLabel,
+                    icon = Icons.Outlined.Info,
+                )
+                CompactDivider()
+                GoldenSettingsRow("Commit ID", value = BetaDiagnostics.commitId)
+                Text(
+                    "Includes crashes, slow frames, playback, preparation, and narration timings. " +
+                        "It never includes book text or audio; you choose when to share it." +
+                        if (BetaDiagnostics.hasLocalChanges) " This build also has local changes." else "",
+                    color = WhisperbookTheme.colors.ink.copy(alpha = 0.72f),
+                    style = WhisperbookTheme.typography.body.copy(fontSize = 12.sp, lineHeight = 16.sp),
+                    modifier = Modifier.padding(horizontal = 3.dp, vertical = 4.dp),
                 )
             }
         }

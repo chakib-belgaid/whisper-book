@@ -13,6 +13,17 @@ val releaseArtifactBuild = providers.gradleProperty("whisperbookReleaseArtifact"
     .map(String::toBoolean)
     .orElse(false)
 
+fun gitValue(vararg arguments: String): String = runCatching {
+    providers.exec {
+        commandLine("git", *arguments)
+        workingDir(rootProject.projectDir)
+        isIgnoreExitValue = true
+    }.standardOutput.asText.get().trim()
+}.getOrDefault("")
+
+val gitCommit = gitValue("rev-parse", "--short=12", "HEAD").ifBlank { "unknown" }
+val gitDirty = gitValue("status", "--porcelain").isNotBlank()
+
 android {
     namespace = "com.whisperbook.app"
     compileSdk = 36
@@ -23,6 +34,9 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "0.1"
+
+        buildConfigField("String", "GIT_COMMIT", "\"$gitCommit\"")
+        buildConfigField("boolean", "GIT_DIRTY", gitDirty.toString())
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true

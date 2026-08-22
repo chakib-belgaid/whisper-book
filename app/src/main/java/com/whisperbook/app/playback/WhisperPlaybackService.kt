@@ -16,6 +16,7 @@ import androidx.media3.session.SessionError
 import androidx.media3.session.SessionResult
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
+import com.whisperbook.app.diagnostics.BetaDiagnostics
 import com.whisperbook.app.domain.model.PlaybackCursor
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -50,14 +51,27 @@ class WhisperPlaybackService : MediaSessionService() {
 
         override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) {
             Log.i(LOG_TAG, "playWhenReady=$playWhenReady reason=$reason")
+            BetaDiagnostics.info(
+                "play_when_ready_changed",
+                mapOf("play_when_ready" to playWhenReady, "reason" to reason),
+            )
         }
 
         override fun onPlaybackStateChanged(playbackState: Int) {
             Log.i(LOG_TAG, "playbackState=$playbackState item=${player.currentMediaItemIndex}")
+            BetaDiagnostics.info(
+                "playback_state_changed",
+                mapOf("state" to playbackState, "item_index" to player.currentMediaItemIndex),
+            )
         }
 
         override fun onPlayerError(error: androidx.media3.common.PlaybackException) {
             Log.e(LOG_TAG, "Playback failed", error)
+            BetaDiagnostics.error(
+                "playback_failed",
+                error,
+                mapOf("error_code" to error.errorCode),
+            )
         }
     }
 
