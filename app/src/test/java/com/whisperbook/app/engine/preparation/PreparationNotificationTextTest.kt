@@ -47,4 +47,20 @@ class PreparationNotificationTextTest {
 
         assertEquals("Reading page 8 of 40", text)
     }
+
+    @Test
+    fun `automatic retry notification explains that preparation is still active`() {
+        val text = preparationNotificationText(
+            PreparationState(
+                stage = PreparationStage.PREPARING_AUDIO,
+                completedUnits = 4,
+                totalUnits = 19,
+                progressFraction = 4f / 19f,
+                message = "Local generation was interrupted — retrying automatically",
+                retryable = true,
+            ),
+        )
+
+        assertEquals("Local generation was interrupted — retrying automatically", text)
+    }
 }

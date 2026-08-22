@@ -203,6 +203,42 @@ class WhisperBookDatabaseMigrationAndroidTest {
         }
     }
 
+    @Test
+    fun migration4To5KeepsExistingBooksConfirmedWithoutInventingANarratorChoice() {
+        migrationHelper.createDatabase(DATABASE_NAME, 4).apply {
+            execSQL(
+                """
+                INSERT INTO books (
+                    id, title, author, format, source_uri, private_source_path, source_sha256,
+                    cover_path, current_chapter_id, current_passage_id, progress_fraction,
+                    last_opened_at_epoch_ms, narration_language_code,
+                    narration_profile_revision, narration_profile_seeded
+                ) VALUES (
+                    'existing-book', 'Existing Story', NULL, 'EPUB', NULL, NULL, NULL,
+                    NULL, NULL, NULL, 0, 1, 'fr', 3, 1
+                )
+                """.trimIndent(),
+            )
+            close()
+        }
+
+        migrationHelper.runMigrationsAndValidate(
+            DATABASE_NAME,
+            5,
+            true,
+            WhisperBookDatabase.MIGRATION_4_5,
+        ).use { database ->
+            database.query(
+                "SELECT preferred_narrator_voice_id, narration_setup_confirmed " +
+                    "FROM books WHERE id = 'existing-book'",
+            ).use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertTrue(cursor.isNull(0))
+                assertEquals(1, cursor.getInt(1))
+            }
+        }
+    }
+
     private companion object {
         const val DATABASE_NAME = "profile-migration-test"
     }

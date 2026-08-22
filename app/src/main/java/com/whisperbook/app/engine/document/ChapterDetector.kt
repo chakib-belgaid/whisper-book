@@ -44,13 +44,15 @@ class ChapterDetector(
             .map(ParagraphNormalizer::normalizeParagraph)
             .filter(String::isNotBlank)
             .associateBy(::headingKey)
+        val numberedListIndices = adjacentNumberedListIndices(normalized)
 
         val boundaries = normalized.mapIndexedNotNull { index, paragraph ->
             val tocTitle = tocLookup[headingKey(paragraph)]
             when {
                 tocTitle != null -> Boundary(index, tocTitle, ChapterDetectionRule.TOC)
                 chapterPattern.matches(paragraph) -> Boundary(index, paragraph, ChapterDetectionRule.REGEX)
-                looksLikeStructuralHeading(paragraph) -> Boundary(index, paragraph, ChapterDetectionRule.HEADING)
+                index !in numberedListIndices && looksLikeStructuralHeading(paragraph) ->
+                    Boundary(index, paragraph, ChapterDetectionRule.HEADING)
                 else -> null
             }
         }
@@ -70,7 +72,9 @@ class ChapterDetector(
             val end = boundaries.getOrNull(boundaryIndex + 1)?.index ?: normalized.size
             val bodyStart = min(boundary.index + 1, end)
             val body = normalized.subList(bodyStart, end)
-            if (body.isNotEmpty() || result.isEmpty()) {
+            // Consecutive structural labels (for example `CHAPTER I` followed by `THE KEY`)
+            // describe the same boundary. Never turn the label with no body into an empty chapter.
+            if (body.isNotEmpty()) {
                 result += DetectedChapter(
                     title = cleanHeading(boundary.title),
                     paragraphs = body,
@@ -161,21 +165,111 @@ class ChapterDetector(
             pattern = "^(?:(?:chapter|chapitre|cap[ií]tulo|kapitel|book|part|volume)\\s+(?:[0-9]+|[ivxlcdm]+|one|two|three|four|five|six|seven|eight|nine|ten)(?:\\s*[:.\\-—]\\s*.+)?|prologue|epilogue|introduction|foreword|afterword)$",
             option = RegexOption.IGNORE_CASE,
         )
-        private val numberedHeading = Regex("^(?:[0-9]{1,3}|[IVXLCDM]{1,10})[.)]?(?:\\s+.{1,70})?$")
+        private val bareRomanHeading = Regex("^[IVXLCDM]{1,10}$")
+        private val numberedTitleHeading = Regex(
+            "^(?:\\p{Nd}{1,3}|[IVXLCDM]{1,10})([.):\\-—])?\\s+(\\S.{0,69})$",
+        )
+        private val numberedListLine = Regex(
+            "^(\\p{Nd}{1,3}|[IVXLCDM]{1,10})(?:[.)]\\s+|\\s+).+$",
+        )
 
         fun looksLikeHeading(text: String): Boolean =
             chapterPattern.matches(text.trim()) || looksLikeStructuralHeading(text)
 
         private fun looksLikeStructuralHeading(text: String): Boolean {
             val value = text.trim()
-            if (value.isEmpty() || value.length > 90 || value.contains(Regex("[.!?].+\\s"))) return false
-            if (numberedHeading.matches(value)) return true
+            if (value.isEmpty() || value.length > 90) return false
+            // A bare Roman numeral is a common book label, while a bare Arabic number is usually
+            // a page number. Sentence-ending punctuation keeps first-person prose such as
+            // `I slept.` out; an unpunctuated title must start like a title in cased scripts.
+            if (bareRomanHeading.matches(value)) return true
+            numberedTitleHeading.matchEntire(value)?.let { match ->
+                val title = match.groupValues[2]
+                if (looksLikeNumberedTitle(title)) return true
+            }
+            if (value.contains(Regex("[.!?].+\\s"))) return false
             val words = value.split(Regex("\\s+")).filter(String::isNotBlank)
             if (words.isEmpty() || words.size > 10) return false
             val letters = value.count(Char::isLetter)
             if (letters < 3) return false
             val uppercase = value.count(Char::isUpperCase)
             return uppercase.toFloat() / letters >= 0.8f && words.size <= 8
+        }
+
+        private fun looksLikeNumberedTitle(title: String): Boolean {
+            // A final full stop strongly indicates a numbered sentence/instruction. Question and
+            // exclamation marks remain valid because they are common intentional chapter titles.
+            if (title.lastOrNull()?.let { it == '.' || it == '۔' } == true) return false
+            val words = title.split(Regex("\\s+")).filter(String::isNotBlank)
+            if (words.isEmpty() || words.size > 10) return false
+            val letters = title.filter(Char::isLetter)
+            if (letters.length < 2) return false
+            val firstLetter = letters.first()
+            return firstLetter.isUpperCase() || letters.none { it.isLowerCase() || it.isUpperCase() }
+        }
+
+        /**
+         * Consecutive 1/2/3 paragraphs are overwhelmingly lists or instructions, not chapter
+         * bodies. Suppress only that local run; genuine numbered chapters have prose between their
+         * headings, and explicit TOC matches still take precedence.
+         */
+        private fun adjacentNumberedListIndices(paragraphs: List<String>): Set<Int> {
+            val numbers = paragraphs.map { paragraph ->
+                numberedListLine.matchEntire(paragraph)
+                    ?.groupValues
+                    ?.get(1)
+                    ?.let(::numberingValue)
+            }
+            val result = mutableSetOf<Int>()
+            var start = 0
+            while (start < numbers.size) {
+                val first = numbers[start]
+                if (first == null) {
+                    start += 1
+                    continue
+                }
+                var end = start
+                while (
+                    end + 1 < numbers.size &&
+                    numbers[end + 1] != null &&
+                    numbers[end + 1] == numbers[end]!! + 1
+                ) {
+                    end += 1
+                }
+                if (end > start) result.addAll(start..end)
+                start = end + 1
+            }
+            return result
+        }
+
+        private fun numberingValue(value: String): Int? {
+            if (value.all(Char::isDigit)) {
+                var result = 0
+                value.forEach { character ->
+                    val digit = Character.digit(character, 10)
+                    if (digit < 0) return null
+                    result = result * 10 + digit
+                }
+                return result
+            }
+            var result = 0
+            value.forEachIndexed { index, character ->
+                val current = romanDigit(character) ?: return null
+                val next = value.getOrNull(index + 1)?.let(::romanDigit) ?: 0
+                result += if (current < next) -current else current
+            }
+            return result.takeIf { it > 0 }
+        }
+
+        private fun romanDigit(character: Char): Int? = when (character) {
+            'I' -> 1
+            'V' -> 5
+            'X' -> 10
+            'L' -> 50
+            'C' -> 100
+            'D' -> 500
+            'M' -> 1_000
+            else -> null
         }
 
         private fun headingKey(text: String): String = text

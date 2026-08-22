@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -33,7 +34,7 @@ class ProductionPreparationCoordinatorTest {
     }
 
     @Test
-    fun `enqueue and cancel always target the same book scoped unique work`() {
+    fun `enqueue and cancel always target the same book scoped unique work`() = runTest {
         val scheduler = RecordingScheduler()
         val coordinator = ProductionPreparationCoordinator(scheduler, FakePreparationJobDao())
 
@@ -47,7 +48,7 @@ class ProductionPreparationCoordinatorTest {
     }
 
     @Test
-    fun `audio regeneration replaces preparation with an audio only restart point`() {
+    fun `audio regeneration replaces preparation with an audio only restart point`() = runTest {
         val scheduler = RecordingScheduler()
         val coordinator = ProductionPreparationCoordinator(scheduler, FakePreparationJobDao())
 
@@ -110,6 +111,69 @@ class ProductionPreparationCoordinatorTest {
         assertEquals("missing", explicit.code)
         assertEquals("not here", explicit.message)
     }
+
+    @Test
+    fun `automatic retry remains active and preserves the latest progress`() {
+        val retry = automaticRetryState(
+            workerStage = PreparationStage.READING_CHAPTERS,
+            previous = com.whisperbook.app.domain.model.PreparationState(
+                stage = PreparationStage.READING_CHAPTERS,
+                completedUnits = 640,
+                totalUnits = 2_400,
+                progressFraction = 640f / 2_400f,
+                message = "Reading page 640 of 2400",
+            ),
+            failure = MappedPreparationError(
+                code = "temporary-storage-error",
+                message = "Preparation was interrupted",
+                retryable = true,
+            ),
+        )
+
+        assertEquals(PreparationStage.READING_CHAPTERS, retry.stage)
+        assertEquals(640, retry.completedUnits)
+        assertEquals(2_400, retry.totalUnits)
+        assertEquals(640f / 2_400f, retry.progressFraction)
+        assertEquals("Preparation was interrupted — retrying automatically", retry.message)
+        assertTrue(retry.retryable)
+    }
+
+    @Test
+    fun `only retryable failures below the attempt limit retry automatically`() {
+        val retryable = MappedPreparationError("temporary", "Temporary interruption", retryable = true)
+        val terminal = MappedPreparationError("invalid", "Invalid publication", retryable = false)
+
+        assertTrue(shouldRetryAutomatically(retryable, runAttemptCount = 0))
+        assertTrue(shouldRetryAutomatically(retryable, runAttemptCount = 1))
+        assertFalse(shouldRetryAutomatically(retryable, runAttemptCount = 2))
+        assertFalse(shouldRetryAutomatically(terminal, runAttemptCount = 0))
+    }
+
+    @Test
+    fun `extraction progress checkpoints advance by percent and emit terminal once`() {
+        val throttle = PreparationProgressThrottle()
+
+        assertFalse(throttle.shouldCheckpoint(completedUnits = 0, totalUnits = 1_000))
+        assertFalse(throttle.shouldCheckpoint(completedUnits = 9, totalUnits = 1_000))
+        assertTrue(throttle.shouldCheckpoint(completedUnits = 10, totalUnits = 1_000))
+        assertFalse(throttle.shouldCheckpoint(completedUnits = 19, totalUnits = 1_000))
+        assertTrue(throttle.shouldCheckpoint(completedUnits = 20, totalUnits = 1_000))
+        assertFalse(throttle.shouldCheckpoint(completedUnits = 10, totalUnits = 1_000))
+        assertTrue(throttle.shouldCheckpoint(completedUnits = 1_000, totalUnits = 1_000))
+        assertFalse(throttle.shouldCheckpoint(completedUnits = 1_000, totalUnits = 1_000))
+    }
+
+    @Test
+    fun `diagnostic book correlation is stable without exposing the book id`() {
+        val bookId = "book-42-sensitive-local-id"
+
+        val key = preparationCorrelationKey(bookId)
+
+        assertEquals(key, preparationCorrelationKey(bookId))
+        assertEquals(12, key.length)
+        assertFalse(key.contains(bookId))
+        assertNotEquals(key, preparationCorrelationKey("book-43-sensitive-local-id"))
+    }
 }
 
 private class RecordingScheduler : PreparationWorkScheduler {
@@ -118,16 +182,16 @@ private class RecordingScheduler : PreparationWorkScheduler {
     val cancelledNames = mutableListOf<String>()
     val audioRestarts = mutableListOf<AudioRestart>()
 
-    override fun enqueueUniqueChain(uniqueName: String, bookId: String) {
+    override suspend fun enqueueUniqueChain(uniqueName: String, bookId: String) {
         enqueuedNames += uniqueName
         enqueuedBookIds += bookId
     }
 
-    override fun cancelUnique(uniqueName: String) {
+    override suspend fun cancelUnique(uniqueName: String) {
         cancelledNames += uniqueName
     }
 
-    override fun replaceWithAudioGeneration(
+    override suspend fun replaceWithAudioGeneration(
         uniqueName: String,
         bookId: String,
         fromChapterOrdinal: Int,

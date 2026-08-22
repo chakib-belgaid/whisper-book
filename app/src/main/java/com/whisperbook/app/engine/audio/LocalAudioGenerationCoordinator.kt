@@ -1,9 +1,11 @@
 package com.whisperbook.app.engine.audio
 
-import java.util.concurrent.atomic.AtomicInteger
-import kotlinx.coroutines.delay
+import java.util.ArrayDeque
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 /**
  * Serializes process-local model generation across WorkManager and on-demand playback.
@@ -14,54 +16,106 @@ import kotlinx.coroutines.sync.withLock
 internal object LocalAudioGenerationCoordinator {
     private val gate = LocalAudioGenerationGate()
 
-    /** Prevents background work from claiming the model between consecutive playback segments. */
-    suspend fun <T> withOnDemandPriority(block: suspend () -> T): T =
-        gate.withOnDemandPriority(block)
-
-    /** On-demand playback work is serialized and takes the next available generation slot. */
+    /** On-demand playback is serialized and gets the first turn when background work is waiting. */
     suspend fun <T> run(block: suspend () -> T): T = gate.runOnDemand(block)
 
-    /** Background preparation yields between passages while a playback request is waiting. */
+    /** Background preparation yields to playback once, then gets a bounded turn of its own. */
     suspend fun <T> runBackground(block: suspend () -> T): T = gate.runBackground(block)
 }
 
 /** Testable process-local gate behind [LocalAudioGenerationCoordinator]. */
 internal class LocalAudioGenerationGate {
-    private val generationMutex = Mutex()
-    private val onDemandWaiters = AtomicInteger(0)
-
-    suspend fun <T> withOnDemandPriority(block: suspend () -> T): T {
-        onDemandWaiters.incrementAndGet()
-        return try {
-            block()
-        } finally {
-            onDemandWaiters.decrementAndGet()
-        }
-    }
+    private val stateMutex = Mutex()
+    private val onDemandWaiters = ArrayDeque<GenerationWaiter>()
+    private val backgroundWaiters = ArrayDeque<GenerationWaiter>()
+    private var activeWaiter: GenerationWaiter? = null
+    private var onDemandTurnUsedWhileBackgroundWaits = false
 
     suspend fun <T> runOnDemand(block: suspend () -> T): T =
-        withOnDemandPriority { generationMutex.withLock { block() } }
+        run(GenerationPriority.ON_DEMAND, block)
 
-    suspend fun <T> runBackground(block: suspend () -> T): T {
-        while (true) {
-            if (onDemandWaiters.get() == 0 && generationMutex.tryLock()) {
-                // A playback request may have arrived in the same scheduling turn. Let it go first
-                // instead of beginning another CPU-heavy passage.
-                if (onDemandWaiters.get() > 0) {
-                    generationMutex.unlock()
-                } else {
-                    try {
-                        return block()
-                    } finally {
-                        generationMutex.unlock()
+    suspend fun <T> runBackground(block: suspend () -> T): T =
+        run(GenerationPriority.BACKGROUND, block)
+
+    private suspend fun <T> run(
+        priority: GenerationPriority,
+        block: suspend () -> T,
+    ): T {
+        val waiter = GenerationWaiter(priority)
+        var registered = false
+        try {
+            stateMutex.withLock {
+                queueFor(priority).addLast(waiter)
+                registered = true
+                if (
+                    priority == GenerationPriority.BACKGROUND &&
+                    backgroundWaiters.size == 1 &&
+                    activeWaiter?.priority == GenerationPriority.ON_DEMAND
+                ) {
+                    // The active playback segment counts as this background waiter's priority turn.
+                    onDemandTurnUsedWhileBackgroundWaits = true
+                }
+                grantNextLocked()
+            }
+            waiter.granted.await()
+            return block()
+        } finally {
+            if (registered) {
+                withContext(NonCancellable) {
+                    stateMutex.withLock {
+                        when (waiter.state) {
+                            WaiterState.QUEUED -> queueFor(priority).remove(waiter)
+                            WaiterState.GRANTED -> {
+                                check(activeWaiter === waiter)
+                                activeWaiter = null
+                            }
+                            WaiterState.RELEASED -> Unit
+                        }
+                        waiter.state = WaiterState.RELEASED
+                        if (backgroundWaiters.isEmpty()) {
+                            onDemandTurnUsedWhileBackgroundWaits = false
+                        }
+                        grantNextLocked()
                     }
                 }
             }
-            delay(BACKGROUND_RETRY_DELAY_MS)
         }
     }
 
-    private companion object {
-        const val BACKGROUND_RETRY_DELAY_MS = 10L
+    private fun grantNextLocked() {
+        if (activeWaiter != null) return
+        val next = when {
+            onDemandWaiters.isNotEmpty() &&
+                (backgroundWaiters.isEmpty() || !onDemandTurnUsedWhileBackgroundWaits) -> {
+                onDemandWaiters.removeFirst().also {
+                    if (backgroundWaiters.isNotEmpty()) {
+                        onDemandTurnUsedWhileBackgroundWaits = true
+                    }
+                }
+            }
+            backgroundWaiters.isNotEmpty() -> {
+                backgroundWaiters.removeFirst().also {
+                    onDemandTurnUsedWhileBackgroundWaits = false
+                }
+            }
+            else -> null
+        } ?: return
+        next.state = WaiterState.GRANTED
+        activeWaiter = next
+        next.granted.complete(Unit)
     }
+
+    private fun queueFor(priority: GenerationPriority): ArrayDeque<GenerationWaiter> =
+        when (priority) {
+            GenerationPriority.ON_DEMAND -> onDemandWaiters
+            GenerationPriority.BACKGROUND -> backgroundWaiters
+        }
+
+    private class GenerationWaiter(val priority: GenerationPriority) {
+        val granted = CompletableDeferred<Unit>()
+        var state = WaiterState.QUEUED
+    }
+
+    private enum class GenerationPriority { ON_DEMAND, BACKGROUND }
+    private enum class WaiterState { QUEUED, GRANTED, RELEASED }
 }

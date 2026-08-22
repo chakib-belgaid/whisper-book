@@ -127,13 +127,22 @@ fun WhisperbookApp(
                                 if (currentRoute == WhisperbookDestination.Welcome.route) {
                                     appState.completeOnboarding()
                                 }
-                                if (
+                                when {
                                     destination.route == WhisperbookDestination.NowPlaying.route &&
-                                    !appState.canListen
-                                ) {
-                                    navController.navigate(WhisperbookDestination.Processing.route)
-                                } else {
-                                    navController.navigateToBottomDestination(destination.route)
+                                        appState.currentBookId.isBlank() -> {
+                                        navController.navigateToBottomDestination(
+                                            WhisperbookDestination.Library.route,
+                                        )
+                                    }
+                                    destination.route == WhisperbookDestination.NowPlaying.route &&
+                                        appState.narrationSetupRequired -> {
+                                        navController.navigate(WhisperbookDestination.NarrationSetup.route)
+                                    }
+                                    destination.route == WhisperbookDestination.NowPlaying.route &&
+                                        !appState.canListen -> {
+                                        navController.navigate(WhisperbookDestination.Processing.route)
+                                    }
+                                    else -> navController.navigateToBottomDestination(destination.route)
                                 }
                             },
                         )
@@ -265,6 +274,8 @@ private class ViewModelUiActions(
     private val viewModel: WhisperbookViewModel,
 ) : WhisperbookUiActions {
     override fun importBook(uri: android.net.Uri) = viewModel.importBook(uri).let { Unit }
+    override fun confirmNarrationSetup(languageCode: String, narratorVoiceId: String) =
+        viewModel.confirmNarrationSetup(languageCode, narratorVoiceId).let { Unit }
     override fun retryPreparation() {
         viewModel.clearMessage()
         viewModel.retryPreparation()
@@ -303,6 +314,8 @@ private class ViewModelUiActions(
     override fun previewCharacter(characterId: String) = viewModel.previewCharacter(characterId).let { Unit }
     override fun previewVoice(voiceId: String, characterName: String) =
         viewModel.previewVoice(voiceId, characterName).let { Unit }
+    override fun previewNarrationSetupVoice(voiceId: String, languageCode: String) =
+        viewModel.previewNarrationSetupVoice(voiceId, languageCode).let { Unit }
     override fun setAutoScroll(enabled: Boolean) = viewModel.setAutoScroll(enabled).let { Unit }
     override fun setKeepScreenAwake(enabled: Boolean) = viewModel.setKeepScreenAwake(enabled).let { Unit }
     override fun setLargerText(enabled: Boolean) = viewModel.setLargerText(enabled).let { Unit }

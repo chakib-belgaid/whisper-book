@@ -1,6 +1,7 @@
 package com.whisperbook.app.engine.audio
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.runTest
@@ -77,30 +78,33 @@ class LocalAudioGenerationCoordinatorTest {
     }
 
     @Test
-    fun `progressive reservation blocks background work between playback segments`() = runTest {
+    fun `waiting background gets a bounded turn during continuous playback generation`() = runTest {
         val gate = LocalAudioGenerationGate()
-        val betweenSegments = CompletableDeferred<Unit>()
-        val releaseSecondSegment = CompletableDeferred<Unit>()
+        val firstSegmentStarted = CompletableDeferred<Unit>()
+        val releaseFirstSegment = CompletableDeferred<Unit>()
         val order = mutableListOf<String>()
 
         val playback = launch {
-            gate.withOnDemandPriority {
-                gate.runOnDemand { order += "playback-1" }
-                betweenSegments.complete(Unit)
-                releaseSecondSegment.await()
-                gate.runOnDemand { order += "playback-2" }
+            repeat(100) { index ->
+                gate.runOnDemand {
+                    order += "playback-${index + 1}"
+                    if (index == 0) {
+                        firstSegmentStarted.complete(Unit)
+                        releaseFirstSegment.await()
+                    }
+                }
             }
         }
-        betweenSegments.await()
-        val background = launch {
+        firstSegmentStarted.await()
+        val background = launch(start = CoroutineStart.UNDISPATCHED) {
             gate.runBackground { order += "background" }
         }
-        yield()
-
-        assertEquals(listOf("playback-1"), order)
-        releaseSecondSegment.complete(Unit)
+        releaseFirstSegment.complete(Unit)
         playback.join()
         background.join()
-        assertEquals(listOf("playback-1", "playback-2", "background"), order)
+
+        assertEquals("playback-1", order.first())
+        assertEquals("background", order[1])
+        assertEquals(101, order.size)
     }
 }

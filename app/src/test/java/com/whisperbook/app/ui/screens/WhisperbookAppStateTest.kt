@@ -84,6 +84,44 @@ class WhisperbookAppStateTest {
     }
 
     @Test
+    fun `unconfirmed book needs setup and is not active preparation`() {
+        val preparation = PreparationState(
+            stage = PreparationStage.COPY_AND_VALIDATE,
+            message = "Waiting to prepare",
+        )
+        val book = Book(
+            id = "unconfirmed-book",
+            title = "Unconfirmed Book",
+            author = "A. Reader",
+            format = BookFormat.EPUB,
+            sourceUri = null,
+            privateSourcePath = "/private/unconfirmed.epub",
+            coverPath = null,
+            preparation = preparation,
+            currentChapterId = null,
+            currentPassageId = null,
+            progressFraction = 0f,
+            lastOpenedAtEpochMs = 1L,
+            narrationSetupConfirmed = false,
+        )
+        val state = WhisperbookAppState()
+
+        state.synchronize(
+            WhisperbookUiSnapshot(
+                books = listOf(book),
+                selectedBook = book,
+                preparation = preparation,
+            ),
+        )
+
+        assertTrue(state.narrationSetupRequired)
+        assertTrue(state.requiresNarrationSetup(book.id))
+        assertFalse(state.isBookPreparing)
+        assertFalse(state.canListen)
+        assertEquals("Narration setup needed", state.books.single().libraryProgressLabel())
+    }
+
+    @Test
     fun `audio preparation is openable before the first chapter finishes`() {
         val state = WhisperbookAppState()
 
@@ -168,11 +206,34 @@ class WhisperbookAppStateTest {
         )
         val missingVoice = chapterWithPassage("missing-voice", 2, "new-character", "dialogue")
         val empty = Chapter("empty", "book-1", 3, "Chapter 4")
+        val attributedHeader = Chapter(
+            id = "attributed-header",
+            bookId = "book-1",
+            ordinal = 4,
+            title = "Chapter 5",
+            passageCount = 8,
+            unattributedPassageCount = 0,
+        )
+        val unattributedHeader = Chapter(
+            id = "unattributed-header",
+            bookId = "book-1",
+            ordinal = 5,
+            title = "Chapter 6",
+            passageCount = 8,
+            unattributedPassageCount = 1,
+        )
         val state = WhisperbookAppState()
 
         state.synchronize(
             WhisperbookUiSnapshot(
-                chapters = listOf(ready, unattributed, missingVoice, empty),
+                chapters = listOf(
+                    ready,
+                    unattributed,
+                    missingVoice,
+                    empty,
+                    attributedHeader,
+                    unattributedHeader,
+                ),
                 selectedChapter = ready,
                 preparation = PreparationState(stage = PreparationStage.PREPARING_AUDIO),
                 voiceAssignments = mapOf(
@@ -186,8 +247,11 @@ class WhisperbookAppStateTest {
         )
 
         // Only the selected chapter's cast is observed. Persisted non-selected chapters are
-        // guaranteed complete by preparation and are gated here by attribution.
-        assertEquals(listOf(true, false, true, false), state.chapters.map(ChapterUi::isAvailable))
+        // projected from their persisted attribution summary instead of loading every passage.
+        assertEquals(
+            listOf(true, false, true, false, true, false),
+            state.chapters.map(ChapterUi::isAvailable),
+        )
         assertTrue(state.canListen)
         assertFalse(state.hasNextChapter)
     }

@@ -21,6 +21,7 @@ import java.util.UUID
 import java.util.concurrent.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.withContext
 
@@ -42,6 +43,16 @@ class RoomLibraryRepository(
     override fun observeChapters(bookId: String): Flow<List<Chapter>> = database.chapterDao()
         .observeForBook(bookId)
         .map { chapters -> chapters.map { it.toDomain() } }
+
+    override fun observeChapterHeaders(bookId: String): Flow<List<Chapter>> = database.chapterDao()
+        .observeHeadersForBook(bookId, PREPARATION_UNATTRIBUTED_RULE)
+        .map { chapters -> chapters.map { it.toDomain() } }
+        .distinctUntilChanged()
+
+    override fun observeChapter(bookId: String, chapterId: String): Flow<Chapter?> = database.chapterDao()
+        .observeById(bookId, chapterId)
+        .map { chapter -> chapter?.toDomain() }
+        .distinctUntilChanged()
 
     override fun observeCharacters(bookId: String): Flow<List<StoryCharacter>> =
         database.storyCharacterDao()
@@ -80,6 +91,8 @@ class RoomLibraryRepository(
                         narrationLanguageCode = initialLanguage,
                         narrationProfileRevision = 0L,
                         narrationProfileSeeded = true,
+                        preferredNarratorVoiceId = DEFAULT_NARRATOR_VOICE_ID,
+                        narrationSetupConfirmed = false,
                     ),
                 )
                 database.preparationJobDao().upsert(
@@ -102,6 +115,19 @@ class RoomLibraryRepository(
             throw cancellation
         } catch (error: Exception) {
             Result.failure(error)
+        }
+    }
+
+    override suspend fun confirmNarrationSetup(
+        bookId: String,
+        languageCode: String,
+        narratorVoiceId: String,
+    ) {
+        require(bookId.isNotBlank()) { "Book id must not be blank" }
+        require(languageCode in NarrationLanguage.supportedCodes) { "Unsupported narration language" }
+        require(narratorVoiceId.isNotBlank()) { "Narrator voice id must not be blank" }
+        check(database.bookDao().confirmNarrationSetup(bookId, languageCode, narratorVoiceId) == 1) {
+            "This book's narration setup is no longer awaiting confirmation"
         }
     }
 
@@ -131,3 +157,6 @@ private data class DeletedBookArtifacts(
     val privateSourcePath: String?,
     val audioPaths: List<String>,
 )
+
+private const val DEFAULT_NARRATOR_VOICE_ID = "bella"
+private const val PREPARATION_UNATTRIBUTED_RULE = "preparation-unattributed"

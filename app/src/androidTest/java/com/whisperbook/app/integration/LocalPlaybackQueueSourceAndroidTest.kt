@@ -15,19 +15,25 @@ import com.whisperbook.app.domain.LocalTtsEngine
 import com.whisperbook.app.domain.SynthesisRequest
 import com.whisperbook.app.domain.SynthesisResult
 import com.whisperbook.app.domain.model.AppSettings
+import com.whisperbook.app.domain.model.AudioSegmentState
 import com.whisperbook.app.domain.model.BookFormat
 import com.whisperbook.app.domain.model.CharacterColorRole
 import com.whisperbook.app.domain.model.CharacterGender
 import com.whisperbook.app.domain.model.VocalAge
 import com.whisperbook.app.domain.model.VoiceDescriptor
 import com.whisperbook.app.engine.audio.AppPrivateAudioSegmentStore
+import com.whisperbook.app.engine.audio.LocalAudioGenerationCoordinator
 import java.io.File
 import java.util.concurrent.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.async
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -170,6 +176,64 @@ class LocalPlaybackQueueSourceAndroidTest {
     }
 
     @Test
+    fun progressiveGenerationLetsBackgroundPreparationRunBetweenSegments() = runBlocking {
+        val database = Room.inMemoryDatabaseBuilder(context, WhisperBookDatabase::class.java).build()
+        val audioRoot = File(context.cacheDir, "progressive-fairness-audio-${System.nanoTime()}")
+        var backgroundRanBetweenSegments = false
+        var backgroundJob: Job? = null
+        val tts = RecordingTtsEngine { requestNumber ->
+            if (requestNumber == 1) {
+                // Register background preparation while the first playback segment still owns the
+                // model. The second segment is requested immediately after this synthesis returns.
+                backgroundJob = launch(start = CoroutineStart.UNDISPATCHED) {
+                    LocalAudioGenerationCoordinator.runBackground {
+                        backgroundRanBetweenSegments = true
+                    }
+                }
+            } else if (requestNumber == 2) {
+                assertTrue(backgroundRanBetweenSegments)
+            }
+        }
+        try {
+            database.bookDao().insert(bookEntity(BOOK_A, CHAPTER_A1, "en"))
+            database.chapterDao().insertAll(listOf(ChapterEntity(CHAPTER_A1, BOOK_A, 0, "Opening")))
+            database.storyCharacterDao().insertAll(listOf(narrator(BOOK_A, NARRATOR_A)))
+            database.voiceAssignmentDao().upsert(
+                VoiceAssignmentEntity(NARRATOR_A, "bella", TEST_MODEL_VERSION, 1f),
+            )
+            database.passageDao().insertAll(
+                listOf(
+                    passage(PASSAGE_A1, CHAPTER_A1, NARRATOR_A, "First paragraph"),
+                    passage("$CHAPTER_A1-passage-2", CHAPTER_A1, NARRATOR_A, "Second paragraph")
+                        .copy(ordinal = 1),
+                ),
+            )
+            database.chapterVoiceAssignmentDao().upsertAll(
+                listOf(chapterVoice(BOOK_A, CHAPTER_A1, NARRATOR_A, "jasper")),
+            )
+            val source = LocalPlaybackQueueSource(
+                database = database,
+                audioStore = AppPrivateAudioSegmentStore(audioRoot),
+                ttsEngineFactory = { tts },
+                voices = TEST_VOICES,
+                modelVersion = TEST_MODEL_VERSION,
+                expectedSampleRate = TEST_SAMPLE_RATE,
+            )
+            val queue = withTimeout(5_000L) {
+                source.loadProgressively(BOOK_A, CHAPTER_A1) { _, _, _ -> }.getOrThrow()
+            }
+            backgroundJob?.join()
+
+            assertTrue(backgroundRanBetweenSegments)
+            assertEquals(2, queue.segments.size)
+            assertEquals(2, tts.requests.size)
+        } finally {
+            database.close()
+            audioRoot.deleteRecursively()
+        }
+    }
+
+    @Test
     fun staleGenerationCannotPersistAfterNarrationProfileRevisionChanges() = runBlocking {
         val database = Room.inMemoryDatabaseBuilder(context, WhisperBookDatabase::class.java).build()
         val audioRoot = File(context.cacheDir, "stale-generation-audio-${System.nanoTime()}")
@@ -209,7 +273,7 @@ class LocalPlaybackQueueSourceAndroidTest {
             }
             assertTrue("A stale profile generation must be cancelled", cancelled)
             val staleRow = database.audioSegmentDao().findByCacheKey(staleRequest.cacheKey)
-            assertTrue(staleRow == null || staleRow.state != "READY")
+            assertEquals(AudioSegmentState.PENDING.name, staleRow?.state)
             assertTrue(audioRoot.listFiles().orEmpty().none { it.extension == "wav" })
         } finally {
             database.close()
@@ -263,7 +327,9 @@ class LocalPlaybackQueueSourceAndroidTest {
             speed = 1f,
         )
 
-    private class RecordingTtsEngine : LocalTtsEngine {
+    private class RecordingTtsEngine(
+        private val onSynthesize: suspend (requestNumber: Int) -> Unit = {},
+    ) : LocalTtsEngine {
         val requests = mutableListOf<SynthesisRequest>()
 
         override suspend fun warmUp(): Result<Unit> = Result.success(Unit)
@@ -272,6 +338,7 @@ class LocalPlaybackQueueSourceAndroidTest {
 
         override suspend fun synthesize(request: SynthesisRequest): Result<SynthesisResult> {
             requests += request
+            onSynthesize(requests.size)
             return Result.success(
                 SynthesisResult(
                     pcm16 = shortArrayOf(0, 100, 0, -100),

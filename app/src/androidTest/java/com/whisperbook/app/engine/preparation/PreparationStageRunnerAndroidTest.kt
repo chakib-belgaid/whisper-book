@@ -51,6 +51,38 @@ class PreparationStageRunnerAndroidTest {
     private val context: Context = ApplicationProvider.getApplicationContext()
 
     @Test
+    fun preparationCannotStartBeforeNarrationSetupIsConfirmed() = runBlocking {
+        val database = Room.inMemoryDatabaseBuilder(context, WhisperBookDatabase::class.java).build()
+        try {
+            database.bookDao().insert(
+                testBook().copy(
+                    preferredNarratorVoiceId = "bella",
+                    narrationSetupConfirmed = false,
+                ),
+            )
+            val runner = PreparationStageRunner(
+                dependencies = PreparationDependencies(
+                    database = database,
+                    publicationExtractor = NeverUsedPublicationExtractor,
+                    speakerAttributor = StreamingChapterAttributor(),
+                    ttsEngineFactory = LocalTtsEngineFactory { NeverUsedTtsEngine },
+                    audioSegmentStore = AppPrivateAudioSegmentStore(context),
+                ),
+            )
+
+            val failure = runCatching {
+                runner.run(BOOK_ID, PreparationStage.COPY_AND_VALIDATE, attemptCount = 0)
+            }.exceptionOrNull()
+
+            assertTrue(failure is PreparationPipelineException)
+            assertEquals("narration-setup-required", (failure as PreparationPipelineException).code)
+            assertNull(database.preparationJobDao().getForBook(BOOK_ID))
+        } finally {
+            database.close()
+        }
+    }
+
+    @Test
     fun findingCharactersAttributesOnlyOpeningChapterAndPreservesLaterState() = runBlocking {
         val database = Room.inMemoryDatabaseBuilder(context, WhisperBookDatabase::class.java).build()
         val metadataRoot = File(context.cacheDir, "preparation-metadata-${System.nanoTime()}")
@@ -225,6 +257,47 @@ class PreparationStageRunnerAndroidTest {
     }
 
     @Test
+    fun explicitlyChosenNarratorOverridesAutomaticCasting() = runBlocking {
+        val database = Room.inMemoryDatabaseBuilder(context, WhisperBookDatabase::class.java).build()
+
+        try {
+            database.bookDao().insert(testBook().copy(preferredNarratorVoiceId = "bella"))
+            database.chapterDao().insertAll(
+                listOf(ChapterEntity(CHAPTER_ONE_ID, BOOK_ID, 0, "Opening")),
+            )
+            database.passageDao().insertAll(
+                listOf(
+                    provisionalPassage(
+                        id = "$CHAPTER_ONE_ID-passage-1",
+                        chapterId = CHAPTER_ONE_ID,
+                        text = "Morning arrived.",
+                    ),
+                ),
+            )
+            val runner = PreparationStageRunner(
+                dependencies = PreparationDependencies(
+                    database = database,
+                    publicationExtractor = NeverUsedPublicationExtractor,
+                    speakerAttributor = StreamingChapterAttributor(),
+                    ttsEngineFactory = LocalTtsEngineFactory { PreferenceVoiceCatalogEngine },
+                    audioSegmentStore = AppPrivateAudioSegmentStore(context),
+                    modelVersion = TEST_MODEL_VERSION,
+                    narratorVoiceId = "jasper",
+                ),
+            )
+
+            runner.run(BOOK_ID, PreparationStage.FINDING_CHARACTERS, attemptCount = 0)
+            runner.run(BOOK_ID, PreparationStage.ASSIGNING_VOICES, attemptCount = 0)
+
+            val narrator = database.storyCharacterDao().getEntitiesForBook(BOOK_ID)
+                .single { it.colorRole == CharacterColorRole.NARRATOR.name }
+            assertEquals("bella", database.voiceAssignmentDao().getForCharacter(narrator.id)?.voiceId)
+        } finally {
+            database.close()
+        }
+    }
+
+    @Test
     fun changedProfileRevisionCannotMaterializeAStaleChapterVoiceSet() = runBlocking {
         val database = Room.inMemoryDatabaseBuilder(context, WhisperBookDatabase::class.java).build()
         val testRoot = File(context.cacheDir, "profile-revision-${System.nanoTime()}")
@@ -373,7 +446,7 @@ class PreparationStageRunnerAndroidTest {
             }
 
             val characters = database.storyCharacterDao().getEntitiesForBook(BOOK_ID)
-            val assignments = database.voiceAssignmentDao().getForCharacters(characters.map { it.id })
+            val assignments = database.voiceAssignmentDao().getForBook(BOOK_ID)
             assertEquals(characters.map { it.id }.toSet(), assignments.map { it.characterId }.toSet())
             assertTrue(assignments.all { it.modelVersion == TEST_MODEL_VERSION })
 
@@ -387,6 +460,23 @@ class PreparationStageRunnerAndroidTest {
             assertTrue(openingChunks.size >= 100)
             assertEquals(openingChunks.first().text, tts.synthesisRequests.single().text)
             assertEquals(PreparationStage.READY.name, database.preparationJobDao().getForBook(BOOK_ID)?.stage)
+
+            // A scoped regeneration retry has already checkpointed PREPARING_AUDIO. It must retain
+            // the WorkManager input boundary instead of restarting at chapter zero and consuming
+            // the one opening-audio slot with the previously cached first chapter.
+            database.preparationJobDao().getForBook(BOOK_ID)?.let { readyJob ->
+                database.preparationJobDao().upsert(
+                    readyJob.copy(stage = PreparationStage.PREPARING_AUDIO.name),
+                )
+            }
+            runner.run(
+                BOOK_ID,
+                PreparationStage.PREPARING_AUDIO,
+                attemptCount = 1,
+                fromChapterOrdinal = 1,
+            )
+            assertEquals(2, tts.synthesisRequests.size)
+            assertEquals("Bob said hello.", tts.synthesisRequests.last().text)
 
             // The JSON file is derived data. A later-ordinal regeneration must repair a missing
             // catalog from every attributed chapter without rescanning or resynthesizing them.
@@ -414,7 +504,7 @@ class PreparationStageRunnerAndroidTest {
             )
             assertTrue(repairedMetadata.complete)
             assertEquals(2, attributor.calls.size)
-            assertEquals(1, tts.synthesisRequests.size)
+            assertEquals(2, tts.synthesisRequests.size)
         } finally {
             database.close()
             testRoot.deleteRecursively()

@@ -7,9 +7,11 @@ import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequest
 import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
+import androidx.work.await
 import androidx.work.workDataOf
 import com.whisperbook.app.data.local.db.PreparationJobDao
 import com.whisperbook.app.data.local.db.toDomain
+import com.whisperbook.app.diagnostics.BetaDiagnostics
 import com.whisperbook.app.domain.PreparationCoordinator
 import com.whisperbook.app.domain.model.PreparationStage
 import com.whisperbook.app.domain.model.PreparationState
@@ -33,14 +35,31 @@ class ProductionPreparationCoordinator internal constructor(
         PreparationRuntime.install(dependencies)
     }
 
-    override fun enqueue(bookId: String) {
+    override suspend fun enqueue(bookId: String) {
         require(bookId.isNotBlank()) { "bookId must not be blank" }
+        BetaDiagnostics.info(
+            "preparation_enqueue_requested",
+            mapOf(
+                "book_key" to preparationCorrelationKey(bookId),
+                "mode" to "full_chain",
+                "policy" to PreparationWorkPlan.existingWorkPolicy.name,
+            ),
+        )
         scheduler.enqueueUniqueChain(PreparationWorkPlan.uniqueName(bookId), bookId)
     }
 
-    override fun regenerateAudio(bookId: String, fromChapterOrdinal: Int) {
+    override suspend fun regenerateAudio(bookId: String, fromChapterOrdinal: Int) {
         require(bookId.isNotBlank()) { "bookId must not be blank" }
         require(fromChapterOrdinal >= 0) { "fromChapterOrdinal must not be negative" }
+        BetaDiagnostics.info(
+            "preparation_enqueue_requested",
+            mapOf(
+                "book_key" to preparationCorrelationKey(bookId),
+                "mode" to "audio_regeneration",
+                "policy" to PreparationWorkPlan.regenerationWorkPolicy.name,
+                "from_chapter_ordinal" to fromChapterOrdinal,
+            ),
+        )
         scheduler.replaceWithAudioGeneration(
             uniqueName = PreparationWorkPlan.uniqueName(bookId),
             bookId = bookId,
@@ -48,8 +67,12 @@ class ProductionPreparationCoordinator internal constructor(
         )
     }
 
-    override fun cancel(bookId: String) {
+    override suspend fun cancel(bookId: String) {
         require(bookId.isNotBlank()) { "bookId must not be blank" }
+        BetaDiagnostics.info(
+            "preparation_cancel_requested",
+            mapOf("book_key" to preparationCorrelationKey(bookId)),
+        )
         scheduler.cancelUnique(PreparationWorkPlan.uniqueName(bookId))
     }
 
@@ -67,15 +90,15 @@ class ProductionPreparationCoordinator internal constructor(
 }
 
 internal interface PreparationWorkScheduler {
-    fun enqueueUniqueChain(uniqueName: String, bookId: String)
-    fun replaceWithAudioGeneration(uniqueName: String, bookId: String, fromChapterOrdinal: Int)
-    fun cancelUnique(uniqueName: String)
+    suspend fun enqueueUniqueChain(uniqueName: String, bookId: String)
+    suspend fun replaceWithAudioGeneration(uniqueName: String, bookId: String, fromChapterOrdinal: Int)
+    suspend fun cancelUnique(uniqueName: String)
 }
 
 internal class WorkManagerPreparationScheduler(
     private val workManager: WorkManager,
 ) : PreparationWorkScheduler {
-    override fun enqueueUniqueChain(uniqueName: String, bookId: String) {
+    override suspend fun enqueueUniqueChain(uniqueName: String, bookId: String) {
         val requests = PreparationWorkPlan.stages.map { stage -> request(bookId, stage) }
         var continuation = workManager.beginUniqueWork(
             uniqueName,
@@ -83,10 +106,13 @@ internal class WorkManagerPreparationScheduler(
             requests.first(),
         )
         requests.drop(1).forEach { next -> continuation = continuation.then(next) }
-        continuation.enqueue()
+        val operation = continuation.enqueue()
+        // WorkManager persists work asynchronously. Await that acknowledgement so the UI never
+        // marks a book as scheduled when its chain failed to reach WorkManager's database.
+        operation.await()
     }
 
-    override fun replaceWithAudioGeneration(
+    override suspend fun replaceWithAudioGeneration(
         uniqueName: String,
         bookId: String,
         fromChapterOrdinal: Int,
@@ -95,11 +121,11 @@ internal class WorkManagerPreparationScheduler(
             uniqueName,
             PreparationWorkPlan.regenerationWorkPolicy,
             request(bookId, PreparationStage.PREPARING_AUDIO, fromChapterOrdinal),
-        ).enqueue()
+        ).enqueue().await()
     }
 
-    override fun cancelUnique(uniqueName: String) {
-        workManager.cancelUniqueWork(uniqueName)
+    override suspend fun cancelUnique(uniqueName: String) {
+        workManager.cancelUniqueWork(uniqueName).await()
     }
 
     private fun request(

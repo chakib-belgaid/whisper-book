@@ -23,7 +23,6 @@ import com.whisperbook.app.engine.attribution.HeuristicSpeakerAttributor
 import com.whisperbook.app.engine.audio.AppPrivateAudioSegmentStore
 import com.whisperbook.app.engine.audio.AppPrivateVoicePreviewCache
 import com.whisperbook.app.engine.audio.LocalVoicePreviewPlayer
-import com.whisperbook.app.engine.audio.LocalAudioGenerationCoordinator
 import com.whisperbook.app.engine.audio.VoicePreviewBootstrap
 import com.whisperbook.app.engine.document.OfflinePublicationExtractor
 import com.whisperbook.app.engine.document.SafBookImporter
@@ -113,7 +112,7 @@ class WhisperbookAppContainer(context: Context) : WhisperbookServices, Closeable
 
     init {
         PreparationRuntime.install(preparationDependencies)
-        VoicePreviewBootstrap.enqueue(appContext)
+        VoicePreviewBootstrap.cancelLegacyWork(appContext)
         maintenanceScope.launch {
             try {
                 database.bookDao().seedLegacyNarrationProfiles(
@@ -122,17 +121,6 @@ class WhisperbookAppContainer(context: Context) : WhisperbookServices, Closeable
                 narrationProfilesReady.complete(Unit)
             } catch (failure: Throwable) {
                 narrationProfilesReady.completeExceptionally(failure)
-            }
-        }
-        maintenanceScope.launch {
-            // Returning listeners should not pay native model initialization after pressing Play.
-            // Fresh installs are warmed by the preview bootstrap while the first book is imported.
-            if (database.bookDao().count() > 0) {
-                runCatching {
-                    LocalAudioGenerationCoordinator.runBackground {
-                        sharedTtsEngine.warmUp().getOrThrow()
-                    }
-                }
             }
         }
         maintenanceScope.launch {

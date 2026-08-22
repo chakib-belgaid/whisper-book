@@ -12,6 +12,14 @@ import org.junit.Test
 
 class AndroidPdfOcrHookTest {
     @Test
+    fun pdfProgressSpansTextAndOcrPhases() {
+        assertEquals(18, pdfProgressTotal(9))
+        assertEquals(10, pdfOcrProgress(pageCount = 9, completedPages = 1, totalPages = 9))
+        assertEquals(13, pdfOcrProgress(pageCount = 9, completedPages = 4, totalPages = 9))
+        assertEquals(18, pdfOcrProgress(pageCount = 9, completedPages = 9, totalPages = 9))
+    }
+
+    @Test
     fun `recognizes sequentially preserves page order and normalizes text`() = runTest {
         val source = FakePageSource(2)
         val recognizer = FakeRecognizer(

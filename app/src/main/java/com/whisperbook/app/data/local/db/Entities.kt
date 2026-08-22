@@ -44,6 +44,10 @@ data class BookEntity(
     val narrationProfileRevision: Long = 0L,
     @ColumnInfo(name = "narration_profile_seeded", defaultValue = "0")
     val narrationProfileSeeded: Boolean = true,
+    @ColumnInfo(name = "preferred_narrator_voice_id", defaultValue = "NULL")
+    val preferredNarratorVoiceId: String? = null,
+    @ColumnInfo(name = "narration_setup_confirmed", defaultValue = "1")
+    val narrationSetupConfirmed: Boolean = true,
 )
 
 @Entity(

@@ -58,8 +58,7 @@ class OfflinePublicationExtractor(
             try {
                 Result.success(
                     when (book.format) {
-                        BookFormat.EPUB -> EpubPublicationParser(chapterDetector).extract(book)
-                            .also { onProgress(1, 1) }
+                        BookFormat.EPUB -> EpubPublicationParser(chapterDetector).extract(book, onProgress)
                         BookFormat.PDF -> extractPdf(book, onProgress)
                     },
                 )
@@ -79,6 +78,7 @@ class OfflinePublicationExtractor(
             PDDocument.load(book.privateFile).use { document ->
                 val pageCount = document.numberOfPages
                 if (pageCount <= 0) throw EmptyPdfException("The PDF contains no pages.")
+                val progressTotal = pdfProgressTotal(pageCount)
                 val text = StringBuilder()
                 for (firstPage in 1..pageCount step PDF_TEXT_BATCH_SIZE) {
                     coroutineContext.ensureActive()
@@ -90,12 +90,13 @@ class OfflinePublicationExtractor(
                     }.getText(document)
                     if (text.isNotEmpty() && batch.isNotBlank()) text.append('\n')
                     text.append(batch)
-                    onProgress(lastPage, pageCount)
+                    onProgress(lastPage, progressTotal)
                 }
-                Triple(
-                    text.toString(),
-                    document.documentInformation?.title?.trim()?.takeIf(String::isNotBlank),
-                    document.documentInformation?.author?.trim()?.takeIf(String::isNotBlank),
+                PdfTextPass(
+                    text = text.toString(),
+                    title = document.documentInformation?.title?.trim()?.takeIf(String::isNotBlank),
+                    author = document.documentInformation?.author?.trim()?.takeIf(String::isNotBlank),
+                    pageCount = pageCount,
                 )
             }
         } catch (encrypted: InvalidPasswordException) {
@@ -104,16 +105,26 @@ class OfflinePublicationExtractor(
             throw CorruptPdfException(io)
         }
 
-        val extractedText = if (pdfData.first.isBlank()) {
-            pdfOcrHook.extractText(book.privateFile, onProgress).orEmpty().takeIf(String::isNotBlank)
+        val pageCount = pdfData.pageCount
+        val progressTotal = pdfProgressTotal(pageCount)
+        val extractedText = if (pdfData.text.isBlank()) {
+            pdfOcrHook.extractText(book.privateFile) { completed, total ->
+                onProgress(
+                    pdfOcrProgress(pageCount, completed, total),
+                    progressTotal,
+                )
+            }.orEmpty().takeIf(String::isNotBlank)
                 ?: throw EmptyPdfException("No text was recognized on any PDF page.")
-        } else pdfData.first
+        } else {
+            onProgress(progressTotal, progressTotal)
+            pdfData.text
+        }
 
         val chapters = chapterDetector.detect(ParagraphNormalizer.normalize(extractedText))
         check(chapters.isNotEmpty()) { "No readable text was found in the PDF" }
         return ExtractedPublication(
-            title = pdfData.second ?: book.title,
-            author = pdfData.third ?: book.author,
+            title = pdfData.title ?: book.title,
+            author = pdfData.author ?: book.author,
             chapters = chapters.map { ExtractedChapter(it.title, it.paragraphs) },
         )
     }
@@ -123,16 +134,43 @@ class OfflinePublicationExtractor(
     }
 }
 
+private data class PdfTextPass(
+    val text: String,
+    val title: String?,
+    val author: String?,
+    val pageCount: Int,
+)
+
+internal fun pdfProgressTotal(pageCount: Int): Int =
+    (pageCount.toLong() * PDF_PROGRESS_PHASES).coerceAtMost(Int.MAX_VALUE.toLong()).toInt()
+
+internal fun pdfOcrProgress(pageCount: Int, completedPages: Int, totalPages: Int): Int {
+    val safePageCount = pageCount.coerceAtLeast(1)
+    val safeTotalPages = totalPages.coerceAtLeast(1)
+    val safeCompletedPages = completedPages.coerceIn(0, safeTotalPages)
+    val ocrUnits = safeCompletedPages.toLong() * safePageCount / safeTotalPages
+    return (safePageCount + ocrUnits)
+        .coerceAtMost(pdfProgressTotal(safePageCount).toLong())
+        .toInt()
+}
+
+private const val PDF_PROGRESS_PHASES = 2L
+
 internal class EpubPublicationParser(
     private val chapterDetector: ChapterDetector,
 ) {
-    fun extract(book: ImportedBook): ExtractedPublication = ZipFile(book.privateFile).use { zip ->
+    suspend fun extract(
+        book: ImportedBook,
+        onProgress: suspend (completedUnits: Int, totalUnits: Int) -> Unit = { _, _ -> },
+    ): ExtractedPublication = ZipFile(book.privateFile).use { zip ->
+        coroutineContext.ensureActive()
         val rootPath = readRootFilePath(zip)
         val packageDocument = parseXml(zip.readEntry(rootPath))
         val packageDirectory = rootPath.substringBeforeLast('/', "")
         val manifest = readManifest(packageDocument, packageDirectory)
         val spineIds = readSpine(packageDocument)
         check(spineIds.isNotEmpty()) { "The EPUB package has no reading-order spine" }
+        coroutineContext.ensureActive()
 
         val navItem = manifest.values.firstOrNull { item ->
             item.properties.split(Regex("\\s+")).any { it == "nav" }
@@ -144,29 +182,49 @@ internal class EpubPublicationParser(
             else -> emptyMap()
         }
 
-        val sections = spineIds.mapNotNull { id ->
-            val item = manifest[id] ?: return@mapNotNull null
-            if (!item.mediaType.contains("html", ignoreCase = true) &&
-                !item.path.endsWith(".xhtml", ignoreCase = true) &&
-                !item.path.endsWith(".html", ignoreCase = true)
-            ) return@mapNotNull null
-
-            val html = zip.readEntryOrNull(item.path) ?: return@mapNotNull null
-            val document = Jsoup.parse(html.inputStream(), null, "", Parser.xmlParser())
-            document.select("script,style,nav,noscript,svg").remove()
-            val content = extractReadableElements(document.body() ?: document)
-            if (content.isEmpty()) return@mapNotNull null
-            val heading = document.selectFirst("h1,h2,h3,title")?.text()?.trim()?.takeIf(String::isNotBlank)
-            DocumentSection(
-                title = heading,
-                paragraphs = content,
-                tocTitle = toc[item.path]?.firstOrNull(),
-                additionalTocTitles = toc[item.path]?.drop(1).orEmpty(),
-                sourceReference = item.path,
-            )
+        val sections = buildList {
+            spineIds.forEachIndexed { index, id ->
+                coroutineContext.ensureActive()
+                val item = manifest[id]
+                if (
+                    item != null &&
+                    (
+                        item.mediaType.contains("html", ignoreCase = true) ||
+                            item.path.endsWith(".xhtml", ignoreCase = true) ||
+                            item.path.endsWith(".html", ignoreCase = true)
+                        )
+                ) {
+                    val html = zip.readEntryOrNull(item.path)
+                    if (html != null) {
+                        coroutineContext.ensureActive()
+                        val document = Jsoup.parse(html.inputStream(), null, "", Parser.xmlParser())
+                        document.select("script,style,nav,noscript,svg").remove()
+                        val content = extractReadableElements(document.body() ?: document)
+                        if (content.isNotEmpty()) {
+                            val heading = document.selectFirst("h1,h2,h3,title")
+                                ?.text()
+                                ?.trim()
+                                ?.takeIf(String::isNotBlank)
+                            add(
+                                DocumentSection(
+                                    title = heading,
+                                    paragraphs = content,
+                                    tocTitle = toc[item.path]?.firstOrNull(),
+                                    additionalTocTitles = toc[item.path]?.drop(1).orEmpty(),
+                                    sourceReference = item.path,
+                                ),
+                            )
+                        }
+                    }
+                }
+                onProgress(index + 1, spineIds.size)
+                coroutineContext.ensureActive()
+            }
         }
 
+        coroutineContext.ensureActive()
         val chapters = chapterDetector.detectSections(sections)
+        coroutineContext.ensureActive()
         check(chapters.isNotEmpty()) { "No readable chapters were found in the EPUB" }
         ExtractedPublication(
             title = packageDocument.metadata("title") ?: book.title,
@@ -175,7 +233,7 @@ internal class EpubPublicationParser(
         )
     }
 
-    private fun readRootFilePath(zip: ZipFile): String {
+    private suspend fun readRootFilePath(zip: ZipFile): String {
         val container = parseXml(zip.readEntry("META-INF/container.xml"))
         val rootFiles = container.getElementsByTagNameNS("*", "rootfile")
         check(rootFiles.length > 0) { "EPUB container.xml has no rootfile" }
@@ -214,7 +272,7 @@ internal class EpubPublicationParser(
         }
     }
 
-    private fun readNavigation(zip: ZipFile, navPath: String): Map<String, List<String>> {
+    private suspend fun readNavigation(zip: ZipFile, navPath: String): Map<String, List<String>> {
         val navDocument = Jsoup.parse(zip.readEntry(navPath).inputStream(), null, "", Parser.xmlParser())
         val navDirectory = navPath.substringBeforeLast('/', "")
         val tocNav = navDocument.select("nav").firstOrNull { element ->
@@ -229,7 +287,7 @@ internal class EpubPublicationParser(
         }
     }
 
-    private fun readNcxNavigation(zip: ZipFile, ncxPath: String): Map<String, List<String>> {
+    private suspend fun readNcxNavigation(zip: ZipFile, ncxPath: String): Map<String, List<String>> {
         val document = parseXml(zip.readEntry(ncxPath))
         val directory = ncxPath.substringBeforeLast('/', "")
         val points = document.getElementsByTagNameNS("*", "navPoint")
@@ -264,10 +322,10 @@ internal class EpubPublicationParser(
     )
 }
 
-private fun ZipFile.readEntry(path: String): ByteArray =
+private suspend fun ZipFile.readEntry(path: String): ByteArray =
     readEntryOrNull(path) ?: error("EPUB entry is missing: $path")
 
-private fun ZipFile.readEntryOrNull(path: String): ByteArray? {
+private suspend fun ZipFile.readEntryOrNull(path: String): ByteArray? {
     val safePath = normalizeArchivePath(path)
     val entry = getEntry(safePath) ?: return null
     check(!entry.isDirectory) { "Expected EPUB file entry: $safePath" }
@@ -277,6 +335,7 @@ private fun ZipFile.readEntryOrNull(path: String): ByteArray? {
         val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
         var total = 0L
         while (true) {
+            coroutineContext.ensureActive()
             val read = input.read(buffer)
             if (read < 0) break
             if (read == 0) continue

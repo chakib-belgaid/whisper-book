@@ -1,6 +1,8 @@
 package com.whisperbook.app.data.local.db
 
 import androidx.room.Dao
+import androidx.room.ColumnInfo
+import androidx.room.Embedded
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
@@ -65,6 +67,22 @@ interface BookDao {
         """,
     )
     suspend fun updateNarrationLanguage(bookId: String, languageCode: String): Int
+
+    @Query(
+        """
+        UPDATE books
+        SET narration_language_code = :languageCode,
+            preferred_narrator_voice_id = :narratorVoiceId,
+            narration_setup_confirmed = 1,
+            narration_profile_seeded = 1
+        WHERE id = :bookId AND narration_setup_confirmed = 0
+        """,
+    )
+    suspend fun confirmNarrationSetup(
+        bookId: String,
+        languageCode: String,
+        narratorVoiceId: String,
+    ): Int
 
     @Query(
         """
@@ -141,11 +159,42 @@ interface BookDao {
     )
 }
 
+data class ChapterHeaderProjection(
+    @Embedded
+    val chapter: ChapterEntity,
+    @ColumnInfo(name = "passage_count")
+    val passageCount: Int,
+    @ColumnInfo(name = "unattributed_passage_count")
+    val unattributedPassageCount: Int,
+)
+
 @Dao
 interface ChapterDao {
+    @Query(
+        """
+        SELECT chapters.*,
+            (SELECT COUNT(*) FROM passages
+                WHERE passages.chapter_id = chapters.id) AS passage_count,
+            (SELECT COUNT(*) FROM passages
+                WHERE passages.chapter_id = chapters.id
+                  AND passages.attribution_rule = :unattributedRule) AS unattributed_passage_count
+        FROM chapters
+        WHERE chapters.book_id = :bookId
+        ORDER BY chapters.ordinal ASC
+        """,
+    )
+    fun observeHeadersForBook(
+        bookId: String,
+        unattributedRule: String,
+    ): Flow<List<ChapterHeaderProjection>>
+
     @Transaction
     @Query("SELECT * FROM chapters WHERE book_id = :bookId ORDER BY ordinal ASC")
     fun observeForBook(bookId: String): Flow<List<ChapterAggregate>>
+
+    @Transaction
+    @Query("SELECT * FROM chapters WHERE id = :chapterId AND book_id = :bookId LIMIT 1")
+    fun observeById(bookId: String, chapterId: String): Flow<ChapterAggregate?>
 
     @Transaction
     @Query("SELECT * FROM chapters WHERE id = :chapterId LIMIT 1")
@@ -237,6 +286,9 @@ interface VoiceAssignmentDao {
     @Upsert
     suspend fun upsert(assignment: VoiceAssignmentEntity)
 
+    @Upsert
+    suspend fun upsertAll(assignments: List<VoiceAssignmentEntity>)
+
     @Query("SELECT * FROM voice_assignments WHERE character_id = :characterId LIMIT 1")
     fun observeForCharacter(characterId: String): Flow<VoiceAssignmentEntity?>
 
@@ -248,6 +300,15 @@ interface VoiceAssignmentDao {
 
     @Query("SELECT * FROM voice_assignments WHERE character_id IN (:characterIds)")
     suspend fun getForCharacters(characterIds: List<String>): List<VoiceAssignmentEntity>
+
+    @Query(
+        """
+        SELECT voice_assignments.* FROM voice_assignments
+        INNER JOIN characters ON characters.id = voice_assignments.character_id
+        WHERE characters.book_id = :bookId
+        """,
+    )
+    suspend fun getForBook(bookId: String): List<VoiceAssignmentEntity>
 }
 
 @Dao

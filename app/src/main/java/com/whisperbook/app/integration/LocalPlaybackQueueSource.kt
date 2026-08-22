@@ -22,6 +22,7 @@ import com.whisperbook.app.playback.PlaybackQueueSource
 import java.io.File
 import java.util.concurrent.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
@@ -62,11 +63,7 @@ class LocalPlaybackQueueSource(
         ) -> Unit,
     ): Result<PlaybackChapterQueue> = withContext(Dispatchers.IO) {
         try {
-            Result.success(
-                LocalAudioGenerationCoordinator.withOnDemandPriority {
-                    buildQueue(bookId, chapterId, onProgress)
-                },
-            )
+            Result.success(buildQueue(bookId, chapterId, onProgress))
         } catch (cancellation: CancellationException) {
             throw cancellation
         } catch (failure: Throwable) {
@@ -290,19 +287,19 @@ class LocalPlaybackQueueSource(
                 database.audioSegmentDao().upsert(completed.toEntity())
                 return@run completed
             }
-            requireNarrationProfileRevision(bookId, expectedProfileRevision)
-            database.audioSegmentDao().upsert(
-                AudioSegmentEntity(
-                    id = cacheKey,
-                    passageId = passage.queued.sourcePassageId,
-                    cacheKey = cacheKey,
-                    state = AudioSegmentState.GENERATING.name,
-                    path = null,
-                    durationMs = 0L,
-                    sampleRate = expectedSampleRate,
-                ),
-            )
             try {
+                requireNarrationProfileRevision(bookId, expectedProfileRevision)
+                database.audioSegmentDao().upsert(
+                    AudioSegmentEntity(
+                        id = cacheKey,
+                        passageId = passage.queued.sourcePassageId,
+                        cacheKey = cacheKey,
+                        state = AudioSegmentState.GENERATING.name,
+                        path = null,
+                        durationMs = 0L,
+                        sampleRate = expectedSampleRate,
+                    ),
+                )
                 val engine = engineProvider()
                 val result = engine.synthesize(passage.request).getOrThrow()
                 check(result.sampleRate == expectedSampleRate) {
@@ -321,7 +318,19 @@ class LocalPlaybackQueueSource(
                     }
             } catch (cancellation: CancellationException) {
                 // A newer chapter selection canceled this request. Do not present that intentional
-                // interruption as a synthesis failure; a later request can resume the passage.
+                // interruption as a synthesis failure. Reset only our unfinished row so a later
+                // request can resume it without carrying a permanently GENERATING state.
+                withContext(NonCancellable) {
+                    database.audioSegmentDao().findByCacheKey(cacheKey)
+                        ?.takeIf { it.state == AudioSegmentState.GENERATING.name }
+                        ?.let {
+                            database.audioSegmentDao().updateState(
+                                cacheKey,
+                                AudioSegmentState.PENDING.name,
+                                null,
+                            )
+                        }
+                }
                 throw cancellation
             } catch (failure: Throwable) {
                 database.audioSegmentDao().updateState(cacheKey, AudioSegmentState.FAILED.name, null)

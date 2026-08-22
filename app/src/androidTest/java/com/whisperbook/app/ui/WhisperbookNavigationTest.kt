@@ -21,6 +21,7 @@ import com.whisperbook.app.domain.model.PreparationStage
 import com.whisperbook.app.domain.model.PreparationState
 import com.whisperbook.app.domain.model.SpeakerCorrectionScope
 import com.whisperbook.app.domain.model.VoiceRegenerationScope
+import com.whisperbook.app.domain.model.VoiceDescriptor
 import com.whisperbook.app.integration.WhisperbookUiSnapshot
 import com.whisperbook.app.ui.screens.WhisperbookAppState
 import com.whisperbook.app.ui.screens.WhisperbookUiActions
@@ -71,6 +72,217 @@ class WhisperbookNavigationTest {
     }
 
     @Test
+    fun narrationSetupShowsAndConfirmsLanguageAndNarratorBeforeGeneration() {
+        var confirmed: Pair<String, String>? = null
+        val book = navigationBook("new-book", "New Story", currentChapter = 1, chapterCount = 1).copy(
+            preparation = PreparationState(PreparationStage.COPY_AND_VALIDATE),
+            currentChapterId = null,
+            chapterCount = 0,
+            narrationSetupConfirmed = false,
+            preferredNarratorVoiceId = "bella",
+        )
+        val voices = listOf(
+            VoiceDescriptor("bella", "Bella", 0),
+            VoiceDescriptor("jasper", "Jasper", 1),
+        )
+        val actions = NavigationBookActions(
+            onSelectBook = {},
+            onConfirmNarrationSetup = { language, narrator -> confirmed = language to narrator },
+        )
+        val appState = WhisperbookAppState(actions).apply {
+            synchronize(
+                WhisperbookUiSnapshot(
+                    books = listOf(book),
+                    selectedBook = book,
+                    voices = voices,
+                    preparation = book.preparation,
+                ),
+            )
+        }
+        setApp(WhisperbookDestination.NarrationSetup.route, appState)
+
+        composeRule.onNodeWithText("Confirm before voices are generated").assertIsDisplayed()
+        composeRule.onNodeWithText("Nothing will be recorded until you confirm these choices.").assertExists()
+        composeRule.onNodeWithText("Bella is chosen for the narration outside character dialogue.").assertExists()
+
+        composeRule.onNodeWithTag("setup-language-fr").performClick()
+        composeRule.onNodeWithTag("setup-narrator-bella").performClick()
+        composeRule.onNodeWithTag("voice-option-jasper").performClick()
+        composeRule.onNodeWithText("Jasper is chosen for the narration outside character dialogue.").assertExists()
+        composeRule.onNodeWithTag("confirm-narration-setup").performClick()
+
+        composeRule.runOnIdle {
+            assertEquals("fr" to "jasper", confirmed)
+            assertEquals(WhisperbookDestination.NarrationSetup.route, navController.currentDestination?.route)
+        }
+        composeRule.onNodeWithText("Confirm before voices are generated").assertIsDisplayed()
+
+        val confirmedBook = book.copy(narrationSetupConfirmed = true)
+        composeRule.runOnIdle {
+            appState.synchronize(
+                WhisperbookUiSnapshot(
+                    books = listOf(confirmedBook),
+                    selectedBook = confirmedBook,
+                    voices = voices,
+                    preparation = confirmedBook.preparation,
+                ),
+            )
+        }
+        composeRule.onNodeWithText("Preparing your audiobook").assertIsDisplayed()
+    }
+
+    @Test
+    fun unconfirmedCurrentBookCanReopenSetupWithoutLookingLikePreparation() {
+        val book = navigationBook("new-book", "New Story", currentChapter = 1, chapterCount = 1).copy(
+            preparation = PreparationState(PreparationStage.COPY_AND_VALIDATE, message = "Waiting to prepare"),
+            currentChapterId = null,
+            chapterCount = 0,
+            narrationSetupConfirmed = false,
+        )
+        val appState = WhisperbookAppState(NavigationBookActions(onSelectBook = {})).apply {
+            synchronize(
+                WhisperbookUiSnapshot(
+                    books = listOf(book),
+                    selectedBook = book,
+                    preparation = book.preparation,
+                ),
+            )
+        }
+        setApp(WhisperbookDestination.Library.route, appState)
+
+        composeRule.onNodeWithText("Narration setup needed").assertIsDisplayed()
+        composeRule.onNodeWithTag("background-operation-status").assertDoesNotExist()
+        composeRule.onNodeWithContentDescription("Set up narration for New Story").performClick()
+
+        composeRule.onNodeWithText("Confirm before voices are generated").assertIsDisplayed()
+    }
+
+    @Test
+    fun listenTabRoutesUnconfirmedBookToSetupInsteadOfProcessing() {
+        val book = navigationBook("new-book", "New Story", currentChapter = 1, chapterCount = 1).copy(
+            preparation = PreparationState(PreparationStage.COPY_AND_VALIDATE, message = "Waiting to prepare"),
+            currentChapterId = null,
+            chapterCount = 0,
+            narrationSetupConfirmed = false,
+        )
+        val appState = WhisperbookAppState(NavigationBookActions(onSelectBook = {})).apply {
+            synchronize(
+                WhisperbookUiSnapshot(
+                    books = listOf(book),
+                    selectedBook = book,
+                    preparation = book.preparation,
+                ),
+            )
+        }
+        setApp(WhisperbookDestination.Library.route, appState)
+
+        composeRule.onNodeWithContentDescription("Listen").performClick()
+
+        composeRule.onNodeWithText("Confirm before voices are generated").assertIsDisplayed()
+        composeRule.onNodeWithText("Preparing your audiobook").assertDoesNotExist()
+    }
+
+    @Test
+    fun listenTabWithoutABookStaysOnLibraryInsteadOfOpeningProcessing() {
+        val appState = WhisperbookAppState(NavigationBookActions(onSelectBook = {}))
+        setApp(WhisperbookDestination.Library.route, appState)
+
+        composeRule.onNodeWithContentDescription("Listen").performClick()
+
+        composeRule.onNodeWithText("Your Library").assertIsDisplayed()
+        composeRule.onNodeWithText("Your shelf is waiting").assertIsDisplayed()
+        composeRule.onNodeWithText("Preparing your audiobook").assertDoesNotExist()
+    }
+
+    @Test
+    fun confirmedCurrentBookStillPreparingCanOpenItsDetails() {
+        val book = navigationBook("preparing", "Preparing Story", currentChapter = 1, chapterCount = 0)
+            .copy(
+                preparation = PreparationState(
+                    PreparationStage.READING_CHAPTERS,
+                    message = "Reading chapters on this device",
+                ),
+                currentChapterId = null,
+                narrationSetupConfirmed = true,
+            )
+        val appState = WhisperbookAppState(NavigationBookActions(onSelectBook = {})).apply {
+            synchronize(
+                WhisperbookUiSnapshot(
+                    books = listOf(book),
+                    selectedBook = book,
+                    preparation = book.preparation,
+                ),
+            )
+        }
+        setApp(WhisperbookDestination.Library.route, appState)
+
+        composeRule.onNodeWithContentDescription("Open Preparing Story").performClick()
+
+        composeRule.onNodeWithContentDescription("Papercraft cover illustration for Preparing Story")
+            .assertIsDisplayed()
+        composeRule.onNodeWithText("Preparing chapters…").assertIsDisplayed()
+    }
+
+    @Test
+    fun importCompletionCallbackWaitsForAStoredBookAndIgnoresFailure() {
+        var importedCount = 0
+        var completedCount = 0
+        val appState = WhisperbookAppState(
+            NavigationBookActions(
+                onImportBook = { importedCount += 1 },
+                onSelectBook = {},
+            ),
+        )
+        setApp(WhisperbookDestination.ImportBook.route, appState)
+
+        composeRule.runOnIdle {
+            appState.imported(Uri.parse("content://books/failed")) { completedCount += 1 }
+            assertEquals(1, importedCount)
+            assertEquals(0, completedCount)
+            appState.synchronize(WhisperbookUiSnapshot(errorMessage = "Could not import book"))
+            assertEquals(0, completedCount)
+        }
+
+        val importedBook = navigationBook("imported", "Imported Story", currentChapter = 1, chapterCount = 0)
+            .copy(
+                preparation = PreparationState(PreparationStage.COPY_AND_VALIDATE),
+                currentChapterId = null,
+                narrationSetupConfirmed = false,
+            )
+        composeRule.runOnIdle {
+            appState.imported(Uri.parse("content://books/success")) { completedCount += 1 }
+            assertEquals(2, importedCount)
+            appState.synchronize(WhisperbookUiSnapshot(isBusy = true))
+            assertEquals(0, completedCount)
+            appState.synchronize(
+                WhisperbookUiSnapshot(
+                    books = listOf(importedBook),
+                    selectedBook = importedBook,
+                ),
+            )
+            assertEquals(1, completedCount)
+
+            appState.imported(Uri.parse("content://books/same-file")) { completedCount += 1 }
+            assertEquals(3, importedCount)
+            appState.synchronize(
+                WhisperbookUiSnapshot(
+                    books = listOf(importedBook),
+                    selectedBook = importedBook,
+                    isBusy = true,
+                ),
+            )
+            assertEquals(1, completedCount)
+            appState.synchronize(
+                WhisperbookUiSnapshot(
+                    books = listOf(importedBook),
+                    selectedBook = importedBook,
+                ),
+            )
+            assertEquals(2, completedCount)
+        }
+    }
+
+    @Test
     fun readAlong_hasSpeakerLabelsActiveStateAndPlayback() {
         setApp()
         composeRule.runOnIdle { navController.navigate(WhisperbookDestination.CurrentChapter.route()) }
@@ -116,16 +328,29 @@ class WhisperbookNavigationTest {
 
     @Test
     fun backgroundPreparationShowsRecordedChaptersAndListenReturnsToProgressWhenEmpty() {
+        val preparation = PreparationState(
+            stage = PreparationStage.PREPARING_AUDIO,
+            completedUnits = 2,
+            totalUnits = 19,
+            progressFraction = 2f / 19f,
+            message = "Recording chapter 3",
+        )
+        val book = navigationBook(
+            id = "preparing-book",
+            title = "Preparing Story",
+            currentChapter = 1,
+            chapterCount = 19,
+        ).copy(
+            preparation = preparation,
+            currentChapterId = null,
+            chapterCount = 0,
+        )
         val appState = WhisperbookAppState().apply {
             synchronize(
                 WhisperbookUiSnapshot(
-                    preparation = PreparationState(
-                        stage = PreparationStage.PREPARING_AUDIO,
-                        completedUnits = 2,
-                        totalUnits = 19,
-                        progressFraction = 2f / 19f,
-                        message = "Recording chapter 3",
-                    ),
+                    books = listOf(book),
+                    selectedBook = book,
+                    preparation = preparation,
                 ),
             )
         }
@@ -278,9 +503,13 @@ class WhisperbookNavigationTest {
 }
 
 private class NavigationBookActions(
+    private val onImportBook: (Uri) -> Unit = {},
+    private val onConfirmNarrationSetup: (String, String) -> Unit = { _, _ -> },
     private val onSelectBook: (String) -> Unit,
 ) : WhisperbookUiActions {
-    override fun importBook(uri: Uri) = Unit
+    override fun importBook(uri: Uri) = onImportBook(uri)
+    override fun confirmNarrationSetup(languageCode: String, narratorVoiceId: String) =
+        onConfirmNarrationSetup(languageCode, narratorVoiceId)
     override fun retryPreparation() = Unit
     override fun deleteSelectedBook() = Unit
     override fun exportSelectedBook(destination: Uri) = Unit

@@ -12,6 +12,7 @@ import com.whisperbook.app.ui.screens.CurrentChapterScreen
 import com.whisperbook.app.ui.screens.ImportBookScreen
 import com.whisperbook.app.ui.screens.LibraryScreen
 import com.whisperbook.app.ui.screens.NowPlayingScreen
+import com.whisperbook.app.ui.screens.NarrationSetupScreen
 import com.whisperbook.app.ui.screens.ProcessingScreen
 import com.whisperbook.app.ui.screens.SettingsScreen
 import com.whisperbook.app.ui.screens.VoiceCastScreen
@@ -57,11 +58,23 @@ fun WhisperbookNavHost(
                     onImport = { navController.navigate(WhisperbookDestination.ImportBook.route) },
                     onBook = {
                         appState.selectBook(it)
-                        navController.navigate(WhisperbookDestination.BookDetails.route(it))
+                        navController.navigate(
+                            if (appState.requiresNarrationSetup(it)) {
+                                WhisperbookDestination.NarrationSetup.route
+                            } else {
+                                WhisperbookDestination.BookDetails.route(it)
+                            },
+                        )
                     },
                     onResume = { bookId ->
                         appState.selectBook(bookId)
-                        navController.navigate(WhisperbookDestination.NowPlaying.route)
+                        navController.navigate(
+                            if (appState.requiresNarrationSetup(bookId)) {
+                                WhisperbookDestination.NarrationSetup.route
+                            } else {
+                                WhisperbookDestination.NowPlaying.route
+                            },
+                        )
                     },
                     onRemoveBook = appState::deleteBook,
                 )
@@ -73,10 +86,52 @@ fun WhisperbookNavHost(
                     contentPadding = contentPadding,
                     appState = appState,
                     onBack = ::backOrLibrary,
-                    onChosen = { navController.navigate(WhisperbookDestination.Processing.route) },
+                    onChosen = {
+                        if (navController.currentDestination?.route == WhisperbookDestination.ImportBook.route) {
+                            navController.navigate(
+                                if (appState.narrationSetupRequired) {
+                                    WhisperbookDestination.NarrationSetup.route
+                                } else {
+                                    WhisperbookDestination.BookDetails.route(appState.currentBookId)
+                                },
+                            )
+                        }
+                    },
                     onRecentBook = { bookId ->
                         appState.selectBook(bookId)
-                        navController.navigate(WhisperbookDestination.BookDetails.route(bookId))
+                        navController.navigate(
+                            if (appState.requiresNarrationSetup(bookId)) {
+                                WhisperbookDestination.NarrationSetup.route
+                            } else {
+                                WhisperbookDestination.BookDetails.route(bookId)
+                            },
+                        )
+                    },
+                )
+            }
+        }
+        composable(WhisperbookDestination.NarrationSetup.route) {
+            OrigamiPage {
+                NarrationSetupScreen(
+                    contentPadding = contentPadding,
+                    appState = appState,
+                    onBack = ::backOrLibrary,
+                    onStartGeneration = {
+                        appState.confirmNarrationSetup {
+                            if (
+                                navController.currentDestination?.route ==
+                                WhisperbookDestination.NarrationSetup.route
+                            ) {
+                                navController.navigate(WhisperbookDestination.Processing.route) {
+                                    popUpTo(WhisperbookDestination.NarrationSetup.route) { inclusive = true }
+                                }
+                            }
+                        }
+                    },
+                    onOpenBook = {
+                        navController.navigate(WhisperbookDestination.BookDetails.route()) {
+                            popUpTo(WhisperbookDestination.NarrationSetup.route) { inclusive = true }
+                        }
                     },
                 )
             }
@@ -122,10 +177,10 @@ fun WhisperbookNavHost(
                     onBack = ::backOrLibrary,
                     onListen = {
                         navController.navigate(
-                            if (!appState.canListen) {
-                                WhisperbookDestination.Processing.route
-                            } else {
-                                WhisperbookDestination.NowPlaying.route
+                            when {
+                                appState.narrationSetupRequired -> WhisperbookDestination.NarrationSetup.route
+                                !appState.canListen -> WhisperbookDestination.Processing.route
+                                else -> WhisperbookDestination.NowPlaying.route
                             },
                         )
                     },

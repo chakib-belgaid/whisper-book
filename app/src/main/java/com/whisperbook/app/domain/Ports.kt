@@ -18,6 +18,7 @@ import com.whisperbook.app.domain.model.VoiceRegenerationScope
 import java.io.File
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 
 data class ImportedBook(
     val title: String,
@@ -189,9 +190,11 @@ interface AudioSegmentStore {
 }
 
 interface PreparationCoordinator {
-    fun enqueue(bookId: String)
-    fun regenerateAudio(bookId: String, fromChapterOrdinal: Int)
-    fun cancel(bookId: String)
+    /** Returns only after the durable work request has been accepted by the scheduler. */
+    suspend fun enqueue(bookId: String)
+    suspend fun regenerateAudio(bookId: String, fromChapterOrdinal: Int)
+    /** Returns only after WorkManager has acknowledged the cancellation. */
+    suspend fun cancel(bookId: String)
     fun observe(bookId: String): Flow<PreparationState>
 }
 
@@ -199,11 +202,18 @@ interface LibraryRepository {
     fun observeBooks(): Flow<List<Book>>
     fun observeBook(bookId: String): Flow<Book?>
     fun observeChapters(bookId: String): Flow<List<Chapter>>
+    fun observeChapterHeaders(bookId: String): Flow<List<Chapter>> = observeChapters(bookId).map { chapters ->
+        chapters.map { chapter -> chapter.copy(passages = emptyList()) }
+    }
+    fun observeChapter(bookId: String, chapterId: String): Flow<Chapter?> = observeChapters(bookId).map { chapters ->
+        chapters.firstOrNull { chapter -> chapter.id == chapterId && chapter.bookId == bookId }
+    }
     fun observeCharacters(bookId: String): Flow<List<StoryCharacter>>
     suspend fun importBook(
         uri: Uri,
         narrationLanguageCode: String = "en",
     ): Result<String>
+    suspend fun confirmNarrationSetup(bookId: String, languageCode: String, narratorVoiceId: String)
     suspend fun updateVoiceAssignment(assignment: CharacterVoiceAssignment)
     suspend fun deleteBook(bookId: String)
 }

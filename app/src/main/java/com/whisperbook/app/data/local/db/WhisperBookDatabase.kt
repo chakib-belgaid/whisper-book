@@ -20,7 +20,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PreparationJobEntity::class,
         PlaybackCheckpointEntity::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = true,
 )
 abstract class WhisperBookDatabase : RoomDatabase() {
@@ -43,7 +43,7 @@ abstract class WhisperBookDatabase : RoomDatabase() {
                 WhisperBookDatabase::class.java,
                 name,
             )
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                 .build()
 
         val MIGRATION_1_2: Migration = object : Migration(1, 2) {
@@ -176,6 +176,21 @@ abstract class WhisperBookDatabase : RoomDatabase() {
                 database.execSQL(
                     "CREATE INDEX IF NOT EXISTS `index_chapter_voice_assignments_character_id_book_id` " +
                         "ON `chapter_voice_assignments` (`character_id`, `book_id`)",
+                )
+            }
+        }
+
+        val MIGRATION_4_5: Migration = object : Migration(4, 5) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    "ALTER TABLE `books` ADD COLUMN `preferred_narrator_voice_id` TEXT DEFAULT NULL",
+                )
+                // Existing books have already crossed the old implicit setup boundary. Keeping
+                // them confirmed avoids interrupting playback after an app update, while every
+                // newly imported book is inserted as unconfirmed.
+                database.execSQL(
+                    "ALTER TABLE `books` ADD COLUMN `narration_setup_confirmed` " +
+                        "INTEGER NOT NULL DEFAULT 1",
                 )
             }
         }

@@ -58,8 +58,8 @@ class PdfAndroidParserTest {
             updates += completed to total
         }.getOrThrow()
 
-        assertEquals(8 to 9, updates.first())
-        assertEquals(9 to 9, updates.last())
+        assertEquals(8 to 18, updates.first())
+        assertEquals(18 to 18, updates.last())
     }
 
     private fun imported(file: File) = ImportedBook(

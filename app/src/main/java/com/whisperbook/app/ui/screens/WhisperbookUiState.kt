@@ -30,6 +30,7 @@ import kotlinx.coroutines.withContext
 
 interface WhisperbookUiActions {
     fun importBook(uri: Uri)
+    fun confirmNarrationSetup(languageCode: String, narratorVoiceId: String) = Unit
     fun retryPreparation()
     fun deleteSelectedBook()
     fun exportSelectedBook(destination: Uri)
@@ -53,6 +54,7 @@ interface WhisperbookUiActions {
     fun revertVoiceChange()
     fun previewCharacter(characterId: String)
     fun previewVoice(voiceId: String, characterName: String)
+    fun previewNarrationSetupVoice(voiceId: String, languageCode: String) = Unit
     fun setAutoScroll(enabled: Boolean)
     fun setKeepScreenAwake(enabled: Boolean)
     fun setLargerText(enabled: Boolean)
@@ -68,9 +70,15 @@ data class LibraryBookUi(
     val totalChapters: Int,
     val progress: Float,
     val preparation: PreparationState = PreparationState.Ready,
+    val narrationSetupConfirmed: Boolean = true,
 ) {
+    val needsNarrationSetup: Boolean
+        get() = !narrationSetupConfirmed
+
     val canListen: Boolean
-        get() = totalChapters > 0 && preparation.stage.isPlaybackSafeStage()
+        get() = narrationSetupConfirmed &&
+            totalChapters > 0 &&
+            preparation.stage.isPlaybackSafeStage()
 }
 
 @Immutable
@@ -119,6 +127,17 @@ private data class CharacterPassageUi(
     val role: SpeakerRole,
 )
 
+private data class PendingImportCompletion(
+    val existingBookIds: Set<String>,
+    val onSuccess: () -> Unit,
+    var observedBusy: Boolean = false,
+)
+
+private data class PendingNarrationSetupCompletion(
+    val bookId: String,
+    val onSuccess: () -> Unit,
+)
+
 /**
  * UI-facing integration seam. Production repositories and the Media3 gateway can drive this
  * holder without coupling screens to storage, parsing, synthesis, or playback implementations.
@@ -141,6 +160,9 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
     private var synchronizedPassageCharacters: List<StoryCharacter>? = null
     private var synchronizedPassageChunkChars: Int? = null
     private var passagesSynchronized = false
+    private var synchronizedNarrationSetupBookId: String? = null
+    private var pendingImportCompletion: PendingImportCompletion? = null
+    private var pendingNarrationSetupCompletion: PendingNarrationSetupCompletion? = null
 
     val books = mutableStateListOf<LibraryBookUi>().apply {
         if (demoMode) addAll(
@@ -246,6 +268,12 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
         private set
     var narrationLanguageCode by mutableStateOf(NarrationLanguage.ENGLISH.code)
         private set
+    var narrationSetupLanguageCode by mutableStateOf(NarrationLanguage.ENGLISH.code)
+        private set
+    var narrationSetupNarratorVoiceId by mutableStateOf("bella")
+        private set
+    var narrationSetupRequired by mutableStateOf(false)
+        private set
     var narrationChunkChars by mutableIntStateOf(NarrationTextChunker.MAX_CHARS)
         private set
     var installedLanguagePackCodes by mutableStateOf(setOf(NarrationLanguage.ENGLISH.code))
@@ -260,9 +288,11 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
     val currentPassage: PassageUi?
         get() = passages.firstOrNull { it.id == activePassageId } ?: passages.firstOrNull()
     val isBookPreparing: Boolean
-        get() = preparationStatus?.stage?.let { it != PreparationStage.READY && it != PreparationStage.FAILED } == true
+        get() = !narrationSetupRequired &&
+            preparationStatus?.stage?.let { it != PreparationStage.READY && it != PreparationStage.FAILED } == true
     val canListen: Boolean
-        get() = totalChapters > 0 &&
+        get() = !narrationSetupRequired &&
+            totalChapters > 0 &&
             (preparationStatus?.stage?.isPlaybackSafeStage() ?: demoMode)
     val hasPreviousChapter: Boolean
         get() = chapters.getOrNull(selectedChapterIndex() - 1)?.isAvailable == true
@@ -299,12 +329,23 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
             currentBookTitle = ""
             currentAuthor = ""
             narrationLanguageCode = NarrationLanguage.ENGLISH.code
+            narrationSetupRequired = false
+            synchronizedNarrationSetupBookId = null
         }
         snapshot.selectedBook?.let { selectedBook ->
             currentBookId = selectedBook.id
             currentBookTitle = selectedBook.title
             currentAuthor = selectedBook.author ?: "Unknown author"
             narrationLanguageCode = selectedBook.narrationLanguageCode
+            narrationSetupRequired = !selectedBook.narrationSetupConfirmed
+            if (synchronizedNarrationSetupBookId != selectedBook.id) {
+                narrationSetupLanguageCode = selectedBook.narrationLanguageCode
+                narrationSetupNarratorVoiceId = selectedBook.preferredNarratorVoiceId
+                    ?.takeIf { preferred -> voiceOptions.any { it.id == preferred } }
+                    ?: voiceOptions.firstOrNull()?.id
+                    ?: "bella"
+                synchronizedNarrationSetupBookId = selectedBook.id
+            }
         }
         if (snapshot.selectedChapter == null) {
             currentChapterTitle = ""
@@ -326,6 +367,7 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
                     totalChapters = book.chapterCount,
                     progress = book.progressFraction,
                     preparation = book.preparation,
+                    narrationSetupConfirmed = book.narrationSetupConfirmed,
                 )
             })
             synchronizedBooks = snapshot.books
@@ -347,12 +389,10 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
                     selected = chapter.id == selectedChapterId,
                     id = chapter.id,
                     isLoading = chapter.id == snapshot.loadingChapterId,
-                    isAvailable = chapter.passages.isNotEmpty() &&
-                        chapter.passages.all { it.attributionRule != UNATTRIBUTED_RULE } &&
-                        (
-                            chapter.id != selectedChapterId ||
-                                chapter.passages.all { it.speakerId in snapshot.voiceAssignments }
-                        ),
+                    isAvailable = chapter.isAttributed &&
+                        (chapter.id != selectedChapterId ||
+                            (chapter.passages.isNotEmpty() &&
+                                chapter.passages.all { it.speakerId in snapshot.voiceAssignments })),
                 )
             })
             synchronizedChapters = snapshot.chapters
@@ -391,6 +431,13 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
             synchronizedCharacters = snapshot.characters
             synchronizedAssignments = snapshot.voiceAssignments
             synchronizedCastVoices = snapshot.voices
+        }
+        if (
+            snapshot.selectedBook?.preferredNarratorVoiceId == null &&
+            snapshot.selectedBook?.narrationSetupConfirmed == true
+        ) {
+            cast.firstOrNull { it.role == SpeakerRole.Narrator && it.voiceId.isNotBlank() }
+                ?.let { narrator -> narrationSetupNarratorVoiceId = narrator.voiceId }
         }
         if (shouldSynchronizePassages(snapshot)) {
             passages.clear()
@@ -454,6 +501,34 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
         isExportingBook = snapshot.isExportingBook
         bookExportMessage = snapshot.bookExportMessage
         canRevertVoiceChange = snapshot.canRevertVoiceChange
+        resolvePendingCompletions(snapshot)
+    }
+
+    private fun resolvePendingCompletions(snapshot: WhisperbookUiSnapshot) {
+        pendingImportCompletion?.let { pending ->
+            when {
+                snapshot.errorMessage != null -> pendingImportCompletion = null
+                snapshot.isBusy -> pending.observedBusy = true
+                !snapshot.isBusy &&
+                    snapshot.selectedBook != null &&
+                    (pending.observedBusy || snapshot.selectedBook.id !in pending.existingBookIds) -> {
+                    pendingImportCompletion = null
+                    pending.onSuccess()
+                }
+            }
+        }
+        pendingNarrationSetupCompletion?.let { pending ->
+            when {
+                snapshot.errorMessage != null -> pendingNarrationSetupCompletion = null
+                !snapshot.isBusy &&
+                    snapshot.selectedBook?.id == pending.bookId &&
+                    snapshot.selectedBook?.narrationSetupConfirmed == true -> {
+                    pendingNarrationSetupCompletion = null
+                    pending.onSuccess()
+                }
+                snapshot.selectedBook?.id != pending.bookId -> pendingNarrationSetupCompletion = null
+            }
+        }
     }
 
     private fun shouldSynchronizePassages(snapshot: WhisperbookUiSnapshot): Boolean =
@@ -501,13 +576,60 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
         }.coerceIn(0f, 1f)
     }
 
-    fun imported(uri: Uri) {
+    fun imported(uri: Uri, onSuccess: () -> Unit = {}) {
         importedUri = uri
         importError = null
         preparationProgress = .12f
         preparationStage = 0
-        productionActions?.importBook(uri)
+        val actions = productionActions
+        if (actions == null) {
+            onSuccess()
+            return
+        }
+        pendingImportCompletion = PendingImportCompletion(
+            existingBookIds = books.mapTo(hashSetOf(), LibraryBookUi::id),
+            onSuccess = onSuccess,
+        )
+        actions.importBook(uri)
     }
+
+    fun chooseNarrationSetupLanguage(languageCode: String) {
+        if (NarrationLanguage.fromCode(languageCode) == null) return
+        narrationSetupLanguageCode = languageCode
+    }
+
+    fun chooseNarrationSetupNarrator(voiceId: String) {
+        if (voiceOptions.none { it.id == voiceId }) return
+        narrationSetupNarratorVoiceId = voiceId
+    }
+
+    fun confirmNarrationSetup(onSuccess: () -> Unit = {}) {
+        if (!narrationSetupRequired) return
+        val actions = productionActions
+        if (actions == null) {
+            narrationSetupRequired = false
+            onSuccess()
+            return
+        }
+        if (pendingNarrationSetupCompletion != null) return
+        pendingNarrationSetupCompletion = PendingNarrationSetupCompletion(
+            bookId = currentBookId,
+            onSuccess = onSuccess,
+        )
+        actions.confirmNarrationSetup(
+            narrationSetupLanguageCode,
+            narrationSetupNarratorVoiceId,
+        )
+    }
+
+    fun previewNarrationSetupVoice(voiceId: String = narrationSetupNarratorVoiceId) {
+        if (voiceOptions.none { it.id == voiceId }) return
+        productionActions?.previewNarrationSetupVoice(voiceId, narrationSetupLanguageCode)
+        if (productionActions == null) togglePlayback()
+    }
+
+    fun requiresNarrationSetup(bookId: String): Boolean =
+        books.firstOrNull { it.id == bookId }?.narrationSetupConfirmed == false
 
     fun importFailed(message: String) {
         importError = message
@@ -748,8 +870,6 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
 
 private fun PreparationStage.isPlaybackSafeStage(): Boolean =
     this == PreparationStage.PREPARING_AUDIO || this == PreparationStage.READY
-
-private const val UNATTRIBUTED_RULE = "preparation-unattributed"
 
 private val demoVoiceOptions = listOf(
     VoiceOptionUi("bella", "Bella", voiceAvatarRes("bella")),

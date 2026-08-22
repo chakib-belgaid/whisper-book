@@ -1,6 +1,7 @@
 package com.whisperbook.app.integration
 
 import android.net.Uri
+import android.net.TestUri
 import app.cash.turbine.test
 import com.whisperbook.app.domain.AudioSegmentStore
 import com.whisperbook.app.domain.BookMp3Exporter
@@ -39,6 +40,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -96,6 +98,286 @@ class WhisperbookViewModelTest {
             assertEquals("book-a", snapshot.selectedBook?.id)
             assertEquals("chapter-a", snapshot.selectedChapter?.id)
             assertEquals("Narrator", snapshot.characters.single().displayName)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun chapterListUsesHeadersAndObservesPassagesOnlyForTheSelectedChapter() = runTest(dispatcher) {
+        val firstPassage = Passage(
+            "passage-a",
+            "chapter-a",
+            0,
+            "Only the selected chapter text should be observed.",
+            "narrator",
+            1f,
+            "narration-outside-dialogue",
+        )
+        val secondPassage = firstPassage.copy(
+            id = "passage-b",
+            chapterId = "chapter-b",
+            text = "The other chapter stays a lightweight header.",
+        )
+        val services = FakeServices().apply {
+            chapters.value = mapOf(
+                "book-a" to listOf(
+                    Chapter("chapter-a", "book-a", 0, "The Beginning", listOf(firstPassage)),
+                    Chapter("chapter-b", "book-a", 1, "The Next Path", listOf(secondPassage)),
+                ),
+            )
+        }
+        val viewModel = WhisperbookViewModel(services)
+
+        viewModel.uiState.test {
+            awaitItem()
+            advanceUntilIdle()
+
+            val opening = expectMostRecentItem()
+            assertEquals(0, services.fullChapterObservationCount)
+            assertEquals(1, services.chapterHeaderObservationCount)
+            assertEquals(listOf("book-a:chapter-a"), services.selectedChapterObservationRequests)
+            assertEquals(listOf(firstPassage), opening.selectedChapter?.passages)
+            assertEquals(listOf(firstPassage), opening.chapters.first { it.id == "chapter-a" }.passages)
+            val nextHeader = opening.chapters.first { it.id == "chapter-b" }
+            assertTrue(nextHeader.passages.isEmpty())
+            assertEquals(1, nextHeader.passageCount)
+            assertTrue(nextHeader.isAttributed)
+
+            viewModel.selectChapter("chapter-b")
+            advanceUntilIdle()
+
+            val next = expectMostRecentItem()
+            assertEquals(listOf(secondPassage), next.selectedChapter?.passages)
+            assertTrue(next.chapters.first { it.id == "chapter-a" }.passages.isEmpty())
+            assertEquals(listOf(secondPassage), next.chapters.first { it.id == "chapter-b" }.passages)
+            assertEquals(0, services.fullChapterObservationCount)
+            assertEquals(
+                listOf("book-a:chapter-a", "book-a:chapter-b"),
+                services.selectedChapterObservationRequests,
+            )
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun openingANewBookWaitsForLanguageAndNarratorConfirmationBeforeEnqueueing() = runTest(dispatcher) {
+        val services = FakeServices().apply {
+            importedBook = book("new-book", currentChapterId = "").copy(
+                title = "New Story",
+                preparation = PreparationState(
+                    stage = PreparationStage.COPY_AND_VALIDATE,
+                    progressFraction = 1f,
+                    message = "Copied securely to this device",
+                ),
+                currentChapterId = null,
+                narrationSetupConfirmed = false,
+                preferredNarratorVoiceId = "bella",
+            )
+        }
+        val viewModel = WhisperbookViewModel(services)
+        viewModel.uiState.test {
+            awaitItem()
+            advanceUntilIdle()
+
+            viewModel.importBook(TestUri)
+            advanceUntilIdle()
+
+            val awaitingConfirmation = expectMostRecentItem()
+            assertEquals("new-book", awaitingConfirmation.selectedBook?.id)
+            assertFalse(awaitingConfirmation.selectedBook!!.narrationSetupConfirmed)
+            assertTrue(services.events.none { it.startsWith("enqueue:") })
+
+            viewModel.confirmNarrationSetup("fr", "jasper")
+            advanceUntilIdle()
+
+            val confirmed = services.books.value.first { it.id == "new-book" }
+            assertEquals("fr", confirmed.narrationLanguageCode)
+            assertEquals("jasper", confirmed.preferredNarratorVoiceId)
+            assertTrue(confirmed.narrationSetupConfirmed)
+            assertEquals(
+                listOf("confirm-setup:new-book:fr:jasper", "enqueue:new-book"),
+                services.events.takeLast(2),
+            )
+            assertTrue("fr" in services.settings.value.installedLanguagePackCodes)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun retryCannotBypassNarrationSetupConfirmation() = runTest(dispatcher) {
+        val services = FakeServices().apply {
+            books.value = listOf(
+                book("book-a").copy(
+                    narrationSetupConfirmed = false,
+                    preferredNarratorVoiceId = "bella",
+                    preparation = PreparationState(PreparationStage.COPY_AND_VALIDATE),
+                ),
+            )
+        }
+        val viewModel = WhisperbookViewModel(services)
+        viewModel.uiState.test {
+            awaitItem()
+            advanceUntilIdle()
+
+            viewModel.retryPreparation()
+            advanceUntilIdle()
+
+            assertTrue(services.events.none { it.startsWith("enqueue:") })
+            assertEquals(
+                "Choose a language and narrator before preparing voices",
+                expectMostRecentItem().errorMessage,
+            )
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun confirmedActiveBookIsReconciledWithPreparationExactlyOnce() = runTest(dispatcher) {
+        val active = book("book-a").copy(
+            narrationSetupConfirmed = true,
+            preparation = PreparationState(
+                stage = PreparationStage.COPY_AND_VALIDATE,
+                message = "Waiting to prepare",
+            ),
+        )
+        val services = FakeServices().apply { books.value = listOf(active) }
+
+        WhisperbookViewModel(services)
+        advanceUntilIdle()
+
+        assertEquals(listOf("enqueue:book-a"), services.events.filter { it.startsWith("enqueue:") })
+
+        services.books.value = listOf(
+            active.copy(
+                preparation = active.preparation.copy(
+                    stage = PreparationStage.READING_CHAPTERS,
+                    progressFraction = 0.5f,
+                ),
+            ),
+        )
+        advanceUntilIdle()
+
+        assertEquals(listOf("enqueue:book-a"), services.events.filter { it.startsWith("enqueue:") })
+    }
+
+    @Test
+    fun failedSchedulingAcknowledgementIsVisibleAndCanBeRetried() = runTest(dispatcher) {
+        val active = book("book-a").copy(
+            narrationSetupConfirmed = true,
+            preparation = PreparationState(
+                stage = PreparationStage.COPY_AND_VALIDATE,
+                message = "Waiting to prepare",
+            ),
+        )
+        var attempts = 0
+        val services = FakeServices().apply {
+            books.value = listOf(active)
+            enqueueHandler = {
+                attempts += 1
+                if (attempts == 1) error("Preparation could not start. Please try again.")
+            }
+        }
+        val viewModel = WhisperbookViewModel(services)
+
+        viewModel.uiState.test {
+            awaitItem()
+            advanceUntilIdle()
+
+            assertEquals(
+                "Preparation could not start. Please try again.",
+                expectMostRecentItem().errorMessage,
+            )
+
+            viewModel.retryPreparation()
+            advanceUntilIdle()
+
+            assertEquals(2, attempts)
+            assertEquals(
+                "Preparation restarted in the background.",
+                expectMostRecentItem().statusMessage,
+            )
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun deletingBookWhileAnotherScheduleIsPendingNeverEnqueuesDeletedBook() = runTest(dispatcher) {
+        val firstEnqueueStarted = CompletableDeferred<Unit>()
+        val releaseFirstEnqueue = CompletableDeferred<Unit>()
+        val activePreparation = PreparationState(
+            stage = PreparationStage.COPY_AND_VALIDATE,
+            message = "Waiting to prepare",
+        )
+        val services = FakeServices().apply {
+            books.value = listOf(
+                book("book-a").copy(
+                    narrationSetupConfirmed = true,
+                    preparation = activePreparation,
+                ),
+                book("book-b").copy(
+                    narrationSetupConfirmed = true,
+                    preparation = activePreparation,
+                ),
+            )
+            enqueueHandler = { bookId ->
+                if (bookId == "book-a") {
+                    firstEnqueueStarted.complete(Unit)
+                    releaseFirstEnqueue.await()
+                }
+            }
+        }
+        val viewModel = WhisperbookViewModel(services)
+
+        runCurrent()
+        assertTrue(firstEnqueueStarted.isCompleted)
+        viewModel.selectBook("book-b")
+        viewModel.deleteSelectedBook()
+        runCurrent()
+
+        releaseFirstEnqueue.complete(Unit)
+        advanceUntilIdle()
+
+        assertTrue("enqueue:book-b" !in services.events)
+        assertTrue("cancel:book-b" in services.events)
+        assertTrue("delete:book-b" in services.events)
+        assertTrue(services.books.value.none { it.id == "book-b" })
+    }
+
+    @Test
+    fun backgroundSchedulingFailureAppearsWhenThatBookIsSelected() = runTest(dispatcher) {
+        val activePreparation = PreparationState(
+            stage = PreparationStage.COPY_AND_VALIDATE,
+            message = "Waiting to prepare",
+        )
+        val services = FakeServices().apply {
+            books.value = listOf(
+                book("book-a").copy(
+                    narrationSetupConfirmed = true,
+                    preparation = activePreparation,
+                ),
+                book("book-b").copy(
+                    narrationSetupConfirmed = true,
+                    preparation = activePreparation,
+                ),
+            )
+            enqueueHandler = { bookId ->
+                if (bookId == "book-b") error("Preparation could not start. Please try again.")
+            }
+        }
+        val viewModel = WhisperbookViewModel(services)
+
+        viewModel.uiState.test {
+            awaitItem()
+            advanceUntilIdle()
+            assertEquals(null, expectMostRecentItem().errorMessage)
+
+            viewModel.selectBook("book-b")
+            advanceUntilIdle()
+
+            assertEquals(
+                "Preparation could not start. Please try again.",
+                expectMostRecentItem().errorMessage,
+            )
             cancelAndIgnoreRemainingEvents()
         }
     }
@@ -823,7 +1105,13 @@ private class FakeServices : WhisperbookServices {
     val playback = MutableStateFlow<PlaybackCursor?>(null)
     val audioProgress = MutableStateFlow<PlaybackPreparationProgress?>(null)
     var playBookHandler: suspend (bookId: String, chapterId: String?) -> Unit = { _, _ -> }
+    var enqueueHandler: suspend (bookId: String) -> Unit = { }
+    var cancelHandler: suspend (bookId: String) -> Unit = { }
     var storageScans = 0
+    var importedBook: Book? = null
+    var fullChapterObservationCount = 0
+    var chapterHeaderObservationCount = 0
+    val selectedChapterObservationRequests = mutableListOf<String>()
 
     override val availableVoices = listOf(
         VoiceDescriptor("bella", "Bella", 0),
@@ -875,12 +1163,52 @@ private class FakeServices : WhisperbookServices {
     override val libraryRepository = object : LibraryRepository {
         override fun observeBooks(): Flow<List<Book>> = books
         override fun observeBook(bookId: String): Flow<Book?> = books.map { all -> all.firstOrNull { it.id == bookId } }
-        override fun observeChapters(bookId: String): Flow<List<Chapter>> = chapters.map { it[bookId].orEmpty() }
+        override fun observeChapters(bookId: String): Flow<List<Chapter>> {
+            fullChapterObservationCount += 1
+            return chapters.map { it[bookId].orEmpty() }
+        }
+        override fun observeChapterHeaders(bookId: String): Flow<List<Chapter>> {
+            chapterHeaderObservationCount += 1
+            return chapters.map { allBooks ->
+                allBooks[bookId].orEmpty().map { chapter -> chapter.copy(passages = emptyList()) }
+            }.distinctUntilChanged()
+        }
+        override fun observeChapter(bookId: String, chapterId: String): Flow<Chapter?> {
+            selectedChapterObservationRequests += "$bookId:$chapterId"
+            return chapters.map { allBooks ->
+                allBooks[bookId].orEmpty().firstOrNull { chapter -> chapter.id == chapterId }
+            }.distinctUntilChanged()
+        }
         override fun observeCharacters(bookId: String): Flow<List<StoryCharacter>> = characters.map { it[bookId].orEmpty() }
         override suspend fun importBook(
             uri: Uri,
             narrationLanguageCode: String,
-        ): Result<String> = Result.failure(UnsupportedOperationException())
+        ): Result<String> {
+            val book = importedBook ?: return Result.failure(UnsupportedOperationException())
+            books.value = books.value.filterNot { it.id == book.id } + book
+            chapters.value = chapters.value + (book.id to emptyList())
+            characters.value = characters.value + (book.id to emptyList())
+            events += "import:${book.id}"
+            return Result.success(book.id)
+        }
+        override suspend fun confirmNarrationSetup(
+            bookId: String,
+            languageCode: String,
+            narratorVoiceId: String,
+        ) {
+            books.value = books.value.map { book ->
+                if (book.id == bookId) {
+                    book.copy(
+                        narrationLanguageCode = languageCode,
+                        preferredNarratorVoiceId = narratorVoiceId,
+                        narrationSetupConfirmed = true,
+                    )
+                } else {
+                    book
+                }
+            }
+            events += "confirm-setup:$bookId:$languageCode:$narratorVoiceId"
+        }
         override suspend fun updateVoiceAssignment(assignment: CharacterVoiceAssignment) {
             events += "assign:${assignment.characterId}:${assignment.voiceId}"
             assignments.value = assignments.value + (assignment.characterId to assignment)
@@ -899,9 +1227,15 @@ private class FakeServices : WhisperbookServices {
     }
 
     override val preparationCoordinator = object : PreparationCoordinator {
-        override fun enqueue(bookId: String) { events += "enqueue:$bookId" }
-        override fun cancel(bookId: String) { events += "cancel:$bookId" }
-        override fun regenerateAudio(bookId: String, fromChapterOrdinal: Int) {
+        override suspend fun enqueue(bookId: String) {
+            events += "enqueue:$bookId"
+            enqueueHandler(bookId)
+        }
+        override suspend fun cancel(bookId: String) {
+            events += "cancel:$bookId"
+            cancelHandler(bookId)
+        }
+        override suspend fun regenerateAudio(bookId: String, fromChapterOrdinal: Int) {
             events += "regenerate:$bookId:$fromChapterOrdinal"
         }
         override fun observe(bookId: String): Flow<PreparationState> = MutableStateFlow(PreparationState.Ready)

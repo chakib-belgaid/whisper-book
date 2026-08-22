@@ -41,6 +41,8 @@ fun BookAggregate.toDomain(): Book {
         narrationLanguageCode = book.narrationLanguageCode,
         narrationProfileRevision = book.narrationProfileRevision.coerceAtLeast(0L),
         narrationProfileSeeded = book.narrationProfileSeeded,
+        preferredNarratorVoiceId = book.preferredNarratorVoiceId,
+        narrationSetupConfirmed = book.narrationSetupConfirmed,
     )
 }
 
@@ -60,6 +62,8 @@ fun Book.toEntity(sourceSha256: String? = null): BookEntity = BookEntity(
     narrationLanguageCode = narrationLanguageCode,
     narrationProfileRevision = narrationProfileRevision,
     narrationProfileSeeded = narrationProfileSeeded,
+    preferredNarratorVoiceId = preferredNarratorVoiceId,
+    narrationSetupConfirmed = narrationSetupConfirmed,
 )
 
 fun PreparationJobEntity.toDomain(): PreparationState = PreparationState(
@@ -87,12 +91,29 @@ fun PreparationState.toEntity(
     updatedAtEpochMs = updatedAtEpochMs,
 )
 
-fun ChapterAggregate.toDomain(): Chapter = Chapter(
+fun ChapterAggregate.toDomain(): Chapter {
+    val mappedPassages = passages.sortedBy(PassageEntity::ordinal).map(PassageEntity::toDomain)
+    return Chapter(
+        id = chapter.id,
+        bookId = chapter.bookId,
+        ordinal = chapter.ordinal,
+        title = chapter.title,
+        passages = mappedPassages,
+        passageCount = mappedPassages.size,
+        unattributedPassageCount = mappedPassages.count { passage ->
+            passage.attributionRule == PREPARATION_UNATTRIBUTED_RULE
+        },
+    )
+}
+
+fun ChapterHeaderProjection.toDomain(): Chapter = Chapter(
     id = chapter.id,
     bookId = chapter.bookId,
     ordinal = chapter.ordinal,
     title = chapter.title,
-    passages = passages.sortedBy(PassageEntity::ordinal).map(PassageEntity::toDomain),
+    passages = emptyList(),
+    passageCount = passageCount.coerceAtLeast(0),
+    unattributedPassageCount = unattributedPassageCount.coerceAtLeast(0),
 )
 
 fun Chapter.toEntity(): ChapterEntity = ChapterEntity(
@@ -245,6 +266,8 @@ private inline fun <reified T : Enum<T>> enumValueOrDefault(value: String, defau
 
 private fun Float.normalized(default: Float, minimum: Float, maximum: Float): Float =
     if (isFinite()) coerceIn(minimum, maximum) else default
+
+private const val PREPARATION_UNATTRIBUTED_RULE = "preparation-unattributed"
 
 private const val MIN_SPEAKING_SPEED = 0.5f
 private const val MAX_SPEAKING_SPEED = 2f

@@ -100,7 +100,13 @@ fun LibraryScreen(
                     modifier = Modifier.fillMaxWidth(),
                     contentPadding = PaddingValues(12.dp),
                 ) {
-                    SectionHeading("Continue Listening")
+                    SectionHeading(
+                        when {
+                            current.needsNarrationSetup -> "Finish setup"
+                            current.canListen -> "Continue Listening"
+                            else -> "Preparing audiobook"
+                        },
+                    )
                     Spacer(Modifier.height(8.dp))
                     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                         TheatreScene(
@@ -128,18 +134,29 @@ fun LibraryScreen(
                             StorySlider(current.progress, {}, enabled = false, modifier = Modifier.fillMaxWidth())
                             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                                 EmbossedCircularButton(
-                                    onClick = { onResume(current.id) },
-                                    contentDescription = if (current.canListen) {
-                                        "Resume ${current.title}"
-                                    } else if (current.totalChapters > 0) {
-                                        "${current.title} is still preparing voices"
-                                    } else {
-                                        "${current.title} is still finding chapters"
+                                    onClick = {
+                                        if (current.canListen) {
+                                            onResume(current.id)
+                                        } else {
+                                            onBook(current.id)
+                                        }
                                     },
-                                    enabled = current.canListen,
+                                    contentDescription = when {
+                                        current.needsNarrationSetup -> "Set up narration for ${current.title}"
+                                        current.canListen -> "Resume ${current.title}"
+                                        else -> "Open ${current.title}"
+                                    },
                                     size = 52.dp,
                                 ) {
-                                    Icon(Icons.Filled.PlayArrow, contentDescription = null, modifier = Modifier.size(30.dp))
+                                    Icon(
+                                        imageVector = if (current.canListen) {
+                                            Icons.Filled.PlayArrow
+                                        } else {
+                                            Icons.Outlined.AutoStories
+                                        },
+                                        contentDescription = null,
+                                        modifier = Modifier.size(30.dp),
+                                    )
                                 }
                                 EmbossedCircularButton(
                                     onClick = { pendingRemoveBookId = current.id },
@@ -194,7 +211,11 @@ fun LibraryScreen(
                                 overflow = TextOverflow.Ellipsis,
                             )
                             Text(
-                                text = book.author,
+                                text = if (book.needsNarrationSetup) {
+                                    "Narration setup needed"
+                                } else {
+                                    book.author
+                                },
                                 color = WhisperbookTheme.colors.inkMuted,
                                 style = WhisperbookTheme.typography.label,
                                 maxLines = 1,
@@ -209,6 +230,7 @@ fun LibraryScreen(
 }
 
 internal fun LibraryBookUi.libraryProgressLabel(): String = when {
+    needsNarrationSetup -> "Narration setup needed"
     preparation.stage == com.whisperbook.app.domain.model.PreparationStage.FAILED ->
         "Preparation needs attention"
     preparation.stage == com.whisperbook.app.domain.model.PreparationStage.PREPARING_AUDIO &&

@@ -1,10 +1,7 @@
 package com.whisperbook.app.engine.audio
 
 import android.content.Context
-import androidx.work.BackoffPolicy
 import androidx.work.CoroutineWorker
-import androidx.work.ExistingWorkPolicy
-import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import androidx.work.workDataOf
@@ -13,24 +10,14 @@ import com.whisperbook.app.domain.SynthesisRequest
 import com.whisperbook.app.domain.model.VoiceDescriptor
 import com.whisperbook.app.engine.tts.SherpaKittenTtsEngine
 import com.whisperbook.app.engine.preparation.PreparationRuntime
-import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.CancellationException
 
 internal object VoicePreviewBootstrap {
-    fun enqueue(context: Context) {
-        val request = OneTimeWorkRequestBuilder<VoicePreviewBootstrapWorker>()
-            .setBackoffCriteria(BackoffPolicy.EXPONENTIAL, MINIMUM_BACKOFF_SECONDS, TimeUnit.SECONDS)
-            .addTag(WORK_TAG)
-            .build()
-        WorkManager.getInstance(context.applicationContext).enqueueUniqueWork(
-            UNIQUE_WORK_NAME,
-            ExistingWorkPolicy.REPLACE,
-            request,
-        )
+    /** Remove preview work persisted by older builds; previews are synthesized only when tapped. */
+    fun cancelLegacyWork(context: Context) {
+        WorkManager.getInstance(context.applicationContext).cancelUniqueWork(UNIQUE_WORK_NAME)
     }
 
-    private const val MINIMUM_BACKOFF_SECONDS = 10L
-    private const val WORK_TAG = "voice-preview-bootstrap"
     private const val UNIQUE_WORK_NAME = "voice-preview-bootstrap"
 }
 

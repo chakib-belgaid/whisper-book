@@ -14,6 +14,7 @@ import com.whisperbook.app.domain.model.Chapter
 import com.whisperbook.app.domain.model.CharacterVoiceAssignment
 import com.whisperbook.app.domain.model.PlaybackCursor
 import com.whisperbook.app.domain.model.PlaybackPreparationProgress
+import com.whisperbook.app.domain.model.PreparationStage
 import com.whisperbook.app.domain.model.PreparationState
 import com.whisperbook.app.domain.model.RevertibleVoiceChange
 import com.whisperbook.app.domain.model.StoryCharacter
@@ -27,14 +28,18 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.mapLatest
+import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 @OptIn(ExperimentalCoroutinesApi::class)
 class WhisperbookViewModel(
@@ -44,6 +49,7 @@ class WhisperbookViewModel(
     private val selectedChapterId = MutableStateFlow<String?>(null)
     private val loadingChapterId = MutableStateFlow<String?>(null)
     private val operation = MutableStateFlow(OperationState())
+    private val preparationSchedulingErrors = MutableStateFlow<Map<String, String>>(emptyMap())
     private val storageRefreshVersion = MutableStateFlow(0L)
     private val voiceRetentionRefreshVersion = MutableStateFlow(0L)
     private var voicePreviewJob: Job? = null
@@ -51,6 +57,9 @@ class WhisperbookViewModel(
     private var chapterSelectionJob: Job? = null
     private var chapterSelectionRequest = 0L
     private val selectedChapterIdsByBook = mutableMapOf<String, String>()
+    private val reconciledPreparationBookIds = mutableSetOf<String>()
+    private val booksPendingDeletion = mutableSetOf<String>()
+    private val preparationSchedulingMutex = Mutex()
 
     private val books = services.libraryRepository.observeBooks().stateIn(
         scope = viewModelScope,
@@ -60,11 +69,41 @@ class WhisperbookViewModel(
     private val selectedBook: Flow<Book?> = combine(books, selectedBookId) { allBooks, bookId ->
         bookId?.let { id -> allBooks.firstOrNull { it.id == id } }
     }.distinctUntilChanged()
-    private val chapters: Flow<List<Chapter>> = selectedBookId.flatMapLatest { bookId ->
-        if (bookId == null) flowOf(emptyList()) else services.libraryRepository.observeChapters(bookId)
+    private val chapterHeaders: SharedFlow<List<Chapter>> = selectedBookId.flatMapLatest { bookId ->
+        if (bookId == null) flowOf(emptyList()) else services.libraryRepository.observeChapterHeaders(bookId)
+    }.shareIn(
+        scope = viewModelScope,
+        started = SharingStarted.Eagerly,
+        replay = 1,
+    )
+    private val selectedChapter: StateFlow<Chapter?> = combine(
+        selectedBookId,
+        chapterHeaders,
+        selectedChapterId,
+    ) { bookId, headers, requestedChapterId ->
+        bookId to (requestedChapterId?.takeIf { requested -> headers.any { it.id == requested } }
+            ?: headers.firstOrNull()?.id)
     }
-    private val selectedChapter: Flow<Chapter?> = combine(chapters, selectedChapterId) { all, chapterId ->
-        chapterId?.let { id -> all.firstOrNull { it.id == id } } ?: all.firstOrNull()
+        .distinctUntilChanged()
+        .flatMapLatest { (bookId, chapterId) ->
+            if (bookId == null || chapterId == null) {
+                flowOf(null)
+            } else {
+                services.libraryRepository.observeChapter(bookId, chapterId)
+            }
+        }
+        .stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.Eagerly,
+            initialValue = null,
+        )
+    private val chapters: Flow<List<Chapter>> = combine(
+        chapterHeaders,
+        selectedChapter,
+    ) { headers, selected ->
+        headers.map { header ->
+            selected?.takeIf { chapter -> chapter.id == header.id } ?: header
+        }
     }
     private val characters: Flow<List<StoryCharacter>> = selectedBookId.flatMapLatest { bookId ->
         if (bookId == null) flowOf(emptyList()) else services.libraryRepository.observeCharacters(bookId)
@@ -137,7 +176,12 @@ class WhisperbookViewModel(
         SessionState(prep, settings, playback, voice.assignments, voice.revertibleChange, pendingOperation)
     }
 
-    val uiState: StateFlow<WhisperbookUiSnapshot> = combine(libraryState, sessionState, storageBytes) { library, session, bytes ->
+    val uiState: StateFlow<WhisperbookUiSnapshot> = combine(
+        libraryState,
+        sessionState,
+        storageBytes,
+        preparationSchedulingErrors,
+    ) { library, session, bytes, schedulingErrors ->
         val selectedBookId = library.selectedBook?.id
         val selectedPlayback = session.playback?.takeIf { it.bookId == selectedBookId }
         val selectedAudioProgress = session.pendingOperation.audioProgress
@@ -167,7 +211,10 @@ class WhisperbookViewModel(
             } ?: foregroundOperation.statusMessage,
             backgroundProgressFraction = selectedAudioProgress?.progressFraction
                 ?: foregroundOperation.progressFraction,
-            errorMessage = foregroundOperation.errorMessage,
+            errorMessage = foregroundOperation.errorMessage
+                ?: selectedBookId
+                    ?.let(schedulingErrors::get)
+                    .takeUnless { foregroundOperation.isBusy },
             isExportingBook = selectedBookExport?.isBusy == true,
             bookExportMessage = selectedBookExport?.let { it.errorMessage ?: it.statusMessage },
             localStorageBytes = bytes,
@@ -188,10 +235,32 @@ class WhisperbookViewModel(
                     selectedBookId.value = next?.id
                     selectedChapterId.value = next?.let(::rememberedChapterId)
                 }
+                preparationSchedulingMutex.withLock {
+                    val currentBookIds = currentBooks.mapTo(hashSetOf(), Book::id)
+                    reconciledPreparationBookIds.retainAll(currentBookIds)
+                    booksPendingDeletion.retainAll(currentBookIds)
+                    preparationSchedulingErrors.value = preparationSchedulingErrors.value
+                        .filterKeys(currentBookIds::contains)
+                }
+                currentBooks.asSequence()
+                    .filter { book ->
+                        book.narrationSetupConfirmed &&
+                            book.preparation.stage != PreparationStage.READY &&
+                            book.preparation.stage != PreparationStage.FAILED
+                    }
+                    .forEach { book ->
+                        try {
+                            ensurePreparationScheduled(book.id)
+                        } catch (cancellation: CancellationException) {
+                            throw cancellation
+                        } catch (failure: Throwable) {
+                            BetaDiagnostics.error("preparation_reconciliation_failed", failure)
+                        }
+                    }
             }
         }
         viewModelScope.launch {
-            chapters.collect { currentChapters ->
+            chapterHeaders.collect { currentChapters ->
                 val selected = selectedChapterId.value
                 if (selected == null || currentChapters.none { it.id == selected }) {
                     selectedChapterId.value = currentChapters.firstOrNull()?.id.also { chapterId ->
@@ -253,17 +322,93 @@ class WhisperbookViewModel(
             selectedBookId.value = bookId
             selectedChapterIdsByBook.remove(bookId)
             selectedChapterId.value = null
-            services.preparationCoordinator.enqueue(bookId)
         }
-        "Book imported. Its voices are being prepared on this device."
+        "Book opened. Confirm its language and narrator to begin voice generation."
+    }
+
+    fun confirmNarrationSetup(languageCode: String, narratorVoiceId: String) = launchOperation(
+        "Saving narration choices",
+        "narration_setup",
+    ) {
+        val bookId = selectedBookId.value ?: error("Open a book before choosing its narration")
+        val book = books.value.firstOrNull { it.id == bookId }
+            ?: error("Open a book before choosing its narration")
+        if (book.narrationSetupConfirmed) return@launchOperation null
+        val language = NarrationLanguage.fromCode(languageCode)
+            ?: error("Choose a supported narration language")
+        val voice = services.availableVoices.firstOrNull { it.id == narratorVoiceId }
+            ?: error("Choose an available narrator")
+        if (language.code !in uiState.value.settings.installedLanguagePackCodes) {
+            services.settingsRepository.update { current ->
+                current.copy(installedLanguagePackCodes = current.installedLanguagePackCodes + language.code)
+            }
+        }
+        services.libraryRepository.confirmNarrationSetup(book.id, language.code, voice.id)
+        ensurePreparationScheduled(book.id, knownConfirmed = true)
+        "Generating ${language.displayName} narration with ${voice.displayName} on this device."
     }
 
     fun retryPreparation() {
-        selectedBookId.value?.let(services.preparationCoordinator::enqueue)
+        val bookId = selectedBookId.value ?: return
+        val book = books.value.firstOrNull { it.id == bookId } ?: return
+        if (!book.narrationSetupConfirmed) {
+            launchOperation { error("Choose a language and narrator before preparing voices") }
+            return
+        }
+        launchOperation("Restarting preparation", "preparation_retry") {
+            ensurePreparationScheduled(book.id, force = true)
+            "Preparation restarted in the background."
+        }
     }
 
     fun cancelPreparation() {
-        selectedBookId.value?.let(services.preparationCoordinator::cancel)
+        val bookId = selectedBookId.value ?: return
+        launchOperation("Stopping preparation", "preparation_cancel") {
+            preparationSchedulingMutex.withLock {
+                services.preparationCoordinator.cancel(bookId)
+                reconciledPreparationBookIds.remove(bookId)
+                preparationSchedulingErrors.value = preparationSchedulingErrors.value - bookId
+            }
+            "Preparation stopped."
+        }
+    }
+
+    private suspend fun ensurePreparationScheduled(
+        bookId: String,
+        force: Boolean = false,
+        knownConfirmed: Boolean = false,
+    ) {
+        preparationSchedulingMutex.withLock {
+            val currentBook = books.value.firstOrNull { it.id == bookId }
+            if (currentBook == null || bookId in booksPendingDeletion) {
+                reconciledPreparationBookIds.remove(bookId)
+                preparationSchedulingErrors.value = preparationSchedulingErrors.value - bookId
+                return@withLock
+            }
+            if (!knownConfirmed && !currentBook.narrationSetupConfirmed) return@withLock
+            if (
+                !force &&
+                currentBook.preparation.stage in setOf(PreparationStage.READY, PreparationStage.FAILED)
+            ) {
+                preparationSchedulingErrors.value = preparationSchedulingErrors.value - bookId
+                return@withLock
+            }
+            if (force) reconciledPreparationBookIds.remove(bookId)
+            if (!reconciledPreparationBookIds.add(bookId)) return@withLock
+            try {
+                services.preparationCoordinator.enqueue(bookId)
+                preparationSchedulingErrors.value = preparationSchedulingErrors.value - bookId
+            } catch (failure: Throwable) {
+                reconciledPreparationBookIds.remove(bookId)
+                preparationSchedulingErrors.value = preparationSchedulingErrors.value + (
+                    bookId to userFacingOperationError(
+                        failure,
+                        fallback = "Preparation could not start. Please try again.",
+                    )
+                )
+                throw failure
+            }
+        }
     }
 
     fun deleteSelectedBook() = launchOperation("Removing book", "book_remove") {
@@ -271,8 +416,18 @@ class WhisperbookViewModel(
         if (uiState.value.playback?.bookId == bookId) {
             services.playbackGateway.pause()
         }
-        services.preparationCoordinator.cancel(bookId)
-        services.libraryRepository.deleteBook(bookId)
+        preparationSchedulingMutex.withLock {
+            booksPendingDeletion.add(bookId)
+            try {
+                services.preparationCoordinator.cancel(bookId)
+                services.libraryRepository.deleteBook(bookId)
+                reconciledPreparationBookIds.remove(bookId)
+                preparationSchedulingErrors.value = preparationSchedulingErrors.value - bookId
+            } catch (failure: Throwable) {
+                booksPendingDeletion.remove(bookId)
+                throw failure
+            }
+        }
         selectedChapterIdsByBook.remove(bookId)
         selectedBookId.value = null
         selectedChapterId.value = null
@@ -392,22 +547,27 @@ class WhisperbookViewModel(
     }
 
     fun previewVoice(voiceId: String, characterName: String): Job {
+        val languageCode = uiState.value.selectedBook?.narrationLanguageCode
+            ?: NarrationLanguage.ENGLISH.code
+        return previewVoice(voiceId, characterName, languageCode)
+    }
+
+    fun previewNarrationSetupVoice(voiceId: String, languageCode: String): Job =
+        previewVoice(voiceId, "Narrator", languageCode)
+
+    private fun previewVoice(voiceId: String, characterName: String, languageCode: String): Job {
         stopVoicePreview()
         return launchOperation("Preparing voice preview", "voice_preview") {
             val snapshot = uiState.value
             val voice = services.availableVoices.firstOrNull { it.id == voiceId }
                 ?: error("That embedded voice is no longer available")
+            val language = NarrationLanguage.fromCode(languageCode) ?: NarrationLanguage.ENGLISH
             if (snapshot.playback?.isPlaying == true) services.playbackGateway.pause()
             services.voicePreviewPlayer.play(
-                text = voicePreviewText(
-                    characterName,
-                    snapshot.selectedBook?.narrationLanguageCode
-                        ?: NarrationLanguage.ENGLISH.code,
-                ),
+                text = voicePreviewText(characterName, language.code),
                 voice = voice,
                 speed = snapshot.settings.speakingSpeed,
-                languageCode = snapshot.selectedBook?.narrationLanguageCode
-                    ?: NarrationLanguage.ENGLISH.code,
+                languageCode = language.code,
             ).getOrThrow()
             "Played ${voice.displayName} preview."
         }.also { voicePreviewJob = it }
@@ -439,9 +599,8 @@ class WhisperbookViewModel(
     ): Job = launchOperation("Correcting the attributed voice", "speaker_correction") {
         val snapshot = uiState.value
         val book = snapshot.selectedBook ?: error("Choose a book before correcting a voice")
-        val passage = snapshot.chapters.asSequence()
-            .flatMap { it.passages.asSequence() }
-            .firstOrNull { it.id == passageId }
+        val passage = snapshot.selectedChapter?.passages
+            ?.firstOrNull { it.id == passageId }
             ?: error("That phrase is no longer available")
         val speaker = snapshot.characters.firstOrNull { it.id == speakerId }
             ?: error("That voice is no longer available in this book")

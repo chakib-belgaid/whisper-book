@@ -82,8 +82,7 @@ fun ImportBookScreen(
                 Intent.FLAG_GRANT_READ_URI_PERMISSION,
             )
         }
-        appState.imported(uri)
-        onChosen()
+        appState.imported(uri, onSuccess = onChosen)
     }
     val chooseFile = { picker.launch(AcceptedBookTypes) }
 

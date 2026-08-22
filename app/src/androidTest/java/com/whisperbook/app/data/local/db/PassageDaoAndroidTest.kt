@@ -17,6 +17,51 @@ class PassageDaoAndroidTest {
     private val context: Context = ApplicationProvider.getApplicationContext()
 
     @Test
+    fun voiceAssignmentsForLargeCastUseABookScopedQuery() = runBlocking {
+        val database = Room.inMemoryDatabaseBuilder(context, WhisperBookDatabase::class.java).build()
+        val characterCount = 1_005
+
+        try {
+            database.bookDao().insert(testBook())
+            database.bookDao().insert(testBook("other-book"))
+            val characters = (0 until characterCount).map { ordinal ->
+                StoryCharacterEntity(
+                    id = "book-character-$ordinal",
+                    bookId = "book",
+                    displayName = "Character $ordinal",
+                    colorRole = "ACCENT_${ordinal % 6}",
+                    dialogueLineCount = 1,
+                )
+            }
+            val otherCharacter = StoryCharacterEntity(
+                id = "other-book-character",
+                bookId = "other-book",
+                displayName = "Other Character",
+                colorRole = "NARRATOR",
+                dialogueLineCount = 1,
+            )
+            database.storyCharacterDao().insertAll(characters + otherCharacter)
+            database.voiceAssignmentDao().upsertAll(
+                (characters + otherCharacter).map { character ->
+                    VoiceAssignmentEntity(
+                        characterId = character.id,
+                        voiceId = "voice-${character.id}",
+                        modelVersion = "test-model",
+                        speed = 1f,
+                    )
+                },
+            )
+
+            val assignments = database.voiceAssignmentDao().getForBook("book")
+
+            assertEquals(characterCount, assignments.size)
+            assertTrue(assignments.all { it.characterId.startsWith("book-character-") })
+        } finally {
+            database.close()
+        }
+    }
+
+    @Test
     fun manualSpeakerCorrectionBatchesLargeBooksAndStaysBookScoped() = runBlocking {
         val database = Room.inMemoryDatabaseBuilder(context, WhisperBookDatabase::class.java).build()
         val passageCount = 1_005

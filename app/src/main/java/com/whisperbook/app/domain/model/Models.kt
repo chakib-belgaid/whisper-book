@@ -23,6 +23,8 @@ data class Book(
     val narrationLanguageCode: String = NarrationLanguage.ENGLISH.code,
     val narrationProfileRevision: Long = 0L,
     val narrationProfileSeeded: Boolean = true,
+    val preferredNarratorVoiceId: String? = null,
+    val narrationSetupConfirmed: Boolean = true,
 )
 
 enum class BookFormat { PDF, EPUB }
@@ -34,7 +36,14 @@ data class Chapter(
     val ordinal: Int,
     val title: String,
     val passages: List<Passage> = emptyList(),
-)
+    val passageCount: Int = passages.size,
+    val unattributedPassageCount: Int = passages.count { passage ->
+        passage.attributionRule == PREPARATION_UNATTRIBUTED_RULE
+    },
+) {
+    val isAttributed: Boolean
+        get() = passageCount > 0 && unattributedPassageCount == 0
+}
 
 @Immutable
 data class Passage(
@@ -46,6 +55,8 @@ data class Passage(
     val confidence: Float,
     val attributionRule: String,
 )
+
+private const val PREPARATION_UNATTRIBUTED_RULE = "preparation-unattributed"
 
 @Immutable
 data class StoryCharacter(

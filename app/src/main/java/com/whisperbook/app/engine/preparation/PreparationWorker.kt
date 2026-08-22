@@ -80,19 +80,27 @@ class PreparationWorker @JvmOverloads constructor(
             setForeground(createForegroundInfo(bookId, state))
         }
         val startedAtMs = SystemClock.elapsedRealtime()
+        val bookKey = preparationCorrelationKey(bookId)
         BetaDiagnostics.info(
             "preparation_stage_started",
-            mapOf("stage" to stage.name, "attempt" to runAttemptCount),
+            mapOf(
+                "stage" to stage.name,
+                "attempt" to runAttemptCount,
+                "book_key" to bookKey,
+                "work_id" to id.toString(),
+            ),
         )
 
         return try {
-            dependencies.awaitNarrationProfiles()
+            // Promote the worker before profile migration/model initialization can delay startup.
+            // This also makes a cold WorkManager process restart visible immediately.
             setForeground(
                 createForegroundInfo(
                     bookId,
                     PreparationState(stage, message = stage.notificationMessage()),
                 ),
             )
+            dependencies.awaitNarrationProfiles()
             runner.run(bookId, stage, runAttemptCount, fromChapterOrdinal)
             BetaDiagnostics.performance(
                 "preparation_stage_completed",
@@ -100,6 +108,8 @@ class PreparationWorker @JvmOverloads constructor(
                     "stage" to stage.name,
                     "attempt" to runAttemptCount,
                     "elapsed_ms" to (SystemClock.elapsedRealtime() - startedAtMs),
+                    "book_key" to bookKey,
+                    "work_id" to id.toString(),
                 ),
             )
             Result.success()
@@ -107,6 +117,8 @@ class PreparationWorker @JvmOverloads constructor(
             throw cancellation
         } catch (failure: Throwable) {
             val mapped = PreparationErrorMapper.map(failure)
+            val nextAttemptCount = runAttemptCount + 1
+            val willRetry = shouldRetryAutomatically(mapped, runAttemptCount)
             BetaDiagnostics.error(
                 "preparation_stage_failed",
                 failure,
@@ -116,16 +128,33 @@ class PreparationWorker @JvmOverloads constructor(
                     "elapsed_ms" to (SystemClock.elapsedRealtime() - startedAtMs),
                     "error_code" to mapped.code,
                     "retryable" to mapped.retryable,
+                    "will_retry" to willRetry,
+                    "book_key" to bookKey,
+                    "work_id" to id.toString(),
                 ),
             )
             try {
-                runner.markFailed(bookId, mapped, runAttemptCount + 1)
+                if (willRetry) {
+                    runner.markRetrying(bookId, stage, mapped, nextAttemptCount)
+                } else {
+                    runner.markFailed(bookId, mapped, nextAttemptCount)
+                }
             } catch (cancellation: CancellationException) {
                 throw cancellation
             } catch (_: Throwable) {
                 // The book may have been deleted while this worker was running.
             }
-            if (mapped.retryable && runAttemptCount + 1 < MAX_AUTOMATIC_ATTEMPTS) {
+            if (willRetry) {
+                BetaDiagnostics.info(
+                    "preparation_stage_retry_scheduled",
+                    mapOf(
+                        "stage" to stage.name,
+                        "attempt" to nextAttemptCount,
+                        "error_code" to mapped.code,
+                        "book_key" to bookKey,
+                        "work_id" to id.toString(),
+                    ),
+                )
                 Result.retry()
             } else {
                 Result.failure(
@@ -193,12 +222,67 @@ class PreparationWorker @JvmOverloads constructor(
     }
 
     private companion object {
-        const val MAX_AUTOMATIC_ATTEMPTS = 3
         const val NOTIFICATION_PROGRESS_MAX = 1_000
         const val PREPARATION_CHANNEL_ID = "audiobook-preparation"
         const val PREPARATION_NOTIFICATION_ID_BASE = 22_000
     }
 }
+
+private const val MAX_AUTOMATIC_ATTEMPTS = 3
+
+internal fun shouldRetryAutomatically(
+    failure: MappedPreparationError,
+    runAttemptCount: Int,
+): Boolean = failure.retryable && runAttemptCount + 1 < MAX_AUTOMATIC_ATTEMPTS
+
+internal fun automaticRetryState(
+    workerStage: PreparationStage,
+    previous: PreparationState?,
+    failure: MappedPreparationError,
+): PreparationState {
+    val activeStage = previous?.stage
+        ?.takeUnless { it == PreparationStage.READY || it == PreparationStage.FAILED }
+        ?: workerStage
+    return PreparationState(
+        stage = activeStage,
+        completedUnits = previous?.completedUnits ?: 0,
+        totalUnits = previous?.totalUnits ?: 0,
+        progressFraction = previous?.progressFraction ?: 0f,
+        message = "${failure.message.trim().trimEnd('.')} — retrying automatically",
+        retryable = true,
+    )
+}
+
+/** Emits at most one extraction checkpoint per integer percent, plus one terminal checkpoint. */
+internal class PreparationProgressThrottle {
+    private var lastPercent = 0
+    private var terminalCheckpointed = false
+
+    fun shouldCheckpoint(completedUnits: Int, totalUnits: Int): Boolean {
+        val safeTotal = totalUnits.coerceAtLeast(1)
+        val safeCompleted = completedUnits.coerceIn(0, safeTotal)
+        val terminal = safeCompleted == safeTotal
+        val percent = ((safeCompleted.toLong() * 100L) / safeTotal).toInt()
+        val shouldCheckpoint = when {
+            terminal -> !terminalCheckpointed
+            percent > lastPercent -> true
+            else -> false
+        }
+        if (shouldCheckpoint) {
+            lastPercent = maxOf(lastPercent, percent)
+            if (terminal) terminalCheckpointed = true
+        }
+        return shouldCheckpoint
+    }
+}
+
+internal fun preparationCorrelationKey(bookId: String): String =
+    MessageDigest.getInstance("SHA-256")
+        .digest(bookId.toByteArray(Charsets.UTF_8))
+        .take(PREPARATION_CORRELATION_KEY_BYTES)
+        .joinToString("") { byte -> "%02x".format(byte.toInt() and 0xff) }
+
+private const val PREPARATION_CORRELATION_KEY_BYTES = 6
 
 internal class PreparationStageRunner(
     private val dependencies: PreparationDependencies,
@@ -213,6 +297,13 @@ internal class PreparationStageRunner(
         attemptCount: Int,
         fromChapterOrdinal: Int = 0,
     ) {
+        if (!requireBook(bookId).narrationSetupConfirmed) {
+            throw PreparationPipelineException(
+                code = "narration-setup-required",
+                message = "Choose a language and narrator before preparing voices",
+                retryable = false,
+            )
+        }
         when (stage) {
             PreparationStage.COPY_AND_VALIDATE -> validatePrivateCopy(bookId, attemptCount)
             PreparationStage.READING_CHAPTERS -> extractChapters(bookId, attemptCount)
@@ -237,6 +328,20 @@ internal class PreparationStageRunner(
                 message = failure.message,
                 retryable = failure.retryable,
             ),
+            attemptCount = attemptCount,
+        )
+    }
+
+    suspend fun markRetrying(
+        bookId: String,
+        workerStage: PreparationStage,
+        failure: MappedPreparationError,
+        attemptCount: Int,
+    ) {
+        val previous = database.preparationJobDao().getForBook(bookId)?.toDomain()
+        checkpoint(
+            bookId = bookId,
+            state = automaticRetryState(workerStage, previous, failure),
             attemptCount = attemptCount,
         )
     }
@@ -312,20 +417,27 @@ internal class PreparationStageRunner(
             privateFile = file,
             sha256 = book.sourceSha256.orEmpty().ifBlank { file.sha256() },
         )
+        val progressThrottle = PreparationProgressThrottle()
         val publication = dependencies.publicationExtractor.extract(imported) { completed, total ->
             val safeTotal = total.coerceAtLeast(1)
             val safeCompleted = completed.coerceIn(0, safeTotal)
-            checkpoint(
-                bookId,
-                PreparationState(
-                    stage = PreparationStage.READING_CHAPTERS,
-                    completedUnits = safeCompleted,
-                    totalUnits = safeTotal,
-                    progressFraction = safeCompleted.toFloat() / safeTotal,
-                    message = "Reading page $safeCompleted of $safeTotal",
-                ),
-                attemptCount,
-            )
+            if (progressThrottle.shouldCheckpoint(safeCompleted, safeTotal)) {
+                checkpoint(
+                    bookId,
+                    PreparationState(
+                        stage = PreparationStage.READING_CHAPTERS,
+                        completedUnits = safeCompleted,
+                        totalUnits = safeTotal,
+                        progressFraction = safeCompleted.toFloat() / safeTotal,
+                        message = when (imported.format) {
+                            BookFormat.PDF ->
+                                "Processing PDF ${(safeCompleted.toLong() * 100L / safeTotal)}%"
+                            BookFormat.EPUB -> "Reading section $safeCompleted of $safeTotal"
+                        },
+                    ),
+                    attemptCount,
+                )
+            }
         }.getOrThrow()
         if (publication.chapters.isEmpty()) {
             throw PreparationPipelineException("empty-publication", "No readable chapters were found", false)
@@ -480,12 +592,10 @@ internal class PreparationStageRunner(
         if (chapters.isEmpty()) {
             throw PreparationPipelineException("chapters-missing", "Chapters must exist before audio is prepared", false)
         }
-        val priorStage = database.preparationJobDao().getForBook(bookId).stage()
-        val requestedStartOrdinal = if (priorStage == PreparationStage.READY) {
-            fromChapterOrdinal
-        } else {
-            0
-        }
+        // WorkManager preserves the requested regeneration boundary across automatic retries.
+        // Full preparation always supplies zero, while scoped regeneration may legitimately retry
+        // after the persisted stage has already advanced from READY to PREPARING_AUDIO.
+        val requestedStartOrdinal = fromChapterOrdinal
         // Voice regeneration replaces the unique WorkManager chain. If it happens while a large
         // book is still being prepared, resume at the first chapter whose catalog is incomplete so
         // the remainder of the book is not stranded behind the replacement request.
@@ -858,9 +968,13 @@ internal class PreparationStageRunner(
         }
         val voiceIds = voices.mapTo(hashSetOf(), VoiceDescriptor::id)
         val assignments = database.voiceAssignmentDao()
-            .getForCharacters(characters.map { it.character.id })
+            .getForBook(bookId)
             .associateBy { it.characterId }
-        val narratorVoice = voices.firstOrNull { it.id == dependencies.narratorVoiceId }
+        val preferredNarratorVoice = database.bookDao().getById(bookId)
+            ?.preferredNarratorVoiceId
+            ?.let { preferredId -> voices.firstOrNull { it.id == preferredId } }
+        val narratorVoice = preferredNarratorVoice
+            ?: voices.firstOrNull { it.id == dependencies.narratorVoiceId }
             ?: voices.first()
         val orderedCharacters = characters.sortedWith(
             compareBy(
@@ -885,6 +999,9 @@ internal class PreparationStageRunner(
                     return@forEach
                 }
                 val voice = existing?.voiceId?.let { id -> voices.firstOrNull { it.id == id } }
+                    ?: preferredNarratorVoice?.takeIf {
+                        character.character.colorRole == CharacterColorRole.NARRATOR.name
+                    }
                     ?: CharacterVoiceCaster.select(
                         character = character.toDomain(),
                         voices = voices,
@@ -966,7 +1083,8 @@ internal class PreparationStageRunner(
                 false,
             )
         }
-        val templates = database.voiceAssignmentDao().getForCharacters(speakerIds.toList())
+        val templates = database.voiceAssignmentDao().getForBook(bookId)
+            .filter { it.characterId in speakerIds }
             .associateBy { it.characterId }
         val existing = database.chapterVoiceAssignmentDao()
             .getForChapter(bookId, chapter.chapter.id)
@@ -1182,9 +1300,6 @@ internal class PreparationPipelineException(
     val retryable: Boolean,
 ) : IllegalStateException(message)
 
-private fun PreparationJobEntity?.stage(): PreparationStage? =
-    this?.stage?.let { name -> PreparationStage.entries.firstOrNull { it.name == name } }
-
 private inline fun <reified T : Enum<T>> enumValueOrNull(name: String): T? =
     enumValues<T>().firstOrNull { it.name == name }
 
@@ -1215,6 +1330,8 @@ private fun PreparationStage.notificationMessage(): String = when (this) {
 }
 
 internal fun preparationNotificationText(state: PreparationState): String = when {
+    state.retryable && state.stage != PreparationStage.FAILED ->
+        state.message ?: "Preparation was interrupted — retrying automatically"
     state.stage == PreparationStage.PREPARING_AUDIO && state.totalUnits > 0 -> {
         val completed = state.completedUnits.coerceIn(0, state.totalUnits)
         "Prepared $completed of ${state.totalUnits} chapters"
