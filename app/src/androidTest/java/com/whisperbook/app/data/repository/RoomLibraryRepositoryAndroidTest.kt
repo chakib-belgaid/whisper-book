@@ -222,6 +222,105 @@ class RoomLibraryRepositoryAndroidTest {
     }
 
     @Test
+    fun chapterPlanSelectionReorderRestoreAndResetAreDurableAndRevisionedOncePerAction() = runBlocking {
+        val database = Room.inMemoryDatabaseBuilder(context, WhisperBookDatabase::class.java).build()
+        val importer = object : BookImporter {
+            override suspend fun import(uri: Uri): Result<ImportedBook> =
+                Result.failure(UnsupportedOperationException())
+        }
+        var now = 10L
+        val repository = RoomLibraryRepository(database, importer, clockEpochMs = { ++now })
+
+        try {
+            database.bookDao().insert(
+                BookEntity(
+                    id = "plan-book",
+                    title = "Plan book",
+                    author = "Tester",
+                    format = BookFormat.EPUB.name,
+                    sourceUri = null,
+                    privateSourcePath = "/private/plan-book.epub",
+                    sourceSha256 = "plan-book-hash",
+                    coverPath = null,
+                    currentChapterId = null,
+                    currentPassageId = null,
+                    progressFraction = 0f,
+                    lastOpenedAtEpochMs = 1L,
+                    narrationSetupConfirmed = false,
+                ),
+            )
+            database.chapterDao().insertAll(
+                (1..5).map { number ->
+                    ChapterEntity(
+                        id = "chapter-$number",
+                        bookId = "plan-book",
+                        ordinal = number - 1,
+                        title = "Chapter $number",
+                    )
+                },
+            )
+            database.preparationJobDao().upsert(
+                PreparationJobEntity(
+                    bookId = "plan-book",
+                    stage = PreparationStage.READING_CHAPTERS.name,
+                    completedUnits = 5,
+                    totalUnits = 5,
+                    progressFraction = 1f,
+                    message = "Parsed",
+                    retryable = false,
+                    chapterPlanConfirmed = false,
+                    attemptCount = 0,
+                    updatedAtEpochMs = 1L,
+                ),
+            )
+
+            repository.initializeChapterPlan("plan-book")
+
+            val initial = repository.observeChapterPlan("plan-book").first()
+            assertEquals(listOf(1, 2, 3, 4, 5), initial.map { it.chapter.ordinal + 1 })
+            assertTrue(initial.all { it.isSelected })
+            assertEquals(listOf(0, 1, 2, 3, 4), initial.map { it.customPosition })
+            assertFalse(database.preparationJobDao().getForBook("plan-book")!!.chapterPlanConfirmed)
+
+            repository.setChapterSelected("plan-book", "chapter-2", false)
+            repository.setChapterSelected("plan-book", "chapter-4", false)
+            repository.moveChapter("plan-book", "chapter-5", targetSelectedPosition = 0)
+
+            assertEquals(
+                listOf("chapter-5", "chapter-1", "chapter-3"),
+                database.chapterPlanDao().getSelectedChapterHeaders("plan-book").map { it.id },
+            )
+            val afterMove = database.chapterPlanDao().getEntriesForBook("plan-book")
+            assertEquals(1, afterMove.single { it.chapterId == "chapter-2" }.customPosition)
+            assertEquals(3, afterMove.single { it.chapterId == "chapter-4" }.customPosition)
+            assertEquals(3L, database.preparationJobDao().getForBook("plan-book")!!.planRevision)
+
+            repository.restoreOriginalChapterOrder("plan-book")
+            assertEquals(
+                listOf("chapter-1", "chapter-3", "chapter-5"),
+                database.chapterPlanDao().getSelectedChapterHeaders("plan-book").map { it.id },
+            )
+            assertEquals(4L, database.preparationJobDao().getForBook("plan-book")!!.planRevision)
+
+            repository.moveChapter("plan-book", "chapter-5", targetSelectedPosition = 0)
+            repository.resetChapterPlan("plan-book")
+            val reset = repository.observeChapterPlan("plan-book").first()
+            assertEquals(listOf("chapter-1", "chapter-2", "chapter-3", "chapter-4", "chapter-5"), reset.map { it.chapter.id })
+            assertTrue(reset.all { it.isSelected })
+            assertEquals(listOf(0, 1, 2, 3, 4), reset.map { it.customPosition })
+            assertEquals(6L, database.preparationJobDao().getForBook("plan-book")!!.planRevision)
+
+            repository.confirmChapterPlan("plan-book")
+            val confirmed = database.preparationJobDao().getForBook("plan-book")!!
+            assertTrue(confirmed.chapterPlanConfirmed)
+            assertEquals(PreparationStage.AWAITING_NARRATION_SETUP.name, confirmed.stage)
+            assertEquals(7L, confirmed.planRevision)
+        } finally {
+            database.close()
+        }
+    }
+
+    @Test
     fun removingBookDeletesPrivateCopyButLeavesOriginalFileAlone() = runBlocking {
         val database = Room.inMemoryDatabaseBuilder(context, WhisperBookDatabase::class.java).build()
         val originalFile = File(context.cacheDir, "original-story.pdf").apply { writeText("original") }

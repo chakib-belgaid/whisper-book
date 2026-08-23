@@ -4,6 +4,7 @@ import androidx.compose.runtime.Immutable
 import com.whisperbook.app.domain.model.AppSettings
 import com.whisperbook.app.domain.model.Book
 import com.whisperbook.app.domain.model.Chapter
+import com.whisperbook.app.domain.model.ChapterPlanEntry
 import com.whisperbook.app.domain.model.CharacterVoiceAssignment
 import com.whisperbook.app.domain.model.PlaybackCursor
 import com.whisperbook.app.domain.model.PreparationState
@@ -15,6 +16,9 @@ import com.whisperbook.app.domain.model.VoiceDescriptor
 data class WhisperbookUiSnapshot(
     val books: List<Book> = emptyList(),
     val selectedBook: Book? = null,
+    /** Complete review plan, including chapters that are currently skipped. */
+    val chapterPlan: List<ChapterPlanEntry> = emptyList(),
+    /** Selected chapters in their custom listening order. */
     val chapters: List<Chapter> = emptyList(),
     val selectedChapter: Chapter? = null,
     val characters: List<StoryCharacter> = emptyList(),

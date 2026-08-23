@@ -285,6 +285,83 @@ class WhisperBookDatabaseMigrationAndroidTest {
         }
     }
 
+    @Test
+    fun migration6To7BuildsAnAllSelectedSourceOrderPlanAndConfirmsExistingJobs() {
+        migrationHelper.createDatabase(DATABASE_NAME, 6).apply {
+            execSQL(
+                """
+                INSERT INTO books (
+                    id, title, author, format, source_uri, private_source_path, source_sha256,
+                    cover_path, current_chapter_id, current_passage_id, progress_fraction,
+                    last_opened_at_epoch_ms, narration_language_code,
+                    narration_profile_revision, narration_profile_seeded,
+                    preferred_narrator_voice_id, narration_setup_confirmed
+                ) VALUES (
+                    'existing-plan-book', 'Existing Plan', NULL, 'EPUB', NULL, NULL, NULL,
+                    NULL, NULL, NULL, 0, 1, 'en', 1, 1, 'bella', 1
+                )
+                """.trimIndent(),
+            )
+            execSQL(
+                """
+                INSERT INTO chapters (id, book_id, ordinal, title) VALUES
+                    ('existing-c1', 'existing-plan-book', 0, 'Opening'),
+                    ('existing-c2', 'existing-plan-book', 1, 'Middle'),
+                    ('existing-c3', 'existing-plan-book', 2, 'Ending')
+                """.trimIndent(),
+            )
+            execSQL(
+                """
+                INSERT INTO preparation_jobs (
+                    book_id, stage, completed_units, total_units, progress_fraction,
+                    message, retryable, run_state, attempt_count, updated_at_epoch_ms
+                ) VALUES (
+                    'existing-plan-book', 'READY', 3, 3, 1,
+                    'Ready', 0, 'RUNNING', 0, 1
+                )
+                """.trimIndent(),
+            )
+            close()
+        }
+
+        migrationHelper.runMigrationsAndValidate(
+            DATABASE_NAME,
+            7,
+            true,
+            WhisperBookDatabase.MIGRATION_6_7,
+        ).use { database ->
+            database.query(
+                """
+                SELECT chapter_id, is_selected, custom_position
+                FROM chapter_plan_entries
+                WHERE book_id = 'existing-plan-book'
+                ORDER BY custom_position
+                """.trimIndent(),
+            ).use { cursor ->
+                val plan = buildList {
+                    while (cursor.moveToNext()) {
+                        add("${cursor.getString(0)}:${cursor.getInt(1)}:${cursor.getInt(2)}")
+                    }
+                }
+                assertEquals(
+                    listOf("existing-c1:1:0", "existing-c2:1:1", "existing-c3:1:2"),
+                    plan,
+                )
+            }
+            database.query(
+                """
+                SELECT chapter_plan_confirmed, plan_revision, active_chapter_id
+                FROM preparation_jobs WHERE book_id = 'existing-plan-book'
+                """.trimIndent(),
+            ).use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals(1, cursor.getInt(0))
+                assertEquals(0L, cursor.getLong(1))
+                assertTrue(cursor.isNull(2))
+            }
+        }
+    }
+
     private companion object {
         const val DATABASE_NAME = "profile-migration-test"
     }

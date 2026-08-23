@@ -5,10 +5,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -19,38 +16,29 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
-import androidx.compose.material.icons.outlined.AutoAwesome
-import androidx.compose.material.icons.outlined.Circle
+import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Security
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextAlign
@@ -59,20 +47,17 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.whisperbook.app.R
+import com.whisperbook.app.domain.model.ChapterPlanEntry
+import com.whisperbook.app.domain.model.PreparationStage
 import com.whisperbook.app.ui.components.PapercraftButton
 import com.whisperbook.app.ui.components.PapercraftButtonVariant
 import com.whisperbook.app.ui.components.ParchmentPanel
+import com.whisperbook.app.ui.components.ProcessingChapter
+import com.whisperbook.app.ui.components.ProcessingChapterRow
+import com.whisperbook.app.ui.components.ProcessingChapterState
 import com.whisperbook.app.ui.components.TheatreFrameOverlay
 import com.whisperbook.app.ui.theme.WhisperbookTheme
 import kotlinx.coroutines.delay
-import kotlin.math.roundToInt
-
-private val PreparationLabels = listOf(
-    "Reading chapters",
-    "Finding characters",
-    "Assigning voices",
-    "Ready to listen",
-)
 
 private const val ProcessingReferenceWidthDp = 400f
 private const val ProcessingMaximumScale = 1.8f
@@ -96,6 +81,10 @@ fun ProcessingScreen(
     onCancel: () -> Unit,
     onBackToImport: () -> Unit,
     modifier: Modifier = Modifier,
+    selectedChapterPlan: List<ChapterPlanEntry> = appState.chapterPlan,
+    chapterPreparationStates: Map<String, ProcessingChapterState> = emptyMap(),
+    isPlayable: Boolean = appState.canListen,
+    onEditChapters: (() -> Unit)? = null,
 ) {
     val context = LocalContext.current
     val baseDensity = LocalDensity.current
@@ -114,6 +103,34 @@ fun ProcessingScreen(
     BoxWithConstraints(
         modifier = modifier.fillMaxSize(),
     ) {
+        val planSnapshot = selectedChapterPlan.toList()
+        val fallbackChapterSnapshot = appState.chapters.toList()
+        val preparationStage = appState.preparationStatus?.stage
+        val activeChapterId = appState.preparationStatus?.activeChapterId
+        val queue = remember(
+            planSnapshot,
+            fallbackChapterSnapshot,
+            chapterPreparationStates,
+            preparationStage,
+            activeChapterId,
+        ) {
+            buildProcessingQueue(
+                selectedChapterPlan = planSnapshot,
+                fallbackChapters = fallbackChapterSnapshot,
+                explicitStates = chapterPreparationStates,
+                preparationStage = preparationStage,
+                activeChapterId = activeChapterId,
+            )
+        }
+        val selectedChapterCount = when {
+            planSnapshot.isNotEmpty() -> queue.size
+            appState.totalChapters > 0 -> maxOf(queue.size, appState.totalChapters)
+            else -> queue.size
+        }
+        val readyChapterCount = when (preparationStage) {
+            PreparationStage.READY -> selectedChapterCount
+            else -> queue.count { chapter -> chapter.state == ProcessingChapterState.Ready }
+        }
         val contentScale = processingContentScale(maxWidth.value)
         val responsiveDensity = Density(
             density = baseDensity.density * contentScale,
@@ -153,18 +170,36 @@ fun ProcessingScreen(
                     title = appState.currentBookTitle,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                Spacer(Modifier.height(1.dp))
-                Text(
-                    text = "${(appState.preparationProgress * 100).roundToInt()}%",
-                    color = WhisperbookTheme.colors.onStage,
-                    style = WhisperbookTheme.typography.display.copy(fontSize = 53.sp, lineHeight = 55.sp),
-                    textAlign = TextAlign.Center,
-                    modifier = Modifier.semantics {
-                        contentDescription = "${(appState.preparationProgress * 100).roundToInt()} percent prepared"
-                    },
-                )
                 Spacer(Modifier.height(3.dp))
-                StoryProgressBar(appState.preparationProgress)
+                Text(
+                    text = chapterReadinessSummary(
+                        readyChapterCount = readyChapterCount,
+                        selectedChapterCount = selectedChapterCount,
+                    ),
+                    color = WhisperbookTheme.colors.onStage,
+                    style = WhisperbookTheme.typography.display.copy(fontSize = 29.sp, lineHeight = 34.sp),
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .semantics { contentDescription = chapterReadinessSummary(readyChapterCount, selectedChapterCount) }
+                        .testTag("processing-readiness-summary"),
+                )
+                Text(
+                    text = preparationActivityLabel(
+                        stage = appState.preparationStatus?.stage,
+                        message = appState.preparationStatus?.message ?: appState.statusMessage,
+                        activeChapterTitle = queue.firstOrNull { chapter ->
+                            chapter.id == activeChapterId
+                        }?.title,
+                    ),
+                    color = WhisperbookTheme.colors.onStage,
+                    style = WhisperbookTheme.typography.body,
+                    textAlign = TextAlign.Center,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp)
+                        .testTag("processing-current-activity"),
+                )
                 if (appState.isPreparationPaused || appState.isPreparationCancelled) {
                     Spacer(Modifier.height(8.dp))
                     Text(
@@ -191,13 +226,67 @@ fun ProcessingScreen(
                 Spacer(Modifier.height(10.dp))
 
                 ParchmentPanel(
-                    modifier = Modifier.fillMaxWidth().testTag("processing-steps"),
+                    modifier = Modifier.fillMaxWidth().testTag("processing-chapter-queue"),
                     shape = RoundedCornerShape(18.dp),
-                    contentPadding = PaddingValues(horizontal = 20.dp, vertical = 11.dp),
+                    contentPadding = PaddingValues(horizontal = 14.dp, vertical = 14.dp),
                 ) {
-                    PreparationStepper(
-                        currentStage = appState.preparationStage,
-                        failed = false,
+                    Text(
+                        text = "Selected listening order",
+                        color = WhisperbookTheme.colors.ink,
+                        style = WhisperbookTheme.typography.title,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        text = if (queue.isEmpty()) {
+                            "Your selected chapters will appear here."
+                        } else {
+                            "Preparation follows the order you chose."
+                        },
+                        color = WhisperbookTheme.colors.inkMuted,
+                        style = WhisperbookTheme.typography.label,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    if (queue.isNotEmpty()) {
+                        val visibleQueue = visibleProcessingQueue(queue)
+                        Spacer(Modifier.height(10.dp))
+                        visibleQueue.forEachIndexed { index, chapter ->
+                            if (index > 0) Spacer(Modifier.height(7.dp))
+                            ProcessingChapterRow(
+                                chapter = chapter,
+                                modifier = Modifier.testTag("processing-chapter-${chapter.id}"),
+                            )
+                        }
+                        val hiddenCount = queue.size - visibleQueue.size
+                        if (hiddenCount > 0) {
+                            Spacer(Modifier.height(9.dp))
+                            Text(
+                                text = "$hiddenCount more selected ${if (hiddenCount == 1) "chapter" else "chapters"}",
+                                color = WhisperbookTheme.colors.inkMuted,
+                                style = WhisperbookTheme.typography.label,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.fillMaxWidth().testTag("processing-queue-overflow"),
+                            )
+                        }
+                    }
+                }
+                if (onEditChapters != null) {
+                    Spacer(Modifier.height(8.dp))
+                    PapercraftButton(
+                        text = "Edit chapters",
+                        onClick = onEditChapters,
+                        enabled = !appState.isBusy,
+                        variant = PapercraftButtonVariant.Parchment,
+                        leadingIcon = {
+                            Icon(
+                                imageVector = Icons.Outlined.Edit,
+                                contentDescription = null,
+                            )
+                        },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp)
+                            .testTag("processing-edit-chapters-action"),
                     )
                 }
                 Spacer(Modifier.height(10.dp))
@@ -217,13 +306,13 @@ fun ProcessingScreen(
                     text = when {
                         appState.isPreparationPaused -> "Resume"
                         appState.isPreparationCancelled -> "Start again"
-                        appState.preparationStage >= 3 -> "Listen now"
+                        isPlayable -> "Listen now"
                         else -> "Continue in background"
                     },
                     onClick = when {
                         appState.isPreparationPaused -> onResume
                         appState.isPreparationCancelled -> onRetry
-                        appState.preparationStage >= 3 -> onReady
+                        isPlayable -> onReady
                         else -> continueInBackground
                     },
                     variant = PapercraftButtonVariant.Accent,
@@ -234,7 +323,24 @@ fun ProcessingScreen(
                     isLoading = appState.isBusy,
                     loadingDescription = appState.statusMessage ?: "Preparing your audiobook",
                 )
-                if (!appState.isPreparationCancelled && appState.preparationStage < 4) {
+                if (
+                    isPlayable &&
+                    !appState.isPreparationPaused &&
+                    !appState.isPreparationCancelled
+                ) {
+                    Spacer(Modifier.height(8.dp))
+                    PapercraftButton(
+                        text = "Continue in background",
+                        onClick = continueInBackground,
+                        enabled = !appState.isBusy,
+                        variant = PapercraftButtonVariant.Parchment,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp)
+                            .testTag("processing-background-action"),
+                    )
+                }
+                if (!appState.isPreparationCancelled && appState.preparationStatus?.stage != PreparationStage.READY) {
                     Spacer(Modifier.height(8.dp))
                     Row(
                         modifier = Modifier
@@ -265,12 +371,12 @@ fun ProcessingScreen(
                     }
                 }
                 if (
-                    appState.preparationStage >= 3 &&
+                    isPlayable &&
                     !appState.isPreparationPaused &&
                     !appState.isPreparationCancelled
                 ) {
                     Text(
-                        text = "Playback starts with the opening lines while the rest records in the background.",
+                        text = "You can listen now while later chapters continue preparing on this device.",
                         color = WhisperbookTheme.colors.onStage,
                         style = WhisperbookTheme.typography.label,
                         textAlign = TextAlign.Center,
@@ -319,178 +425,125 @@ private fun ProcessingTheatre(
     }
 }
 
-@Composable
-private fun StoryProgressBar(progress: Float) {
-    val fraction = progress.coerceIn(0f, 1f)
-    val shape = RoundedCornerShape(50)
-    val percent = (fraction * 100).roundToInt()
-    BoxWithConstraints(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 27.dp)
-            .height(20.dp)
-            .shadow(3.dp, shape)
-            .clip(shape)
-            .background(WhisperbookTheme.colors.paperHighlight)
-            .border(2.dp, WhisperbookTheme.colors.ornament, shape)
-            .semantics {
-                progressBarRangeInfo = ProgressBarRangeInfo(fraction, 0f..1f)
-                stateDescription = "$percent percent prepared"
-            },
-    ) {
-        if (fraction > 0f) {
-            Box(
-                Modifier
-                    .fillMaxWidth(fraction)
-                    .height(20.dp)
-                    .background(WhisperbookTheme.colors.action),
-            )
-        }
-        if (fraction in 0.03f..0.97f) {
-            Box(
-                modifier = Modifier
-                    .align(Alignment.CenterStart)
-                    .offset(x = maxWidth * fraction - 3.dp)
-                    .width(6.dp)
-                    .height(20.dp)
-                    .background(WhisperbookTheme.colors.ornament)
-                    .border(1.dp, WhisperbookTheme.colors.outline),
+private const val ProcessingQueuePreviewLimit = 6
+
+internal fun buildProcessingQueue(
+    selectedChapterPlan: List<ChapterPlanEntry>,
+    fallbackChapters: List<ChapterUi>,
+    explicitStates: Map<String, ProcessingChapterState>,
+    preparationStage: PreparationStage?,
+    activeChapterId: String?,
+): List<ProcessingChapter> {
+    val fallbackById = fallbackChapters.associateBy(ChapterUi::id)
+    val ordered = if (selectedChapterPlan.isNotEmpty()) {
+        selectedChapterPlan
+            .asSequence()
+            .filter(ChapterPlanEntry::isSelected)
+            .sortedWith(compareBy(ChapterPlanEntry::customPosition, { it.chapter.ordinal }))
+            .toList()
+            .mapIndexed { listeningIndex, entry ->
+                ProcessingChapter(
+                    id = entry.chapter.id,
+                    title = entry.chapter.title,
+                    originalChapterNumber = entry.chapter.ordinal + 1,
+                    listeningPosition = listeningIndex + 1,
+                    state = if (preparationStage == PreparationStage.READY) {
+                        ProcessingChapterState.Ready
+                    } else {
+                        explicitStates[entry.chapter.id] ?: inferredChapterState(
+                            chapterId = entry.chapter.id,
+                            isFallbackLoading = fallbackById[entry.chapter.id]?.isLoading == true,
+                            preparationStage = preparationStage,
+                            activeChapterId = activeChapterId,
+                        )
+                    },
+                )
+            }
+    } else {
+        fallbackChapters.mapIndexed { index, chapter ->
+            ProcessingChapter(
+                id = chapter.id,
+                title = chapter.title,
+                originalChapterNumber = chapter.number,
+                listeningPosition = index + 1,
+                state = if (preparationStage == PreparationStage.READY) {
+                    ProcessingChapterState.Ready
+                } else {
+                    explicitStates[chapter.id] ?: inferredChapterState(
+                        chapterId = chapter.id,
+                        isFallbackLoading = chapter.isLoading,
+                        preparationStage = preparationStage,
+                        activeChapterId = activeChapterId,
+                    )
+                },
             )
         }
     }
-}
-
-@Composable
-private fun PreparationStepper(
-    currentStage: Int,
-    failed: Boolean,
-) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .semantics {
-                contentDescription = "Audiobook preparation steps"
-            },
+    if (
+        ordered.isNotEmpty() &&
+        ordered.none { chapter -> chapter.state == ProcessingChapterState.Preparing } &&
+        preparationStage in setOf(
+            PreparationStage.FINDING_CHARACTERS,
+            PreparationStage.ASSIGNING_VOICES,
+            PreparationStage.PREPARING_AUDIO,
+        )
     ) {
-        Canvas(
-            modifier = Modifier
-                .align(Alignment.CenterStart)
-                .padding(start = 15.dp)
-                .size(width = 2.dp, height = 116.dp),
-        ) {
-            drawLine(
-                color = androidx.compose.ui.graphics.Color(0xFF806642),
-                start = Offset(size.width / 2f, 0f),
-                end = Offset(size.width / 2f, size.height),
-                strokeWidth = size.width,
-                cap = StrokeCap.Round,
-            )
+        val nextIndex = ordered.indexOfFirst { chapter ->
+            chapter.state == ProcessingChapterState.Waiting
         }
-        Column {
-            PreparationLabels.forEachIndexed { index, label ->
-                val state = when {
-                    failed && index == currentStage -> PreparationStepVisual.Error
-                    index < currentStage -> PreparationStepVisual.Complete
-                    index == currentStage -> PreparationStepVisual.Active
-                    else -> PreparationStepVisual.Pending
-                }
-                PreparationStepRow(label, state)
+        if (nextIndex >= 0) {
+            return ordered.toMutableList().also { chapters ->
+                chapters[nextIndex] = chapters[nextIndex].copy(state = ProcessingChapterState.Preparing)
             }
         }
     }
+    return ordered
 }
 
-private enum class PreparationStepVisual { Complete, Active, Pending, Error }
-
-@Composable
-private fun PreparationStepRow(
-    label: String,
-    state: PreparationStepVisual,
-) {
-    val stateLabel = when (state) {
-        PreparationStepVisual.Complete -> "complete"
-        PreparationStepVisual.Active -> "in progress"
-        PreparationStepVisual.Pending -> "waiting"
-        PreparationStepVisual.Error -> "needs attention"
-    }
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(38.dp)
-            .semantics(mergeDescendants = true) {
-                contentDescription = "$label, $stateLabel"
-            },
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(
-            modifier = Modifier
-                .size(32.dp)
-                .clip(CircleShape)
-                .background(
-                    when (state) {
-                        PreparationStepVisual.Complete -> WhisperbookTheme.colors.outline
-                        PreparationStepVisual.Active -> WhisperbookTheme.colors.stageRaised
-                        PreparationStepVisual.Pending -> WhisperbookTheme.colors.paperHighlight
-                        PreparationStepVisual.Error -> WhisperbookTheme.colors.error
-                    },
-                )
-                .border(2.dp, WhisperbookTheme.colors.outline, CircleShape),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(
-                imageVector = when (state) {
-                    PreparationStepVisual.Complete -> Icons.Filled.Check
-                    PreparationStepVisual.Active -> Icons.Outlined.AutoAwesome
-                    PreparationStepVisual.Pending, PreparationStepVisual.Error -> Icons.Outlined.Circle
-                },
-                contentDescription = null,
-                tint = when (state) {
-                    PreparationStepVisual.Active -> WhisperbookTheme.colors.ornament
-                    PreparationStepVisual.Pending -> WhisperbookTheme.colors.inkMuted
-                    else -> WhisperbookTheme.colors.onStage
-                },
-                modifier = Modifier.size(if (state == PreparationStepVisual.Pending) 15.dp else 21.dp),
-            )
-        }
-        Text(
-            text = label,
-            color = when (state) {
-                PreparationStepVisual.Active -> WhisperbookTheme.colors.action
-                PreparationStepVisual.Error -> WhisperbookTheme.colors.error
-                else -> WhisperbookTheme.colors.ink
-            },
-            style = WhisperbookTheme.typography.body.copy(
-                fontSize = if (state == PreparationStepVisual.Active) 17.sp else 16.sp,
-                lineHeight = 20.sp,
-            ),
-            modifier = Modifier.padding(start = 13.dp).weight(1f),
-        )
-        StepLeaf()
-    }
+private fun inferredChapterState(
+    chapterId: String,
+    isFallbackLoading: Boolean,
+    preparationStage: PreparationStage?,
+    activeChapterId: String?,
+): ProcessingChapterState = when {
+    preparationStage == PreparationStage.READY -> ProcessingChapterState.Ready
+    chapterId == activeChapterId || isFallbackLoading -> ProcessingChapterState.Preparing
+    else -> ProcessingChapterState.Waiting
 }
 
-@Composable
-private fun StepLeaf() {
-    val color = WhisperbookTheme.colors.outline.copy(alpha = 0.65f)
-    Canvas(modifier = Modifier.size(width = 23.dp, height = 13.dp)) {
-        drawLine(
-            color = color,
-            start = Offset(size.width * .08f, size.height * .72f),
-            end = Offset(size.width * .92f, size.height * .28f),
-            strokeWidth = 1.4.dp.toPx(),
-            cap = StrokeCap.Round,
-        )
-        drawOval(
-            color = color,
-            topLeft = Offset(size.width * .25f, 0f),
-            size = androidx.compose.ui.geometry.Size(size.width * .27f, size.height * .48f),
-        )
-        drawOval(
-            color = color,
-            topLeft = Offset(size.width * .48f, size.height * .48f),
-            size = androidx.compose.ui.geometry.Size(size.width * .27f, size.height * .48f),
-        )
+internal fun visibleProcessingQueue(
+    chapters: List<ProcessingChapter>,
+): List<ProcessingChapter> = chapters.take(ProcessingQueuePreviewLimit)
+
+internal fun chapterReadinessSummary(
+    readyChapterCount: Int,
+    selectedChapterCount: Int,
+): String {
+    if (selectedChapterCount <= 0) return "Preparing selected chapters"
+    val safeReadyCount = readyChapterCount.coerceIn(0, selectedChapterCount)
+    return "$safeReadyCount of $selectedChapterCount ${if (selectedChapterCount == 1) "chapter" else "chapters"} ready"
+}
+
+internal fun preparationActivityLabel(
+    stage: PreparationStage?,
+    message: String?,
+    activeChapterTitle: String?,
+): String {
+    val activity = message?.takeIf(String::isNotBlank) ?: when (stage) {
+        PreparationStage.COPY_AND_VALIDATE -> "Validating your book"
+        PreparationStage.READING_CHAPTERS -> "Reading chapter structure"
+        PreparationStage.AWAITING_CHAPTER_SELECTION -> "Waiting for chapter selection"
+        PreparationStage.AWAITING_NARRATION_SETUP -> "Waiting for narration setup"
+        PreparationStage.FINDING_CHARACTERS -> "Finding characters"
+        PreparationStage.ASSIGNING_VOICES -> "Assigning voices"
+        PreparationStage.PREPARING_AUDIO -> "Preparing audio"
+        PreparationStage.READY -> "Selected chapters are ready"
+        PreparationStage.FAILED -> "Preparation needs attention"
+        null -> "Preparing on this device"
     }
+    return activeChapterTitle?.takeIf(String::isNotBlank)?.let { title ->
+        "$activity. Current chapter: $title"
+    } ?: activity
 }
 
 @Composable

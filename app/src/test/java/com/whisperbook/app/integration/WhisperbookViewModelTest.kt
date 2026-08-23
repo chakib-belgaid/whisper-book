@@ -20,6 +20,7 @@ import com.whisperbook.app.domain.model.BookMp3ExportProgress
 import com.whisperbook.app.domain.model.BookMp3ExportResult
 import com.whisperbook.app.domain.model.BookMp3ExportStage
 import com.whisperbook.app.domain.model.Chapter
+import com.whisperbook.app.domain.model.ChapterPlanEntry
 import com.whisperbook.app.domain.model.CharacterColorRole
 import com.whisperbook.app.domain.model.CharacterVoiceAssignment
 import com.whisperbook.app.domain.model.PlaybackCursor
@@ -41,6 +42,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.test.StandardTestDispatcher
@@ -161,7 +163,7 @@ class WhisperbookViewModelTest {
     }
 
     @Test
-    fun openingANewBookWaitsForLanguageAndNarratorConfirmationBeforeEnqueueing() = runTest(dispatcher) {
+    fun openingANewBookStartsParsingThenWaitsForChapterAndNarrationConfirmation() = runTest(dispatcher) {
         val services = FakeServices().apply {
             importedBook = book("new-book", currentChapterId = "").copy(
                 title = "New Story",
@@ -169,6 +171,7 @@ class WhisperbookViewModelTest {
                     stage = PreparationStage.COPY_AND_VALIDATE,
                     progressFraction = 1f,
                     message = "Copied securely to this device",
+                    chapterPlanConfirmed = false,
                 ),
                 currentChapterId = null,
                 narrationSetupConfirmed = false,
@@ -186,7 +189,37 @@ class WhisperbookViewModelTest {
             val awaitingConfirmation = expectMostRecentItem()
             assertEquals("new-book", awaitingConfirmation.selectedBook?.id)
             assertFalse(awaitingConfirmation.selectedBook!!.narrationSetupConfirmed)
-            assertTrue(services.events.none { it.startsWith("enqueue:") })
+            assertEquals("enqueue:new-book", services.events.last())
+
+            val parsedChapters = listOf(
+                Chapter("new-1", "new-book", 0, "Opening"),
+                Chapter("new-2", "new-book", 1, "Finale"),
+            )
+            services.chapters.value = services.chapters.value + ("new-book" to parsedChapters)
+            services.plans.value = services.plans.value + (
+                "new-book" to parsedChapters.mapIndexed { index, chapter ->
+                    ChapterPlanEntry(chapter, isSelected = true, customPosition = index)
+                }
+            )
+            services.books.value = services.books.value.map { book ->
+                if (book.id == "new-book") book.copy(
+                    preparation = book.preparation.copy(
+                        stage = PreparationStage.AWAITING_CHAPTER_SELECTION,
+                        chapterPlanConfirmed = false,
+                    ),
+                ) else book
+            }
+            advanceUntilIdle()
+
+            viewModel.confirmNarrationSetup("fr", "jasper")
+            advanceUntilIdle()
+            assertEquals(
+                "Choose at least one chapter before setting up narration",
+                expectMostRecentItem().errorMessage,
+            )
+
+            viewModel.confirmChapterPlan()
+            advanceUntilIdle()
 
             viewModel.confirmNarrationSetup("fr", "jasper")
             advanceUntilIdle()
@@ -196,10 +229,78 @@ class WhisperbookViewModelTest {
             assertEquals("jasper", confirmed.preferredNarratorVoiceId)
             assertTrue(confirmed.narrationSetupConfirmed)
             assertEquals(
-                listOf("confirm-setup:new-book:fr:jasper", "enqueue:new-book"),
-                services.events.takeLast(2),
+                listOf("confirm-plan:new-book", "confirm-setup:new-book:fr:jasper", "enqueue:new-book"),
+                services.events.takeLast(3),
             )
             assertTrue("fr" in services.settings.value.installedLanguagePackCodes)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun chapterPlanProjectsOnlySelectedChaptersInCustomOrderAndPersistsActions() = runTest(dispatcher) {
+        val source = listOf(
+            Chapter("chapter-1", "book-a", 0, "One"),
+            Chapter("chapter-2", "book-a", 1, "Two"),
+            Chapter("chapter-3", "book-a", 2, "Three"),
+        )
+        val services = FakeServices().apply {
+            chapters.value = mapOf("book-a" to source)
+            plans.value = mapOf(
+                "book-a" to listOf(
+                    ChapterPlanEntry(source[0], isSelected = true, customPosition = 1),
+                    ChapterPlanEntry(source[1], isSelected = false, customPosition = 2),
+                    ChapterPlanEntry(source[2], isSelected = true, customPosition = 0),
+                ),
+            )
+        }
+        val viewModel = WhisperbookViewModel(services)
+
+        viewModel.uiState.test {
+            awaitItem()
+            advanceUntilIdle()
+            val snapshot = expectMostRecentItem()
+            assertEquals(listOf("chapter-3", "chapter-1"), snapshot.chapters.map(Chapter::id))
+            assertEquals(3, snapshot.chapterPlan.size)
+
+            viewModel.setChapterSelected("chapter-2", true)
+            viewModel.moveChapter("chapter-2", 0)
+            viewModel.restoreOriginalChapterOrder()
+            viewModel.deselectAllChapters()
+            viewModel.selectAllChapters()
+            viewModel.resetChapterPlan()
+            advanceUntilIdle()
+
+            assertTrue("select:book-a:chapter-2:true" in services.events)
+            assertTrue("move:book-a:chapter-2:0" in services.events)
+            assertTrue("restore-order:book-a" in services.events)
+            assertTrue("deselect-all:book-a" in services.events)
+            assertTrue("select-all:book-a" in services.events)
+            assertTrue("reset-plan:book-a" in services.events)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun confirmingAnEditedPlanReschedulesWhenNarrationWasAlreadyConfirmed() = runTest(dispatcher) {
+        val services = FakeServices()
+        val viewModel = WhisperbookViewModel(services)
+
+        viewModel.uiState.test {
+            awaitItem()
+            advanceUntilIdle()
+
+            viewModel.confirmChapterPlan()
+            advanceUntilIdle()
+
+            assertEquals(
+                listOf("confirm-plan:book-a", "enqueue:book-a"),
+                services.events.takeLast(2),
+            )
+            assertEquals(
+                "Chapter choices saved. Updating your audiobook.",
+                expectMostRecentItem().statusMessage,
+            )
             cancelAndIgnoreRemainingEvents()
         }
     }
@@ -211,7 +312,10 @@ class WhisperbookViewModelTest {
                 book("book-a").copy(
                     narrationSetupConfirmed = false,
                     preferredNarratorVoiceId = "bella",
-                    preparation = PreparationState(PreparationStage.COPY_AND_VALIDATE),
+                    preparation = PreparationState(
+                        stage = PreparationStage.AWAITING_NARRATION_SETUP,
+                        chapterPlanConfirmed = true,
+                    ),
                 ),
             )
         }
@@ -1131,6 +1235,7 @@ private class FakeServices : WhisperbookServices {
     val chapters = MutableStateFlow(
         mapOf("book-a" to listOf(Chapter("chapter-a", "book-a", 0, "The Beginning"))),
     )
+    val plans = MutableStateFlow<Map<String, List<ChapterPlanEntry>>>(emptyMap())
     val characters = MutableStateFlow(
         mapOf(
             "book-a" to listOf(
@@ -1227,6 +1332,12 @@ private class FakeServices : WhisperbookServices {
                 allBooks[bookId].orEmpty().firstOrNull { chapter -> chapter.id == chapterId }
             }.distinctUntilChanged()
         }
+        override fun observeChapterPlan(bookId: String): Flow<List<ChapterPlanEntry>> =
+            combine(plans, chapters) { storedPlans, allChapters ->
+                storedPlans[bookId] ?: allChapters[bookId].orEmpty().mapIndexed { index, chapter ->
+                    ChapterPlanEntry(chapter.copy(passages = emptyList()), true, index)
+                }
+            }.distinctUntilChanged()
         override fun observeCharacters(bookId: String): Flow<List<StoryCharacter>> = characters.map { it[bookId].orEmpty() }
         override suspend fun importBook(
             uri: Uri,
@@ -1256,6 +1367,62 @@ private class FakeServices : WhisperbookServices {
                 }
             }
             events += "confirm-setup:$bookId:$languageCode:$narratorVoiceId"
+        }
+        override suspend fun setChapterSelected(bookId: String, chapterId: String, selected: Boolean) {
+            plans.value = plans.value + (
+                bookId to currentPlan(bookId).map { entry ->
+                    if (entry.chapter.id == chapterId) entry.copy(isSelected = selected) else entry
+                }
+            )
+            events += "select:$bookId:$chapterId:$selected"
+        }
+        override suspend fun moveChapter(bookId: String, chapterId: String, targetSelectedPosition: Int) {
+            val plan = currentPlan(bookId)
+            val selected = plan.filter(ChapterPlanEntry::isSelected).sortedBy(ChapterPlanEntry::customPosition).toMutableList()
+            val moved = selected.firstOrNull { it.chapter.id == chapterId } ?: return
+            selected.remove(moved)
+            selected.add(targetSelectedPosition.coerceIn(0, selected.size), moved)
+            val positions = selected.mapIndexed { index, entry -> entry.chapter.id to index }.toMap()
+            plans.value = plans.value + (
+                bookId to plan.map { entry -> entry.copy(customPosition = positions[entry.chapter.id] ?: entry.customPosition) }
+            )
+            events += "move:$bookId:$chapterId:$targetSelectedPosition"
+        }
+        override suspend fun selectAllChapters(bookId: String) {
+            plans.value = plans.value + (bookId to currentPlan(bookId).map { it.copy(isSelected = true) })
+            events += "select-all:$bookId"
+        }
+        override suspend fun deselectAllChapters(bookId: String) {
+            plans.value = plans.value + (bookId to currentPlan(bookId).map { it.copy(isSelected = false) })
+            events += "deselect-all:$bookId"
+        }
+        override suspend fun restoreOriginalChapterOrder(bookId: String) {
+            plans.value = plans.value + (
+                bookId to currentPlan(bookId).sortedBy { it.chapter.ordinal }.mapIndexed { index, entry ->
+                    entry.copy(customPosition = index)
+                }
+            )
+            events += "restore-order:$bookId"
+        }
+        override suspend fun resetChapterPlan(bookId: String) {
+            plans.value = plans.value + (
+                bookId to currentPlan(bookId).sortedBy { it.chapter.ordinal }.mapIndexed { index, entry ->
+                    entry.copy(isSelected = true, customPosition = index)
+                }
+            )
+            events += "reset-plan:$bookId"
+        }
+        override suspend fun confirmChapterPlan(bookId: String) {
+            books.value = books.value.map { book ->
+                if (book.id == bookId) book.copy(
+                    preparation = book.preparation.copy(
+                        stage = PreparationStage.AWAITING_NARRATION_SETUP,
+                        chapterPlanConfirmed = true,
+                        planRevision = book.preparation.planRevision + 1,
+                    ),
+                ) else book
+            }
+            events += "confirm-plan:$bookId"
         }
         override suspend fun updateVoiceAssignment(assignment: CharacterVoiceAssignment) {
             events += "assign:${assignment.characterId}:${assignment.voiceId}"
@@ -1413,6 +1580,11 @@ private class FakeServices : WhisperbookServices {
         storageScans += 1
         return 0L
     }
+
+    private fun currentPlan(bookId: String): List<ChapterPlanEntry> =
+        plans.value[bookId] ?: chapters.value[bookId].orEmpty().mapIndexed { index, chapter ->
+            ChapterPlanEntry(chapter.copy(passages = emptyList()), true, index)
+        }
 }
 
 private fun book(id: String, currentChapterId: String = "chapter-a") = Book(

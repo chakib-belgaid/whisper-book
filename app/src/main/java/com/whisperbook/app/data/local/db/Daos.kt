@@ -203,6 +203,9 @@ interface ChapterDao {
     @Query("SELECT * FROM chapters WHERE book_id = :bookId ORDER BY ordinal ASC")
     suspend fun getHeadersForBook(bookId: String): List<ChapterEntity>
 
+    @Query("SELECT COUNT(*) FROM chapters WHERE book_id = :bookId")
+    suspend fun countForBook(bookId: String): Int
+
     @Query(
         """
         SELECT
@@ -220,6 +223,178 @@ interface ChapterDao {
 
     @Query("DELETE FROM chapters WHERE book_id = :bookId")
     suspend fun deleteForBook(bookId: String)
+}
+
+@Dao
+interface ChapterPlanDao {
+    @Query(
+        """
+        SELECT chapters.id AS chapter_id,
+            chapters.book_id AS book_id,
+            chapters.ordinal AS ordinal,
+            chapters.title AS title,
+            (SELECT COUNT(*) FROM passages
+                WHERE passages.chapter_id = chapters.id) AS passage_count,
+            (SELECT COUNT(*) FROM passages
+                WHERE passages.chapter_id = chapters.id
+                  AND passages.attribution_rule = :unattributedRule) AS unattributed_passage_count,
+            chapter_plan_entries.is_selected AS is_selected,
+            chapter_plan_entries.custom_position AS custom_position,
+            chapter_plan_entries.updated_at AS updated_at
+        FROM chapter_plan_entries
+        INNER JOIN chapters
+            ON chapters.id = chapter_plan_entries.chapter_id
+            AND chapters.book_id = chapter_plan_entries.book_id
+        WHERE chapter_plan_entries.book_id = :bookId
+        ORDER BY chapter_plan_entries.custom_position ASC
+        """,
+    )
+    fun observeForBook(
+        bookId: String,
+        unattributedRule: String,
+    ): Flow<List<ChapterPlanProjection>>
+
+    @Query(
+        """
+        SELECT * FROM chapter_plan_entries
+        WHERE book_id = :bookId
+        ORDER BY custom_position ASC
+        """,
+    )
+    suspend fun getEntriesForBook(bookId: String): List<ChapterPlanEntryEntity>
+
+    @Query(
+        """
+        SELECT chapters.* FROM chapters
+        INNER JOIN chapter_plan_entries
+            ON chapter_plan_entries.chapter_id = chapters.id
+            AND chapter_plan_entries.book_id = chapters.book_id
+        WHERE chapter_plan_entries.book_id = :bookId
+          AND chapter_plan_entries.is_selected = 1
+        ORDER BY chapter_plan_entries.custom_position ASC
+        """,
+    )
+    suspend fun getSelectedChapterHeaders(bookId: String): List<ChapterEntity>
+
+    @Query(
+        """
+        SELECT chapters.* FROM chapters
+        INNER JOIN chapter_plan_entries
+            ON chapter_plan_entries.chapter_id = chapters.id
+            AND chapter_plan_entries.book_id = chapters.book_id
+        WHERE chapter_plan_entries.book_id = :bookId
+          AND chapter_plan_entries.is_selected = 1
+          AND chapter_plan_entries.custom_position > :customPosition
+        ORDER BY chapter_plan_entries.custom_position ASC
+        LIMIT 1
+        """,
+    )
+    suspend fun getFirstSelectedAfter(bookId: String, customPosition: Int): ChapterEntity?
+
+    @Query(
+        """
+        SELECT chapters.* FROM chapters
+        INNER JOIN chapter_plan_entries
+            ON chapter_plan_entries.chapter_id = chapters.id
+            AND chapter_plan_entries.book_id = chapters.book_id
+        WHERE chapter_plan_entries.book_id = :bookId
+          AND chapter_plan_entries.is_selected = 1
+        ORDER BY chapter_plan_entries.custom_position ASC
+        LIMIT 1
+        """,
+    )
+    suspend fun getFirstSelectedChapterHeader(bookId: String): ChapterEntity?
+
+    @Query(
+        """
+        SELECT custom_position FROM chapter_plan_entries
+        WHERE book_id = :bookId AND chapter_id = :chapterId
+        LIMIT 1
+        """,
+    )
+    suspend fun getCustomPosition(bookId: String, chapterId: String): Int?
+
+    @Query("SELECT COUNT(*) FROM chapter_plan_entries WHERE book_id = :bookId")
+    suspend fun countForBook(bookId: String): Int
+
+    @Query("SELECT COUNT(*) FROM chapter_plan_entries WHERE book_id = :bookId AND is_selected = 1")
+    suspend fun countSelectedForBook(bookId: String): Int
+
+    @Query("SELECT COALESCE(MAX(custom_position), -1) FROM chapter_plan_entries WHERE book_id = :bookId")
+    suspend fun getMaxCustomPosition(bookId: String): Int
+
+    @Query(
+        """
+        INSERT OR IGNORE INTO chapter_plan_entries (
+            book_id, chapter_id, is_selected, custom_position, updated_at
+        )
+        SELECT :bookId, chapters.id, 1, chapters.ordinal, :updatedAtEpochMs
+        FROM chapters
+        WHERE chapters.book_id = :bookId
+        """,
+    )
+    suspend fun initializeAllSelected(bookId: String, updatedAtEpochMs: Long)
+
+    @Query(
+        """
+        UPDATE chapter_plan_entries
+        SET is_selected = :selected, updated_at = :updatedAtEpochMs
+        WHERE book_id = :bookId AND chapter_id = :chapterId AND is_selected != :selected
+        """,
+    )
+    suspend fun setSelected(
+        bookId: String,
+        chapterId: String,
+        selected: Boolean,
+        updatedAtEpochMs: Long,
+    ): Int
+
+    @Query(
+        """
+        UPDATE chapter_plan_entries
+        SET is_selected = :selected, updated_at = :updatedAtEpochMs
+        WHERE book_id = :bookId AND is_selected != :selected
+        """,
+    )
+    suspend fun setAllSelected(bookId: String, selected: Boolean, updatedAtEpochMs: Long): Int
+
+    /** Parks all positions above the current range before restoring source ordinals. */
+    @Query(
+        """
+        UPDATE chapter_plan_entries
+        SET custom_position = custom_position + :offset, updated_at = :updatedAtEpochMs
+        WHERE book_id = :bookId
+        """,
+    )
+    suspend fun offsetAllPositions(bookId: String, offset: Int, updatedAtEpochMs: Long): Int
+
+    @Query(
+        """
+        UPDATE chapter_plan_entries
+        SET custom_position = (
+                SELECT chapters.ordinal FROM chapters
+                WHERE chapters.id = chapter_plan_entries.chapter_id
+                  AND chapters.book_id = chapter_plan_entries.book_id
+            ),
+            updated_at = :updatedAtEpochMs
+        WHERE book_id = :bookId
+        """,
+    )
+    suspend fun restoreOriginalPositions(bookId: String, updatedAtEpochMs: Long): Int
+
+    @Query(
+        """
+        UPDATE chapter_plan_entries
+        SET custom_position = :customPosition, updated_at = :updatedAtEpochMs
+        WHERE book_id = :bookId AND chapter_id = :chapterId
+        """,
+    )
+    suspend fun setCustomPosition(
+        bookId: String,
+        chapterId: String,
+        customPosition: Int,
+        updatedAtEpochMs: Long,
+    ): Int
 }
 
 @Dao
@@ -501,6 +676,64 @@ interface PreparationJobDao {
 
     @Upsert
     suspend fun upsert(job: PreparationJobEntity)
+
+    @Query(
+        """
+        UPDATE preparation_jobs
+        SET plan_revision = plan_revision + 1,
+            updated_at_epoch_ms = :updatedAtEpochMs
+        WHERE book_id = :bookId
+        """,
+    )
+    suspend fun incrementPlanRevision(bookId: String, updatedAtEpochMs: Long): Int
+
+    @Query(
+        """
+        UPDATE preparation_jobs
+        SET chapter_plan_confirmed = 1,
+            plan_revision = plan_revision + 1,
+            stage = CASE
+                WHEN chapter_plan_confirmed = 0 THEN :nextStage
+                ELSE stage
+            END,
+            active_chapter_id = NULL,
+            updated_at_epoch_ms = :updatedAtEpochMs
+        WHERE book_id = :bookId
+        """,
+    )
+    suspend fun confirmChapterPlan(bookId: String, nextStage: String, updatedAtEpochMs: Long): Int
+
+    @Query(
+        """
+        UPDATE preparation_jobs
+        SET stage = :stage,
+            completed_units = 0,
+            total_units = 0,
+            progress_fraction = 0,
+            message = :message,
+            retryable = 0,
+            run_state = 'RUNNING',
+            chapter_plan_confirmed = 0,
+            active_chapter_id = NULL,
+            updated_at_epoch_ms = :updatedAtEpochMs
+        WHERE book_id = :bookId
+        """,
+    )
+    suspend fun awaitChapterSelection(
+        bookId: String,
+        stage: String,
+        message: String,
+        updatedAtEpochMs: Long,
+    ): Int
+
+    @Query(
+        """
+        UPDATE preparation_jobs
+        SET active_chapter_id = :chapterId, updated_at_epoch_ms = :updatedAtEpochMs
+        WHERE book_id = :bookId
+        """,
+    )
+    suspend fun setActiveChapter(bookId: String, chapterId: String?, updatedAtEpochMs: Long): Int
 }
 
 @Dao

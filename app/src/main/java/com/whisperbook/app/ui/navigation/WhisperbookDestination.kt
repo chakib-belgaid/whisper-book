@@ -4,6 +4,8 @@ sealed class WhisperbookDestination(val route: String) {
     data object Welcome : WhisperbookDestination("welcome")
     data object Library : WhisperbookDestination("library")
     data object ImportBook : WhisperbookDestination("import")
+    data object Parsing : WhisperbookDestination("parsing")
+    data object ChapterReview : WhisperbookDestination("chapter-review")
     data object NarrationSetup : WhisperbookDestination("narration-setup")
     data object Processing : WhisperbookDestination("processing")
     data object NowPlaying : WhisperbookDestination("listen")

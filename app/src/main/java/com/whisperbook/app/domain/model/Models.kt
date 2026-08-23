@@ -45,6 +45,18 @@ data class Chapter(
         get() = passageCount > 0 && unattributedPassageCount == 0
 }
 
+/** A parsed chapter together with its durable, book-scoped listening-plan state. */
+@Immutable
+data class ChapterPlanEntry(
+    val chapter: Chapter,
+    val isSelected: Boolean,
+    val customPosition: Int,
+) {
+    init {
+        require(customPosition >= 0) { "Chapter plan positions must be non-negative" }
+    }
+}
+
 @Immutable
 data class Passage(
     val id: String,
@@ -125,6 +137,8 @@ data class ChapterVoiceSet(
 enum class PreparationStage {
     COPY_AND_VALIDATE,
     READING_CHAPTERS,
+    AWAITING_CHAPTER_SELECTION,
+    AWAITING_NARRATION_SETUP,
     FINDING_CHARACTERS,
     ASSIGNING_VOICES,
     PREPARING_AUDIO,
@@ -147,6 +161,12 @@ data class PreparationState(
     val message: String? = null,
     val retryable: Boolean = false,
     val runState: PreparationRunState = PreparationRunState.RUNNING,
+    /** True after the user has accepted the selected chapters and their playback order. */
+    val chapterPlanConfirmed: Boolean = true,
+    /** Monotonic book-scoped revision used by workers and playback at chapter boundaries. */
+    val planRevision: Long = 0L,
+    /** Chapter currently owned by an atomic preparation step, if any. */
+    val activeChapterId: String? = null,
 ) {
     companion object {
         val Ready = PreparationState(PreparationStage.READY, progressFraction = 1f)

@@ -24,6 +24,7 @@ class VisualHarnessActivity : ComponentActivity() {
         hideSystemChrome()
         val requested = intent.getStringExtra(EXTRA_SCREEN)
         val start = when (requested) {
+            WELCOME -> WhisperbookDestination.Welcome.route
             CURRENT_CHAPTER -> WhisperbookDestination.CurrentChapter.route()
             else -> WhisperbookDestination.NowPlaying.route
         }
@@ -51,6 +52,7 @@ class VisualHarnessActivity : ComponentActivity() {
 
     companion object {
         const val EXTRA_SCREEN = "screen"
+        const val WELCOME = "welcome"
         const val NOW_PLAYING = "now-playing"
         const val CURRENT_CHAPTER = "current-chapter"
     }

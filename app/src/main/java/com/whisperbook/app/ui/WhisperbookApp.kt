@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -46,6 +47,7 @@ import com.whisperbook.app.domain.model.PreparationStage
 import com.whisperbook.app.domain.model.PreparationState
 import com.whisperbook.app.diagnostics.BetaDiagnostics
 import com.whisperbook.app.integration.WhisperbookViewModel
+import com.whisperbook.app.integration.flux.WhisperbookAction
 import com.whisperbook.app.ui.components.StorybookBottomBar
 import com.whisperbook.app.ui.components.StorybookDestination
 import com.whisperbook.app.ui.components.WhisperBackdrop
@@ -115,6 +117,11 @@ fun WhisperbookApp(
 
         WhisperBackdrop(modifier = modifier.fillMaxSize()) {
             Scaffold(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .safeDrawingPadding()
+                    .padding(top = WhisperbookTheme.spacing.sm)
+                    .testTag("app-safe-area"),
                 containerColor = Color.Transparent,
                 contentColor = WhisperbookTheme.colors.onStage,
                 contentWindowInsets = WindowInsets(0, 0, 0, 0),
@@ -133,6 +140,17 @@ fun WhisperbookApp(
                                         navController.navigateToBottomDestination(
                                             WhisperbookDestination.Library.route,
                                         )
+                                    }
+                                    destination.route == WhisperbookDestination.NowPlaying.route &&
+                                        appState.requiresChapterReview -> {
+                                        navController.navigate(WhisperbookDestination.ChapterReview.route)
+                                    }
+                                    destination.route == WhisperbookDestination.NowPlaying.route &&
+                                        appState.preparationStatus?.stage in setOf(
+                                            PreparationStage.COPY_AND_VALIDATE,
+                                            PreparationStage.READING_CHAPTERS,
+                                        ) -> {
+                                        navController.navigate(WhisperbookDestination.Parsing.route)
                                     }
                                     destination.route == WhisperbookDestination.NowPlaying.route &&
                                         appState.narrationSetupRequired -> {
@@ -157,9 +175,18 @@ fun WhisperbookApp(
                         startDestination = startDestination,
                     )
                     val preparation = appState.preparationStatus
-                    val showPreparation = appState.isBookPreparing &&
-                        currentRoute != WhisperbookDestination.Processing.route
-                    if ((appState.isBusy || showPreparation) && currentRoute != WhisperbookDestination.Processing.route) {
+                    val showPreparation = (appState.isBookPreparing || appState.isBookParsing) &&
+                        currentRoute !in setOf(
+                            WhisperbookDestination.Parsing.route,
+                            WhisperbookDestination.Processing.route,
+                        )
+                    if (
+                        (appState.isBusy || showPreparation) &&
+                        currentRoute !in setOf(
+                            WhisperbookDestination.Parsing.route,
+                            WhisperbookDestination.Processing.route,
+                        )
+                    ) {
                         val operationTakesPriority = appState.isBusy
                         BackgroundWorkStatus(
                             message = if (operationTakesPriority) {
@@ -273,59 +300,5 @@ private fun selectedBottomRoute(route: String): String = when (route) {
 private class ViewModelUiActions(
     private val viewModel: WhisperbookViewModel,
 ) : WhisperbookUiActions {
-    override fun importBook(uri: android.net.Uri) = viewModel.importBook(uri).let { Unit }
-    override fun confirmNarrationSetup(languageCode: String, narratorVoiceId: String) =
-        viewModel.confirmNarrationSetup(languageCode, narratorVoiceId).let { Unit }
-    override fun retryPreparation() {
-        viewModel.clearMessage()
-        viewModel.retryPreparation()
-    }
-    override fun pausePreparation() = viewModel.pausePreparation()
-    override fun resumePreparation() = viewModel.resumePreparation()
-    override fun cancelPreparation() = viewModel.cancelPreparation()
-    override fun deleteSelectedBook() = viewModel.deleteSelectedBook().let { Unit }
-    override fun exportSelectedBook(destination: android.net.Uri) =
-        viewModel.exportSelectedBook(destination).let { Unit }
-    override fun selectBook(bookId: String) = viewModel.selectBook(bookId)
-    override fun selectChapter(chapterId: String) = viewModel.selectChapter(chapterId)
-    override fun playPreviousChapter() = viewModel.playPreviousChapter()
-    override fun playNextChapter() = viewModel.playNextChapter()
-    override fun playSelectedChapter() = viewModel.playSelectedChapter()
-    override fun playOrPause() = viewModel.playOrPause().let { Unit }
-    override fun seekByFraction(delta: Float) = viewModel.seekBy(if (delta < 0f) -15_000L else 15_000L).let { Unit }
-    override fun seekToFraction(fraction: Float) = viewModel.seekToFraction(fraction).let { Unit }
-    override fun seekToPassage(passageId: String) = viewModel.seekToPassage(passageId).let { Unit }
-    override fun correctPassageSpeaker(
-        passageId: String,
-        speakerId: String,
-        scope: com.whisperbook.app.domain.model.SpeakerCorrectionScope,
-    ) = viewModel.correctPassageSpeaker(passageId, speakerId, scope).let { Unit }
-    override fun correctPassageSpeakers(
-        passageIds: List<String>,
-        speakerId: String,
-        scope: com.whisperbook.app.domain.model.SpeakerCorrectionScope,
-    ) = viewModel.correctPassageSpeakers(passageIds, speakerId, scope).let { Unit }
-    override fun cycleSpeed() = viewModel.cycleSpeed()
-    override fun cycleNarrationChunkSize() = viewModel.cycleNarrationChunkSize()
-    override fun downloadLanguagePack(languageCode: String) =
-        viewModel.downloadLanguagePack(languageCode).let { Unit }
-    override fun selectNarrationLanguage(languageCode: String) =
-        viewModel.selectNarrationLanguage(languageCode).let { Unit }
-    override fun cycleSleepTimer() = viewModel.cycleSleepTimer()
-    override fun cycleVoice(characterId: String) = viewModel.cycleVoice(characterId)
-    override fun assignVoice(
-        characterId: String,
-        voiceId: String,
-        regenerationScope: com.whisperbook.app.domain.model.VoiceRegenerationScope,
-    ) = viewModel.assignVoice(characterId, voiceId, regenerationScope).let { Unit }
-    override fun revertVoiceChange() = viewModel.revertVoiceChange().let { Unit }
-    override fun previewCharacter(characterId: String) = viewModel.previewCharacter(characterId).let { Unit }
-    override fun previewVoice(voiceId: String, characterName: String) =
-        viewModel.previewVoice(voiceId, characterName).let { Unit }
-    override fun previewNarrationSetupVoice(voiceId: String, languageCode: String) =
-        viewModel.previewNarrationSetupVoice(voiceId, languageCode).let { Unit }
-    override fun setAutoScroll(enabled: Boolean) = viewModel.setAutoScroll(enabled).let { Unit }
-    override fun setKeepScreenAwake(enabled: Boolean) = viewModel.setKeepScreenAwake(enabled).let { Unit }
-    override fun setLargerText(enabled: Boolean) = viewModel.setLargerText(enabled).let { Unit }
-    override fun completeOnboarding() = viewModel.completeOnboarding().let { Unit }
+    override fun dispatch(action: WhisperbookAction) = viewModel.dispatch(action)
 }

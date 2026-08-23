@@ -14,6 +14,8 @@ class WhisperbookDestinationTest {
 
     @Test
     fun bottomBarExcludesFocusedFlows() {
+        assertTrue(WhisperbookDestination.Parsing.route !in WhisperbookDestination.bottomBarRoutes)
+        assertTrue(WhisperbookDestination.ChapterReview.route !in WhisperbookDestination.bottomBarRoutes)
         assertTrue(WhisperbookDestination.Processing.route !in WhisperbookDestination.bottomBarRoutes)
         assertTrue(WhisperbookDestination.VoiceCast.route !in WhisperbookDestination.bottomBarRoutes)
     }

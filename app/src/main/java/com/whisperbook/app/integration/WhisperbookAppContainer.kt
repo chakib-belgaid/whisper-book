@@ -149,15 +149,20 @@ class WhisperbookAppContainer(context: Context) : WhisperbookServices, Closeable
             // The segment checkpoint is valid immediately, but the queued-prefix duration is not
             // a chapter denominator. Wait for the complete timeline before updating shelf progress.
             if (!cursor.chapterDurationIsFinal) return@installCheckpointSink
+            val selectedPlan = database.chapterPlanDao().getSelectedChapterHeaders(cursor.bookId)
             val chapterPosition = database.chapterDao().getProgressPosition(cursor.bookId, cursor.chapterId)
-            val chapterOrdinal = chapterPosition.chapterOrdinal?.coerceAtLeast(0) ?: 0
+            val selectedIndex = selectedPlan.indexOfFirst { it.id == cursor.chapterId }
+            val chapterOrdinal = selectedIndex.takeIf { it >= 0 }
+                ?: chapterPosition.chapterOrdinal?.coerceAtLeast(0)
+                ?: 0
+            val sequenceSize = selectedPlan.size.takeIf { it > 0 } ?: chapterPosition.chapterCount
             val withinChapter = if (cursor.chapterDurationMs > 0L) {
                 cursor.chapterPositionMs.toFloat().div(cursor.chapterDurationMs).coerceIn(0f, 1f)
             } else {
                 0f
             }
-            val bookProgress = if (chapterPosition.chapterCount <= 0) 0f else {
-                (chapterOrdinal + withinChapter).div(chapterPosition.chapterCount).coerceIn(0f, 1f)
+            val bookProgress = if (sequenceSize <= 0) 0f else {
+                (chapterOrdinal + withinChapter).div(sequenceSize).coerceIn(0f, 1f)
             }
             database.bookDao().updateProgress(
                 bookId = cursor.bookId,
@@ -186,6 +191,9 @@ class WhisperbookAppContainer(context: Context) : WhisperbookServices, Closeable
         require(request.assignment.characterId == request.characterId)
         require(request.fromChapterOrdinal >= 0)
         val chapters = database.chapterDao().getHeadersForBook(request.bookId)
+        val selectedPlan = database.chapterPlanDao().getSelectedChapterHeaders(request.bookId)
+            .takeUnless { it.isEmpty() && database.chapterPlanDao().countForBook(request.bookId) == 0 }
+            ?: chapters
         require(request.fromChapterOrdinal < chapters.size) { "There is no chapter at that regeneration boundary" }
         val selectedChapter = chapters.firstOrNull { it.id == request.selectedChapterId }
             ?: error("The selected chapter does not belong to this book")
@@ -197,7 +205,10 @@ class WhisperbookAppContainer(context: Context) : WhisperbookServices, Closeable
             ?: error("The selected character does not belong to this book")
         val affectedChapters = when (request.scope) {
             VoiceRegenerationScope.THIS_CHAPTER -> listOf(selectedChapter)
-            VoiceRegenerationScope.FROM_THIS_CHAPTER -> chapters.filter { it.ordinal >= selectedChapter.ordinal }
+            VoiceRegenerationScope.FROM_THIS_CHAPTER -> selectedPlan
+                .dropWhile { it.id != selectedChapter.id }
+                .takeIf { it.firstOrNull()?.id == selectedChapter.id }
+                ?: error("The selected chapter is not in the listening plan")
             VoiceRegenerationScope.WHOLE_BOOK -> chapters
         }
         val affectedChapterIds = affectedChapters.mapTo(linkedSetOf()) { it.id }
@@ -214,12 +225,17 @@ class WhisperbookAppContainer(context: Context) : WhisperbookServices, Closeable
                     request.bookId,
                     selectedChapter.id,
                 )
-            VoiceRegenerationScope.FROM_THIS_CHAPTER,
-            VoiceRegenerationScope.WHOLE_BOOK,
-            -> database.audioSegmentDao().getPassageIdsForCharacterFromChapterOrdinal(
+            VoiceRegenerationScope.FROM_THIS_CHAPTER -> affectedChapters.flatMap { chapter ->
+                database.audioSegmentDao().getPassageIdsForCharacterInChapter(
+                    request.characterId,
+                    request.bookId,
+                    chapter.id,
+                )
+            }
+            VoiceRegenerationScope.WHOLE_BOOK -> database.audioSegmentDao().getPassageIdsForCharacterFromChapterOrdinal(
                 request.characterId,
                 request.bookId,
-                affectedChapters.minOf { it.ordinal },
+                0,
             )
         }.toSet()
         val retained = targetPassageIds.takeIf(Collection<String>::isNotEmpty)?.let { passageIds ->
@@ -427,11 +443,18 @@ class WhisperbookAppContainer(context: Context) : WhisperbookServices, Closeable
             ?: return@withContext false
         val previous = restored.previousAssignment ?: change.previousAssignment
         val chapters = database.chapterDao().getHeadersForBook(change.bookId)
+        val selectedPlan = database.chapterPlanDao().getSelectedChapterHeaders(change.bookId)
+            .takeUnless { it.isEmpty() && database.chapterPlanDao().countForBook(change.bookId) == 0 }
+            ?: chapters
+        val boundaryChapter = chapters.firstOrNull { it.ordinal == change.fromChapterOrdinal }
         val affectedChapters = when (change.scope) {
             VoiceRegenerationScope.THIS_CHAPTER ->
                 chapters.filter { it.ordinal == change.fromChapterOrdinal }
             VoiceRegenerationScope.FROM_THIS_CHAPTER ->
-                chapters.filter { it.ordinal >= change.fromChapterOrdinal }
+                boundaryChapter?.let { boundary ->
+                    selectedPlan.dropWhile { it.id != boundary.id }
+                        .takeIf { it.firstOrNull()?.id == boundary.id }
+                }.orEmpty()
             VoiceRegenerationScope.WHOLE_BOOK -> chapters
         }
         val affectedChapterIds = affectedChapters.mapTo(linkedSetOf()) { it.id }

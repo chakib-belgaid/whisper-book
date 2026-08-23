@@ -48,6 +48,7 @@ fun BookDetailsScreen(
     onListen: () -> Unit,
     onVoiceCast: () -> Unit,
     onRemove: () -> Unit,
+    onEditChapters: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     var showRemoveConfirmation by rememberSaveable { mutableStateOf(false) }
@@ -168,6 +169,14 @@ fun BookDetailsScreen(
             }
             Spacer(Modifier.height(4.dp))
             SectionHeading("Chapters")
+            if (onEditChapters != null) {
+                PapercraftButton(
+                    text = "Edit chapter selection and order",
+                    onClick = onEditChapters,
+                    variant = com.whisperbook.app.ui.components.PapercraftButtonVariant.Parchment,
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                )
+            }
             if (appState.chapters.isEmpty()) {
                 Text(
                     text = "Chapters will appear here as soon as the private book scan finishes.",

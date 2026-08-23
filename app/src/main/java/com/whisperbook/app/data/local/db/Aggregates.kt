@@ -22,6 +22,28 @@ data class ChapterAggregate(
     val passages: List<PassageEntity>,
 )
 
+/** Lightweight chapter-plan row used by review UI without loading passage text. */
+data class ChapterPlanProjection(
+    @ColumnInfo(name = "chapter_id")
+    val chapterId: String,
+    @ColumnInfo(name = "book_id")
+    val bookId: String,
+    @ColumnInfo(name = "ordinal")
+    val ordinal: Int,
+    @ColumnInfo(name = "title")
+    val title: String,
+    @ColumnInfo(name = "passage_count")
+    val passageCount: Int,
+    @ColumnInfo(name = "unattributed_passage_count")
+    val unattributedPassageCount: Int,
+    @ColumnInfo(name = "is_selected")
+    val isSelected: Boolean,
+    @ColumnInfo(name = "custom_position")
+    val customPosition: Int,
+    @ColumnInfo(name = "updated_at")
+    val updatedAtEpochMs: Long,
+)
+
 data class CharacterAggregate(
     @Embedded
     val character: StoryCharacterEntity,

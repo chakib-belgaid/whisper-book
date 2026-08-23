@@ -76,10 +76,15 @@ class LocalPlaybackQueueSource(
         chapterId: String,
     ): Result<PlaybackChapterQueue?> = withContext(Dispatchers.IO) {
         try {
-            val chapters = database.chapterDao().getHeadersForBook(bookId)
+            val chapterPlanDao = database.chapterPlanDao()
+            val chapters = chapterPlanDao.getSelectedChapterHeaders(bookId)
             val currentIndex = chapters.indexOfFirst { it.id == chapterId }
-            val nextChapterId = chapters.getOrNull(currentIndex + 1)?.id
-                ?.takeIf { currentIndex >= 0 }
+            val nextChapterId = if (currentIndex >= 0) {
+                chapters.getOrNull(currentIndex + 1)?.id
+            } else {
+                chapterPlanDao.getCustomPosition(bookId, chapterId)
+                    ?.let { position -> chapterPlanDao.getFirstSelectedAfter(bookId, position)?.id }
+            }
             Result.success(nextChapterId?.let { buildQueue(bookId, it) })
         } catch (cancellation: CancellationException) {
             throw cancellation
@@ -100,11 +105,16 @@ class LocalPlaybackQueueSource(
         check(book.narrationProfileSeeded && expectedProfileRevision >= 0) {
             "This book's narration profile is still being migrated"
         }
-        val chapters = database.chapterDao().getHeadersForBook(bookId)
-        check(chapters.isNotEmpty()) { "This book has no prepared chapters yet" }
-        val chapterHeader = requestedChapterId
+        val chapterPlanDao = database.chapterPlanDao()
+        val chapters = chapterPlanDao.getSelectedChapterHeaders(bookId)
+        check(chapters.isNotEmpty()) { "Select at least one chapter before listening" }
+        val checkpoint = database.playbackCheckpointDao().getForBook(bookId)
+        val preferredChapterId = requestedChapterId ?: book.currentChapterId ?: checkpoint?.chapterId
+        val chapterHeader = preferredChapterId
             ?.let { id -> chapters.firstOrNull { it.id == id } }
-            ?: book.currentChapterId?.let { id -> chapters.firstOrNull { it.id == id } }
+            ?: preferredChapterId
+                ?.let { id -> chapterPlanDao.getCustomPosition(bookId, id) }
+                ?.let { position -> chapterPlanDao.getFirstSelectedAfter(bookId, position) }
             ?: chapters.first()
         val chapter = database.chapterDao().getById(chapterHeader.id)
             ?: error("This chapter is no longer available")
@@ -161,10 +171,9 @@ class LocalPlaybackQueueSource(
             .chunked(SQL_QUERY_BATCH_SIZE)
             .flatMap { batch -> database.audioSegmentDao().findByCacheKeys(batch.map { it.request.cacheKey }) }
             .associateBy(AudioSegmentEntity::cacheKey)
-        val checkpoint = database.playbackCheckpointDao().getForBook(bookId)
-            ?.takeIf { it.chapterId == chapterHeader.id }
+        val chapterCheckpoint = checkpoint?.takeIf { it.chapterId == chapterHeader.id }
         val resumeTarget = resolvePlaybackResumeTarget(
-            checkpoint = checkpoint?.let { saved ->
+            checkpoint = chapterCheckpoint?.let { saved ->
                 SavedPlaybackResume(
                     passageId = saved.passageId,
                     segmentId = saved.segmentId,

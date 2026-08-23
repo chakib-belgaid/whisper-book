@@ -12,6 +12,17 @@ val releaseKeyPassword = providers.environmentVariable("WHISPERBOOK_KEY_PASSWORD
 val releaseArtifactBuild = providers.gradleProperty("whisperbookReleaseArtifact")
     .map(String::toBoolean)
     .orElse(false)
+val whisperbookVersionName = providers.gradleProperty("whisperbookVersionName").get().also { value ->
+    require(value.matches(Regex("""\d+\.\d+(?:\.\d+)?"""))) {
+        "whisperbookVersionName must use major.minor or major.minor.patch format"
+    }
+}
+val whisperbookVersionCode = providers.gradleProperty("whisperbookVersionCode")
+    .map { value ->
+        value.toIntOrNull()?.takeIf { it > 0 }
+            ?: error("whisperbookVersionCode must be a positive integer")
+    }
+    .get()
 
 fun gitValue(vararg arguments: String): String = runCatching {
     providers.exec {
@@ -32,8 +43,8 @@ android {
         applicationId = "com.whisperbook.app"
         minSdk = 26
         targetSdk = 36
-        versionCode = 1
-        versionName = "0.1"
+        versionCode = whisperbookVersionCode
+        versionName = whisperbookVersionName
 
         buildConfigField("String", "GIT_COMMIT", "\"$gitCommit\"")
         buildConfigField("boolean", "GIT_DIRTY", gitDirty.toString())
@@ -114,6 +125,24 @@ android {
     }
 
     sourceSets.getByName("androidTest").assets.srcDir("$projectDir/schemas")
+}
+
+tasks.register("printVersionName") {
+    group = "versioning"
+    description = "Prints the canonical Whisperbook version name."
+    inputs.property("canonicalVersionName", whisperbookVersionName)
+    doLast {
+        logger.quiet(inputs.properties.getValue("canonicalVersionName").toString())
+    }
+}
+
+tasks.register("printVersionCode") {
+    group = "versioning"
+    description = "Prints the canonical Android version code."
+    inputs.property("canonicalVersionCode", whisperbookVersionCode)
+    doLast {
+        logger.quiet(inputs.properties.getValue("canonicalVersionCode").toString())
+    }
 }
 
 dependencies {

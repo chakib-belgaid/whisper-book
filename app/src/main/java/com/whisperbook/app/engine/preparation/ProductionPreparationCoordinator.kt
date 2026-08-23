@@ -10,6 +10,7 @@ import androidx.work.WorkManager
 import androidx.work.await
 import androidx.work.workDataOf
 import com.whisperbook.app.data.local.db.PreparationJobDao
+import com.whisperbook.app.data.local.db.PreparationJobEntity
 import com.whisperbook.app.data.local.db.toDomain
 import com.whisperbook.app.data.local.db.toEntity
 import com.whisperbook.app.diagnostics.BetaDiagnostics
@@ -25,6 +26,7 @@ import kotlinx.coroutines.flow.map
 class ProductionPreparationCoordinator internal constructor(
     private val scheduler: PreparationWorkScheduler,
     private val preparationJobs: PreparationJobDao,
+    private val narrationSetupConfirmed: suspend (String) -> Boolean = { true },
 ) : PreparationCoordinator {
     constructor(
         context: Context,
@@ -33,6 +35,9 @@ class ProductionPreparationCoordinator internal constructor(
     ) : this(
         scheduler = WorkManagerPreparationScheduler(workManager),
         preparationJobs = dependencies.database.preparationJobDao(),
+        narrationSetupConfirmed = { bookId ->
+            dependencies.database.bookDao().getById(bookId)?.narrationSetupConfirmed == true
+        },
     ) {
         PreparationRuntime.install(dependencies)
     }
@@ -47,8 +52,11 @@ class ProductionPreparationCoordinator internal constructor(
                 "policy" to PreparationWorkPlan.existingWorkPolicy.name,
             ),
         )
-        scheduleAsRunning(bookId) {
-            scheduler.enqueueUniqueChain(PreparationWorkPlan.uniqueName(bookId), bookId)
+        scheduleAsRunning(bookId) { current ->
+            val stages = stagesToSchedule(bookId, current)
+            if (stages.isNotEmpty()) {
+                scheduler.enqueueUniqueChain(PreparationWorkPlan.uniqueName(bookId), bookId, stages)
+            }
         }
     }
 
@@ -70,8 +78,11 @@ class ProductionPreparationCoordinator internal constructor(
             "preparation_resume_requested",
             mapOf("book_key" to preparationCorrelationKey(bookId)),
         )
-        scheduleAsRunning(bookId) {
-            scheduler.enqueueUniqueChain(PreparationWorkPlan.uniqueName(bookId), bookId)
+        scheduleAsRunning(bookId) { persisted ->
+            val stages = stagesToSchedule(bookId, persisted)
+            if (stages.isNotEmpty()) {
+                scheduler.enqueueUniqueChain(PreparationWorkPlan.uniqueName(bookId), bookId, stages)
+            }
         }
     }
 
@@ -118,20 +129,58 @@ class ProductionPreparationCoordinator internal constructor(
             .distinctUntilChanged()
     }
 
-    private suspend fun scheduleAsRunning(bookId: String, schedule: suspend () -> Unit) {
+    private suspend fun scheduleAsRunning(
+        bookId: String,
+        schedule: suspend (PreparationJobEntity?) -> Unit,
+    ) {
         val previous = preparationJobs.getForBook(bookId)
-        previous?.let { job ->
-            preparationJobs.upsert(
-                job.toDomain()
-                    .copy(runState = PreparationRunState.RUNNING)
-                    .toEntity(bookId, job.attemptCount, System.currentTimeMillis()),
-            )
+        val runStateChanged = previous != null &&
+            previous.runState != PreparationRunState.RUNNING.name
+        val scheduledState = if (previous != null && runStateChanged) {
+            previous.toDomain()
+                .copy(runState = PreparationRunState.RUNNING)
+                .toEntity(bookId, previous.attemptCount, System.currentTimeMillis())
+                .also { preparationJobs.upsert(it) }
+        } else {
+            previous
         }
         try {
-            schedule()
+            schedule(scheduledState)
         } catch (failure: Throwable) {
-            previous?.let { preparationJobs.upsert(it) }
+            if (runStateChanged) previous?.let { preparationJobs.upsert(it) }
             throw failure
+        }
+    }
+
+    private suspend fun stagesToSchedule(
+        bookId: String,
+        current: PreparationJobEntity?,
+    ): List<PreparationStage> {
+        val state = current?.toDomain()
+        if (state == null) return PreparationWorkPlan.parsingStages
+        return when (state.stage) {
+            PreparationStage.COPY_AND_VALIDATE,
+            PreparationStage.READING_CHAPTERS,
+            -> PreparationWorkPlan.parsingStages
+
+            PreparationStage.AWAITING_CHAPTER_SELECTION -> emptyList()
+            PreparationStage.AWAITING_NARRATION_SETUP -> {
+                if (state.chapterPlanConfirmed && narrationSetupConfirmed(bookId)) {
+                    PreparationWorkPlan.narrationStages
+                } else {
+                    emptyList()
+                }
+            }
+
+            PreparationStage.FINDING_CHARACTERS -> PreparationWorkPlan.narrationStages
+            PreparationStage.ASSIGNING_VOICES -> PreparationWorkPlan.narrationStages.drop(1)
+            PreparationStage.PREPARING_AUDIO -> PreparationWorkPlan.narrationStages.takeLast(1)
+            PreparationStage.FAILED -> when {
+                !state.chapterPlanConfirmed -> PreparationWorkPlan.parsingStages
+                !narrationSetupConfirmed(bookId) -> emptyList()
+                else -> PreparationWorkPlan.narrationStages
+            }
+            PreparationStage.READY -> emptyList()
         }
     }
 
@@ -150,7 +199,11 @@ class ProductionPreparationCoordinator internal constructor(
 }
 
 internal interface PreparationWorkScheduler {
-    suspend fun enqueueUniqueChain(uniqueName: String, bookId: String)
+    suspend fun enqueueUniqueChain(
+        uniqueName: String,
+        bookId: String,
+        stages: List<PreparationStage>,
+    )
     suspend fun replaceWithAudioGeneration(uniqueName: String, bookId: String, fromChapterOrdinal: Int)
     suspend fun cancelUnique(uniqueName: String)
 }
@@ -158,8 +211,13 @@ internal interface PreparationWorkScheduler {
 internal class WorkManagerPreparationScheduler(
     private val workManager: WorkManager,
 ) : PreparationWorkScheduler {
-    override suspend fun enqueueUniqueChain(uniqueName: String, bookId: String) {
-        val requests = PreparationWorkPlan.stages.map { stage -> request(bookId, stage) }
+    override suspend fun enqueueUniqueChain(
+        uniqueName: String,
+        bookId: String,
+        stages: List<PreparationStage>,
+    ) {
+        require(stages.isNotEmpty()) { "A preparation chain must contain at least one stage" }
+        val requests = stages.map { stage -> request(bookId, stage) }
         var continuation = workManager.beginUniqueWork(
             uniqueName,
             PreparationWorkPlan.existingWorkPolicy,
@@ -212,13 +270,16 @@ internal object PreparationWorkPlan {
     const val KEY_ERROR_MESSAGE = "error_message"
     const val KEY_FROM_CHAPTER_ORDINAL = "from_chapter_ordinal"
 
-    val stages = listOf(
+    val parsingStages = listOf(
         PreparationStage.COPY_AND_VALIDATE,
         PreparationStage.READING_CHAPTERS,
+    )
+    val narrationStages = listOf(
         PreparationStage.FINDING_CHARACTERS,
         PreparationStage.ASSIGNING_VOICES,
         PreparationStage.PREPARING_AUDIO,
     )
+    val stages = parsingStages + narrationStages
     val existingWorkPolicy: ExistingWorkPolicy = ExistingWorkPolicy.KEEP
     val regenerationWorkPolicy: ExistingWorkPolicy = ExistingWorkPolicy.REPLACE
 

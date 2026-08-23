@@ -2,8 +2,13 @@ package com.whisperbook.app.ui.screens
 
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.BoxWithConstraintsScope
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -15,6 +20,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
@@ -41,9 +47,10 @@ import com.whisperbook.app.ui.components.paperFold
 import com.whisperbook.app.ui.theme.WhisperbookTheme
 
 /**
- * The approved welcome composition is a fixed 360 x 575 dp theatre poster above
- * the shared 65 dp navigation rail. Content remains native and interactive; the
- * generated papercraft frame is only a transparent decorative overlay.
+ * The approved welcome composition is a 360 x 575 dp theatre poster above the shared navigation
+ * rail. Short and narrow phones use a scrollable compact composition so the artwork, actions, and
+ * safe-area clearance never overlap. Content remains native and interactive; the generated
+ * papercraft frame is only a transparent decorative overlay.
  */
 @Composable
 fun WelcomeScreen(
@@ -52,12 +59,42 @@ fun WelcomeScreen(
     onExplore: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    Box(
+    BoxWithConstraints(
         modifier = modifier
             .fillMaxSize()
-            // Full-screen mode intentionally owns the top edge. Scaffold's
-            // remembered status-bar inset must not displace the poster.
             .padding(bottom = contentPadding.calculateBottomPadding()),
+        contentAlignment = Alignment.TopCenter,
+    ) {
+        if (usesCompactWelcomeLayout(maxWidth.value, maxHeight.value)) {
+            CompactWelcomeContent(
+                onImport = onImport,
+                onExplore = onExplore,
+            )
+        } else {
+            WelcomePosterContent(
+                onImport = onImport,
+                onExplore = onExplore,
+            )
+        }
+    }
+}
+
+internal fun usesCompactWelcomeLayout(availableWidthDp: Float, availableHeightDp: Float): Boolean =
+    availableWidthDp < 340f || availableHeightDp < 575f
+
+internal fun welcomePosterHeightDp(availableHeightDp: Float): Float =
+    availableHeightDp.coerceAtMost(640f)
+
+@Composable
+private fun BoxWithConstraintsScope.WelcomePosterContent(
+    onImport: () -> Unit,
+    onExplore: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .align(Alignment.Center)
+            .fillMaxWidth()
+            .height(welcomePosterHeightDp(maxHeight.value).dp),
         contentAlignment = Alignment.TopCenter,
     ) {
         Text(
@@ -86,6 +123,44 @@ fun WelcomeScreen(
                 .padding(horizontal = 10.dp)
                 .fillMaxWidth()
                 .height(232.dp),
+        )
+    }
+}
+
+@Composable
+private fun CompactWelcomeContent(
+    onImport: () -> Unit,
+    onExplore: () -> Unit,
+) {
+    Column(
+        modifier = Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(top = 8.dp, bottom = 8.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Text(
+            text = "Whisperbook",
+            color = WhisperbookTheme.colors.onStage,
+            style = WhisperbookTheme.typography.display,
+            textAlign = TextAlign.Center,
+            maxLines = 1,
+            modifier = Modifier.fillMaxWidth(),
+        )
+        WelcomeTheatreHero(
+            modifier = Modifier
+                .widthIn(max = 252.dp)
+                .fillMaxWidth()
+                .aspectRatio(328f / 270f),
+        )
+        WelcomeParchmentPanel(
+            onImport = onImport,
+            onExplore = onExplore,
+            compact = true,
+            modifier = Modifier
+                .padding(horizontal = 10.dp)
+                .fillMaxWidth(),
         )
     }
 }
@@ -124,15 +199,16 @@ private fun WelcomeParchmentPanel(
     onImport: () -> Unit,
     onExplore: () -> Unit,
     modifier: Modifier = Modifier,
+    compact: Boolean = false,
 ) {
     ParchmentPanel(
         modifier = modifier,
         shape = RoundedCornerShape(topStart = 14.dp, topEnd = 14.dp),
         contentPadding = PaddingValues(
             start = 18.dp,
-            top = 34.dp,
+            top = if (compact) 20.dp else 34.dp,
             end = 18.dp,
-            bottom = 0.dp,
+            bottom = if (compact) 8.dp else 0.dp,
         ),
     ) {
         Text(
@@ -216,7 +292,8 @@ private fun WelcomeButton(
         onClick = onClick,
         interactionSource = interactionSource,
         modifier = modifier
-            .width(258.dp)
+            .widthIn(max = 258.dp)
+            .fillMaxWidth()
             .height(46.dp)
             .paperFold(interactionSource, fold = PaperFold.Control)
             .shadow(

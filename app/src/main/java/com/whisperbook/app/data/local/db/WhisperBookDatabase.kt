@@ -11,6 +11,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
     entities = [
         BookEntity::class,
         ChapterEntity::class,
+        ChapterPlanEntryEntity::class,
         PassageEntity::class,
         StoryCharacterEntity::class,
         CharacterAliasEntity::class,
@@ -20,12 +21,13 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PreparationJobEntity::class,
         PlaybackCheckpointEntity::class,
     ],
-    version = 6,
+    version = 7,
     exportSchema = true,
 )
 abstract class WhisperBookDatabase : RoomDatabase() {
     abstract fun bookDao(): BookDao
     abstract fun chapterDao(): ChapterDao
+    abstract fun chapterPlanDao(): ChapterPlanDao
     abstract fun passageDao(): PassageDao
     abstract fun storyCharacterDao(): StoryCharacterDao
     abstract fun voiceAssignmentDao(): VoiceAssignmentDao
@@ -43,7 +45,14 @@ abstract class WhisperBookDatabase : RoomDatabase() {
                 WhisperBookDatabase::class.java,
                 name,
             )
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
+                .addMigrations(
+                    MIGRATION_1_2,
+                    MIGRATION_2_3,
+                    MIGRATION_3_4,
+                    MIGRATION_4_5,
+                    MIGRATION_5_6,
+                    MIGRATION_6_7,
+                )
                 .build()
 
         val MIGRATION_1_2: Migration = object : Migration(1, 2) {
@@ -200,6 +209,66 @@ abstract class WhisperBookDatabase : RoomDatabase() {
                 database.execSQL(
                     "ALTER TABLE `preparation_jobs` ADD COLUMN `run_state` " +
                         "TEXT NOT NULL DEFAULT 'RUNNING'",
+                )
+            }
+        }
+
+        val MIGRATION_6_7: Migration = object : Migration(6, 7) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    "ALTER TABLE `preparation_jobs` ADD COLUMN `chapter_plan_confirmed` " +
+                        "INTEGER NOT NULL DEFAULT 1",
+                )
+                database.execSQL(
+                    "ALTER TABLE `preparation_jobs` ADD COLUMN `plan_revision` " +
+                        "INTEGER NOT NULL DEFAULT 0",
+                )
+                database.execSQL(
+                    "ALTER TABLE `preparation_jobs` ADD COLUMN `active_chapter_id` TEXT DEFAULT NULL",
+                )
+                database.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS `chapter_plan_entries` (
+                        `book_id` TEXT NOT NULL,
+                        `chapter_id` TEXT NOT NULL,
+                        `is_selected` INTEGER NOT NULL,
+                        `custom_position` INTEGER NOT NULL,
+                        `updated_at` INTEGER NOT NULL,
+                        PRIMARY KEY(`book_id`, `chapter_id`),
+                        FOREIGN KEY(`book_id`) REFERENCES `books`(`id`)
+                            ON UPDATE CASCADE ON DELETE CASCADE,
+                        FOREIGN KEY(`chapter_id`, `book_id`) REFERENCES `chapters`(`id`, `book_id`)
+                            ON UPDATE CASCADE ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_chapter_plan_entries_book_id` " +
+                        "ON `chapter_plan_entries` (`book_id`)",
+                )
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_chapter_plan_entries_chapter_id_book_id` " +
+                        "ON `chapter_plan_entries` (`chapter_id`, `book_id`)",
+                )
+                database.execSQL(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS `index_chapter_plan_entries_book_id_custom_position` " +
+                        "ON `chapter_plan_entries` (`book_id`, `custom_position`)",
+                )
+                database.execSQL(
+                    "CREATE INDEX IF NOT EXISTS `index_chapter_plan_entries_book_id_is_selected_custom_position` " +
+                        "ON `chapter_plan_entries` (`book_id`, `is_selected`, `custom_position`)",
+                )
+                database.execSQL(
+                    """
+                    INSERT OR IGNORE INTO `chapter_plan_entries` (
+                        `book_id`, `chapter_id`, `is_selected`, `custom_position`, `updated_at`
+                    )
+                    SELECT chapters.book_id, chapters.id, 1, chapters.ordinal, 0
+                    FROM `chapters`
+                    """.trimIndent(),
+                )
+                database.execSQL(
+                    "UPDATE `preparation_jobs` SET `chapter_plan_confirmed` = 1",
                 )
             }
         }

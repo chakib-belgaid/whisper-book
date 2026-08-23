@@ -38,8 +38,8 @@ class FfmpegBookMp3Exporter(
         require(bookId.isNotBlank()) { "Choose a book to export" }
         val book = database.bookDao().getById(bookId)
             ?: error("This book is no longer in the library")
-        val chapters = database.chapterDao().getHeadersForBook(bookId).sortedBy { it.ordinal }
-        check(chapters.isNotEmpty()) { "This book has no chapters to export yet" }
+        val chapters = database.chapterPlanDao().getSelectedChapterHeaders(bookId)
+        check(chapters.isNotEmpty()) { "Select at least one chapter before exporting" }
         check(exportCache.exists() || exportCache.mkdirs()) { "Could not prepare the MP3 export" }
 
         val exportId = UUID.randomUUID().toString()
@@ -140,8 +140,8 @@ class FfmpegBookMp3Exporter(
         const val SAVING_PROGRESS = 0.96f
     }
 }
-class FfmpegMp3Encoder {
-    fun encode(
+open class FfmpegMp3Encoder {
+    open fun encode(
         manifest: File,
         destination: File,
         title: String,

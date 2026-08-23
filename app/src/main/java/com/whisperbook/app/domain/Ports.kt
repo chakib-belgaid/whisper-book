@@ -6,6 +6,7 @@ import com.whisperbook.app.domain.model.AudioSegment
 import com.whisperbook.app.domain.model.Book
 import com.whisperbook.app.domain.model.BookFormat
 import com.whisperbook.app.domain.model.Chapter
+import com.whisperbook.app.domain.model.ChapterPlanEntry
 import com.whisperbook.app.domain.model.CharacterVoiceAssignment
 import com.whisperbook.app.domain.model.ChapterVoiceAssignmentSnapshot
 import com.whisperbook.app.domain.model.PlaybackCursor
@@ -212,12 +213,29 @@ interface LibraryRepository {
     fun observeChapter(bookId: String, chapterId: String): Flow<Chapter?> = observeChapters(bookId).map { chapters ->
         chapters.firstOrNull { chapter -> chapter.id == chapterId && chapter.bookId == bookId }
     }
+    fun observeChapterPlan(bookId: String): Flow<List<ChapterPlanEntry>> =
+        observeChapterHeaders(bookId).map { chapters ->
+            chapters.mapIndexed { position, chapter ->
+                ChapterPlanEntry(chapter = chapter, isSelected = true, customPosition = position)
+            }
+        }
     fun observeCharacters(bookId: String): Flow<List<StoryCharacter>>
     suspend fun importBook(
         uri: Uri,
         narrationLanguageCode: String = "en",
     ): Result<String>
     suspend fun confirmNarrationSetup(bookId: String, languageCode: String, narratorVoiceId: String)
+    /** Creates an all-selected plan after the parser has persisted the stable chapter list. */
+    suspend fun initializeChapterPlan(bookId: String) = Unit
+    suspend fun setChapterSelected(bookId: String, chapterId: String, selected: Boolean) = Unit
+    /** [targetSelectedPosition] is zero-based within the selected-chapter list. */
+    suspend fun moveChapter(bookId: String, chapterId: String, targetSelectedPosition: Int) = Unit
+    suspend fun selectAllChapters(bookId: String) = Unit
+    suspend fun deselectAllChapters(bookId: String) = Unit
+    suspend fun restoreOriginalChapterOrder(bookId: String) = Unit
+    suspend fun resetChapterPlan(bookId: String) = Unit
+    suspend fun confirmChapterPlan(bookId: String) = Unit
+    suspend fun getSelectedChapterHeaders(bookId: String): List<Chapter> = emptyList()
     suspend fun updateVoiceAssignment(assignment: CharacterVoiceAssignment)
     suspend fun deleteBook(bookId: String)
 }

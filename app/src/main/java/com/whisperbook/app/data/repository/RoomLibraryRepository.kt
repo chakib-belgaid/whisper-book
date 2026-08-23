@@ -7,10 +7,12 @@ import com.whisperbook.app.data.local.db.PreparationJobEntity
 import com.whisperbook.app.data.local.db.WhisperBookDatabase
 import com.whisperbook.app.data.local.db.toDomain
 import com.whisperbook.app.data.local.db.toEntity
+import com.whisperbook.app.data.local.db.toHeaderDomain
 import com.whisperbook.app.domain.BookImporter
 import com.whisperbook.app.domain.LibraryRepository
 import com.whisperbook.app.domain.model.Book
 import com.whisperbook.app.domain.model.Chapter
+import com.whisperbook.app.domain.model.ChapterPlanEntry
 import com.whisperbook.app.domain.model.CharacterVoiceAssignment
 import com.whisperbook.app.domain.model.NarrationLanguage
 import com.whisperbook.app.domain.model.PreparationStage
@@ -53,6 +55,12 @@ class RoomLibraryRepository(
         .observeById(bookId, chapterId)
         .map { chapter -> chapter?.toDomain() }
         .distinctUntilChanged()
+
+    override fun observeChapterPlan(bookId: String): Flow<List<ChapterPlanEntry>> =
+        database.chapterPlanDao()
+            .observeForBook(bookId, PREPARATION_UNATTRIBUTED_RULE)
+            .map { entries -> entries.map { it.toDomain() } }
+            .distinctUntilChanged()
 
     override fun observeCharacters(bookId: String): Flow<List<StoryCharacter>> =
         database.storyCharacterDao()
@@ -104,6 +112,9 @@ class RoomLibraryRepository(
                         progressFraction = 1f,
                         message = "Copied securely to this device",
                         retryable = false,
+                        chapterPlanConfirmed = false,
+                        planRevision = 0L,
+                        activeChapterId = null,
                         attemptCount = 0,
                         updatedAtEpochMs = now,
                     ),
@@ -131,6 +142,145 @@ class RoomLibraryRepository(
         }
     }
 
+    override suspend fun initializeChapterPlan(bookId: String) {
+        require(bookId.isNotBlank()) { "Book id must not be blank" }
+        val now = clockEpochMs()
+        database.withTransaction {
+            check(database.bookDao().getById(bookId) != null) { "Unknown book: $bookId" }
+            database.chapterPlanDao().initializeAllSelected(bookId, now)
+            val chapterCount = database.chapterDao().countForBook(bookId)
+            check(chapterCount > 0) { "A chapter plan requires at least one parsed chapter" }
+            check(database.chapterPlanDao().countForBook(bookId) == chapterCount) {
+                "Chapter plan does not cover every parsed chapter"
+            }
+            check(
+                database.preparationJobDao().awaitChapterSelection(
+                    bookId = bookId,
+                    stage = PreparationStage.AWAITING_CHAPTER_SELECTION.name,
+                    message = "Choose the chapters you want to hear",
+                    updatedAtEpochMs = now,
+                ) == 1,
+            ) { "Missing preparation job for book: $bookId" }
+        }
+    }
+
+    override suspend fun setChapterSelected(bookId: String, chapterId: String, selected: Boolean) {
+        require(bookId.isNotBlank()) { "Book id must not be blank" }
+        require(chapterId.isNotBlank()) { "Chapter id must not be blank" }
+        val now = clockEpochMs()
+        database.withTransaction {
+            val changed = database.chapterPlanDao().setSelected(bookId, chapterId, selected, now)
+            if (changed == 0) {
+                check(database.chapterPlanDao().getCustomPosition(bookId, chapterId) != null) {
+                    "Chapter is not part of this book's plan"
+                }
+                return@withTransaction
+            }
+            incrementPlanRevisionOrThrow(bookId, now)
+        }
+    }
+
+    override suspend fun moveChapter(
+        bookId: String,
+        chapterId: String,
+        targetSelectedPosition: Int,
+    ) {
+        require(bookId.isNotBlank()) { "Book id must not be blank" }
+        require(chapterId.isNotBlank()) { "Chapter id must not be blank" }
+        require(targetSelectedPosition >= 0) { "Target position must not be negative" }
+        val now = clockEpochMs()
+        database.withTransaction {
+            val selected = database.chapterPlanDao().getEntriesForBook(bookId).filter { it.isSelected }
+            val sourcePosition = selected.indexOfFirst { it.chapterId == chapterId }
+            check(sourcePosition >= 0) { "Only selected chapters can be reordered" }
+            require(targetSelectedPosition in selected.indices) { "Target position is outside the selected plan" }
+            if (sourcePosition == targetSelectedPosition) return@withTransaction
+
+            val reordered = selected.toMutableList().apply {
+                add(targetSelectedPosition, removeAt(sourcePosition))
+            }
+            val availablePositions = selected.map { it.customPosition }
+            val changed = reordered.mapIndexedNotNull { index, entry ->
+                val targetPosition = availablePositions[index]
+                if (entry.customPosition == targetPosition) null else entry to targetPosition
+            }
+            // Vacate the affected unique slots first; observers only see the committed result.
+            changed.forEachIndexed { index, (entry, _) ->
+                check(
+                    database.chapterPlanDao().setCustomPosition(
+                        bookId,
+                        entry.chapterId,
+                        -index - 1,
+                        now,
+                    ) == 1,
+                )
+            }
+            changed.forEach { (entry, targetPosition) ->
+                check(
+                    database.chapterPlanDao().setCustomPosition(
+                        bookId,
+                        entry.chapterId,
+                        targetPosition,
+                        now,
+                    ) == 1,
+                )
+            }
+            incrementPlanRevisionOrThrow(bookId, now)
+        }
+    }
+
+    override suspend fun selectAllChapters(bookId: String) {
+        setAllChaptersSelected(bookId, selected = true)
+    }
+
+    override suspend fun deselectAllChapters(bookId: String) {
+        setAllChaptersSelected(bookId, selected = false)
+    }
+
+    override suspend fun restoreOriginalChapterOrder(bookId: String) {
+        require(bookId.isNotBlank()) { "Book id must not be blank" }
+        val now = clockEpochMs()
+        database.withTransaction {
+            if (!restoreOriginalOrderIfNeeded(bookId, now)) return@withTransaction
+            incrementPlanRevisionOrThrow(bookId, now)
+        }
+    }
+
+    override suspend fun resetChapterPlan(bookId: String) {
+        require(bookId.isNotBlank()) { "Book id must not be blank" }
+        val now = clockEpochMs()
+        database.withTransaction {
+            val selectionChanged = database.chapterPlanDao().setAllSelected(bookId, true, now) > 0
+            val orderChanged = restoreOriginalOrderIfNeeded(bookId, now)
+            if (!selectionChanged && !orderChanged) return@withTransaction
+            incrementPlanRevisionOrThrow(bookId, now)
+        }
+    }
+
+    override suspend fun confirmChapterPlan(bookId: String) {
+        require(bookId.isNotBlank()) { "Book id must not be blank" }
+        val now = clockEpochMs()
+        database.withTransaction {
+            val chapterCount = database.chapterDao().countForBook(bookId)
+            check(chapterCount > 0 && database.chapterPlanDao().countForBook(bookId) == chapterCount) {
+                "Chapter plan does not cover every parsed chapter"
+            }
+            check(database.chapterPlanDao().countSelectedForBook(bookId) > 0) {
+                "Select at least one chapter before continuing"
+            }
+            check(
+                database.preparationJobDao().confirmChapterPlan(
+                    bookId = bookId,
+                    nextStage = PreparationStage.AWAITING_NARRATION_SETUP.name,
+                    updatedAtEpochMs = now,
+                ) == 1,
+            ) { "Missing preparation job for book: $bookId" }
+        }
+    }
+
+    override suspend fun getSelectedChapterHeaders(bookId: String): List<Chapter> =
+        database.chapterPlanDao().getSelectedChapterHeaders(bookId).map { it.toHeaderDomain() }
+
     override suspend fun updateVoiceAssignment(assignment: CharacterVoiceAssignment) {
         database.voiceAssignmentDao().upsert(assignment.toEntity())
     }
@@ -149,6 +299,39 @@ class RoomLibraryRepository(
             artifacts.privateSourcePath?.let(::File)?.delete()
             artifacts.audioPaths.map(::File).forEach(File::delete)
             characterMetadataCatalog?.delete(bookId)
+        }
+    }
+
+    private suspend fun setAllChaptersSelected(bookId: String, selected: Boolean) {
+        require(bookId.isNotBlank()) { "Book id must not be blank" }
+        val now = clockEpochMs()
+        database.withTransaction {
+            if (database.chapterPlanDao().setAllSelected(bookId, selected, now) == 0) {
+                check(database.chapterPlanDao().countForBook(bookId) > 0) {
+                    "This book has no initialized chapter plan"
+                }
+                return@withTransaction
+            }
+            incrementPlanRevisionOrThrow(bookId, now)
+        }
+    }
+
+    private suspend fun restoreOriginalOrderIfNeeded(bookId: String, updatedAtEpochMs: Long): Boolean {
+        val entries = database.chapterPlanDao().getEntriesForBook(bookId)
+        check(entries.isNotEmpty()) { "This book has no initialized chapter plan" }
+        val sourceOrdinals = database.chapterDao().getHeadersForBook(bookId).associate { it.id to it.ordinal }
+        val changed = entries.any { entry -> sourceOrdinals[entry.chapterId] != entry.customPosition }
+        if (!changed) return false
+        val maximumPosition = database.chapterPlanDao().getMaxCustomPosition(bookId)
+        val offset = Math.addExact(Math.addExact(maximumPosition, entries.size), 1)
+        database.chapterPlanDao().offsetAllPositions(bookId, offset, updatedAtEpochMs)
+        database.chapterPlanDao().restoreOriginalPositions(bookId, updatedAtEpochMs)
+        return true
+    }
+
+    private suspend fun incrementPlanRevisionOrThrow(bookId: String, updatedAtEpochMs: Long) {
+        check(database.preparationJobDao().incrementPlanRevision(bookId, updatedAtEpochMs) == 1) {
+            "Missing preparation job for book: $bookId"
         }
     }
 }

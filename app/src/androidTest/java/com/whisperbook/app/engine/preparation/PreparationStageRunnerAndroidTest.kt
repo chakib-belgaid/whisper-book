@@ -9,6 +9,7 @@ import com.whisperbook.app.data.local.db.ChapterEntity
 import com.whisperbook.app.data.local.db.ChapterVoiceAssignmentEntity
 import com.whisperbook.app.data.local.db.CharacterAliasEntity
 import com.whisperbook.app.data.local.db.PassageEntity
+import com.whisperbook.app.data.local.db.PreparationJobEntity
 import com.whisperbook.app.data.local.db.StoryCharacterEntity
 import com.whisperbook.app.data.local.db.VoiceAssignmentEntity
 import com.whisperbook.app.data.local.db.WhisperBookDatabase
@@ -51,7 +52,7 @@ class PreparationStageRunnerAndroidTest {
     private val context: Context = ApplicationProvider.getApplicationContext()
 
     @Test
-    fun preparationCannotStartBeforeNarrationSetupIsConfirmed() = runBlocking {
+    fun structuralParsingStopsForChapterReviewBeforeNarrationSetup() = runBlocking {
         val database = Room.inMemoryDatabaseBuilder(context, WhisperBookDatabase::class.java).build()
         try {
             database.bookDao().insert(
@@ -60,23 +61,114 @@ class PreparationStageRunnerAndroidTest {
                     narrationSetupConfirmed = false,
                 ),
             )
+            database.chapterDao().insertAll(
+                listOf(ChapterEntity(CHAPTER_ONE_ID, BOOK_ID, 0, "Opening")),
+            )
+            database.passageDao().insertAll(
+                listOf(
+                    provisionalPassage(
+                        id = "$CHAPTER_ONE_ID-passage-1",
+                        chapterId = CHAPTER_ONE_ID,
+                        text = "The parsed opening remains local.",
+                    ),
+                ),
+            )
+            val attributor = StreamingChapterAttributor()
             val runner = PreparationStageRunner(
                 dependencies = PreparationDependencies(
                     database = database,
                     publicationExtractor = NeverUsedPublicationExtractor,
-                    speakerAttributor = StreamingChapterAttributor(),
+                    speakerAttributor = attributor,
                     ttsEngineFactory = LocalTtsEngineFactory { NeverUsedTtsEngine },
                     audioSegmentStore = AppPrivateAudioSegmentStore(context),
                 ),
             )
 
-            val failure = runCatching {
-                runner.run(BOOK_ID, PreparationStage.COPY_AND_VALIDATE, attemptCount = 0)
-            }.exceptionOrNull()
+            runner.run(BOOK_ID, PreparationStage.READING_CHAPTERS, attemptCount = 0)
 
-            assertTrue(failure is PreparationPipelineException)
-            assertEquals("narration-setup-required", (failure as PreparationPipelineException).code)
-            assertNull(database.preparationJobDao().getForBook(BOOK_ID))
+            val checkpoint = requireNotNull(database.preparationJobDao().getForBook(BOOK_ID))
+            assertEquals(PreparationStage.AWAITING_CHAPTER_SELECTION.name, checkpoint.stage)
+            assertEquals(false, checkpoint.chapterPlanConfirmed)
+            assertEquals(
+                listOf(CHAPTER_ONE_ID),
+                database.chapterPlanDao().getSelectedChapterHeaders(BOOK_ID).map { it.id },
+            )
+
+            // A stale WorkManager retry is also a successful no-op at the chapter-review gate.
+            runner.run(BOOK_ID, PreparationStage.FINDING_CHARACTERS, attemptCount = 1)
+            assertTrue(attributor.calls.isEmpty())
+            assertEquals(
+                PreparationStage.AWAITING_CHAPTER_SELECTION.name,
+                database.preparationJobDao().getForBook(BOOK_ID)?.stage,
+            )
+
+            val awaitingSelection = requireNotNull(database.preparationJobDao().getForBook(BOOK_ID))
+            database.preparationJobDao().upsert(
+                awaitingSelection.copy(
+                    stage = PreparationStage.AWAITING_NARRATION_SETUP.name,
+                    chapterPlanConfirmed = true,
+                ),
+            )
+            runner.run(BOOK_ID, PreparationStage.FINDING_CHARACTERS, attemptCount = 2)
+            assertTrue(attributor.calls.isEmpty())
+            assertEquals(
+                PreparationStage.AWAITING_NARRATION_SETUP.name,
+                database.preparationJobDao().getForBook(BOOK_ID)?.stage,
+            )
+        } finally {
+            database.close()
+        }
+    }
+
+    @Test
+    fun findingCharactersStartsWithFirstSelectedChapterInCustomPlan() = runBlocking {
+        val database = Room.inMemoryDatabaseBuilder(context, WhisperBookDatabase::class.java).build()
+        val attributor = StreamingChapterAttributor()
+        try {
+            insertConfirmedBook(database, testBook())
+            database.chapterDao().insertAll(
+                listOf(
+                    ChapterEntity(CHAPTER_ONE_ID, BOOK_ID, 0, "Opening"),
+                    ChapterEntity(CHAPTER_TWO_ID, BOOK_ID, 1, "Chosen opening"),
+                ),
+            )
+            database.passageDao().insertAll(
+                listOf(
+                    provisionalPassage("$CHAPTER_ONE_ID-passage-1", CHAPTER_ONE_ID, "Skip me."),
+                    provisionalPassage("$CHAPTER_TWO_ID-passage-1", CHAPTER_TWO_ID, "Bob begins."),
+                ),
+            )
+            database.chapterPlanDao().initializeAllSelected(BOOK_ID, updatedAtEpochMs = 2L)
+            assertEquals(
+                1,
+                database.chapterPlanDao().setSelected(
+                    BOOK_ID,
+                    CHAPTER_ONE_ID,
+                    selected = false,
+                    updatedAtEpochMs = 3L,
+                ),
+            )
+            val runner = PreparationStageRunner(
+                dependencies = PreparationDependencies(
+                    database = database,
+                    publicationExtractor = NeverUsedPublicationExtractor,
+                    speakerAttributor = attributor,
+                    ttsEngineFactory = LocalTtsEngineFactory { NeverUsedTtsEngine },
+                    audioSegmentStore = AppPrivateAudioSegmentStore(context),
+                ),
+            )
+
+            runner.run(BOOK_ID, PreparationStage.FINDING_CHARACTERS, attemptCount = 0)
+
+            assertEquals(listOf(CHAPTER_TWO_ID), attributor.calls.map { it.chapterId })
+            assertEquals(
+                UNATTRIBUTED_RULE,
+                database.passageDao().getForChapter(CHAPTER_ONE_ID).single().attributionRule,
+            )
+            assertEquals(
+                PreparationStage.ASSIGNING_VOICES.name,
+                database.preparationJobDao().getForBook(BOOK_ID)?.stage,
+            )
         } finally {
             database.close()
         }
@@ -114,7 +206,7 @@ class PreparationStageRunnerAndroidTest {
         )
 
         try {
-            database.bookDao().insert(testBook())
+            insertConfirmedBook(database, testBook())
             database.chapterDao().insertAll(
                 listOf(
                     ChapterEntity(CHAPTER_ONE_ID, BOOK_ID, 0, "Opening"),
@@ -216,7 +308,7 @@ class PreparationStageRunnerAndroidTest {
         val database = Room.inMemoryDatabaseBuilder(context, WhisperBookDatabase::class.java).build()
 
         try {
-            database.bookDao().insert(testBook())
+            insertConfirmedBook(database, testBook())
             database.chapterDao().insertAll(
                 listOf(ChapterEntity(CHAPTER_ONE_ID, BOOK_ID, 0, "Opening")),
             )
@@ -261,7 +353,7 @@ class PreparationStageRunnerAndroidTest {
         val database = Room.inMemoryDatabaseBuilder(context, WhisperBookDatabase::class.java).build()
 
         try {
-            database.bookDao().insert(testBook().copy(preferredNarratorVoiceId = "bella"))
+            insertConfirmedBook(database, testBook().copy(preferredNarratorVoiceId = "bella"))
             database.chapterDao().insertAll(
                 listOf(ChapterEntity(CHAPTER_ONE_ID, BOOK_ID, 0, "Opening")),
             )
@@ -322,7 +414,7 @@ class PreparationStageRunnerAndroidTest {
         )
 
         try {
-            database.bookDao().insert(testBook())
+            insertConfirmedBook(database, testBook())
             database.chapterDao().insertAll(
                 listOf(
                     ChapterEntity(CHAPTER_ONE_ID, BOOK_ID, 0, "Opening"),
@@ -384,7 +476,7 @@ class PreparationStageRunnerAndroidTest {
         }.joinToString(" ")
 
         try {
-            database.bookDao().insert(testBook())
+            insertConfirmedBook(database, testBook())
             database.chapterDao().insertAll(
                 listOf(
                     ChapterEntity(CHAPTER_ONE_ID, BOOK_ID, 0, "Opening"),
@@ -525,6 +617,27 @@ class PreparationStageRunnerAndroidTest {
         progressFraction = 0f,
         lastOpenedAtEpochMs = 1L,
     )
+
+    private suspend fun insertConfirmedBook(
+        database: WhisperBookDatabase,
+        book: BookEntity,
+    ) {
+        database.bookDao().insert(book)
+        database.preparationJobDao().upsert(
+            PreparationJobEntity(
+                bookId = book.id,
+                stage = PreparationStage.FINDING_CHARACTERS.name,
+                completedUnits = 0,
+                totalUnits = 0,
+                progressFraction = 0f,
+                message = null,
+                retryable = false,
+                attemptCount = 0,
+                updatedAtEpochMs = 1L,
+                chapterPlanConfirmed = true,
+            ),
+        )
+    }
 
     private fun testCharacter() = StoryCharacterEntity(
         id = "$BOOK_ID-character-alice",

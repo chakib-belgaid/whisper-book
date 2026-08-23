@@ -50,6 +50,7 @@ object DemoLibrarySeeder {
             database.chapterDao().insertAll(
                 listOf(ChapterEntity(CHAPTER_ID, BOOK_ID, 0, "The Lantern in the Wood")),
             )
+            database.chapterPlanDao().initializeAllSelected(BOOK_ID, nowEpochMs)
             database.storyCharacterDao().insertAll(
                 listOf(
                     StoryCharacterEntity(

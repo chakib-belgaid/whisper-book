@@ -23,6 +23,7 @@ import com.whisperbook.app.domain.model.SpeakerCorrectionScope
 import com.whisperbook.app.domain.model.VoiceRegenerationScope
 import com.whisperbook.app.domain.model.VoiceDescriptor
 import com.whisperbook.app.integration.WhisperbookUiSnapshot
+import com.whisperbook.app.integration.flux.WhisperbookAction
 import com.whisperbook.app.ui.screens.WhisperbookAppState
 import com.whisperbook.app.ui.screens.WhisperbookUiActions
 import org.junit.Assert.assertEquals
@@ -507,6 +508,7 @@ private class NavigationBookActions(
     private val onConfirmNarrationSetup: (String, String) -> Unit = { _, _ -> },
     private val onSelectBook: (String) -> Unit,
 ) : WhisperbookUiActions {
+    override fun dispatch(action: WhisperbookAction) = Unit
     override fun importBook(uri: Uri) = onImportBook(uri)
     override fun confirmNarrationSetup(languageCode: String, narratorVoiceId: String) =
         onConfirmNarrationSetup(languageCode, narratorVoiceId)

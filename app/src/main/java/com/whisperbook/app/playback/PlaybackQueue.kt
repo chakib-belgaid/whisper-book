@@ -27,7 +27,7 @@ fun interface PlaybackQueueSource {
         return result
     }
 
-    /** Resolves the chapter immediately after [chapterId], or null at the end of the book. */
+    /** Resolves the chapter immediately after [chapterId] in the selected listening plan. */
     suspend fun loadNext(bookId: String, chapterId: String): Result<PlaybackChapterQueue?> =
         Result.success(null)
 }

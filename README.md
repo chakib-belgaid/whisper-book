@@ -13,7 +13,7 @@ Whisperbook is an offline-first Android reader that converts a local EPUB or PDF
 
 ## Download
 
-Download the installable APK and its SHA-256 checksum from the [latest GitHub release](https://github.com/chakib-belgaid/whisper-book/releases/latest). The initial `v0.1` artifact is debug-signed and installs as `com.whisperbook.app.debug`; it is intended for direct testing rather than Play Store distribution.
+Download the installable APK and its SHA-256 checksum from the [latest GitHub release](https://github.com/chakib-belgaid/whisper-book/releases/latest). The current source version is `v0.5` (Android version code `5`). Published APKs are debug-signed and install as `com.whisperbook.app.debug`; they are intended for direct testing rather than Play Store distribution.
 
 ## See it working
 
@@ -147,6 +147,15 @@ JVM tests cover document parsing, attribution, persistence mapping, cache behavi
 CI runs unit tests, lint, and an unsigned release build on every push and pull request.
 
 ## Release builds
+
+`gradle.properties` is the single version source through `whisperbookVersionName` and
+`whisperbookVersionCode`. Release tags must match `v<whisperbookVersionName>`; CI checks this
+before publishing. The current values can be inspected without parsing build files:
+
+```bash
+./gradlew -q :app:printVersionName
+./gradlew -q :app:printVersionCode
+```
 
 Release builds are minified and resource-shrunk. Provide all four signing values to generate a signed artifact:
 

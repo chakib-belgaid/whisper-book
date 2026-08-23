@@ -80,6 +80,45 @@ data class ChapterEntity(
 )
 
 @Entity(
+    tableName = "chapter_plan_entries",
+    primaryKeys = ["book_id", "chapter_id"],
+    foreignKeys = [
+        ForeignKey(
+            entity = BookEntity::class,
+            parentColumns = ["id"],
+            childColumns = ["book_id"],
+            onDelete = ForeignKey.CASCADE,
+            onUpdate = ForeignKey.CASCADE,
+        ),
+        ForeignKey(
+            entity = ChapterEntity::class,
+            parentColumns = ["id", "book_id"],
+            childColumns = ["chapter_id", "book_id"],
+            onDelete = ForeignKey.CASCADE,
+            onUpdate = ForeignKey.CASCADE,
+        ),
+    ],
+    indices = [
+        Index(value = ["book_id"]),
+        Index(value = ["chapter_id", "book_id"]),
+        Index(value = ["book_id", "custom_position"], unique = true),
+        Index(value = ["book_id", "is_selected", "custom_position"]),
+    ],
+)
+data class ChapterPlanEntryEntity(
+    @ColumnInfo(name = "book_id")
+    val bookId: String,
+    @ColumnInfo(name = "chapter_id")
+    val chapterId: String,
+    @ColumnInfo(name = "is_selected")
+    val isSelected: Boolean,
+    @ColumnInfo(name = "custom_position")
+    val customPosition: Int,
+    @ColumnInfo(name = "updated_at")
+    val updatedAtEpochMs: Long,
+)
+
+@Entity(
     tableName = "characters",
     primaryKeys = ["id"],
     foreignKeys = [
@@ -319,6 +358,12 @@ data class PreparationJobEntity(
     val retryable: Boolean,
     @ColumnInfo(name = "run_state", defaultValue = "'RUNNING'")
     val runState: String = "RUNNING",
+    @ColumnInfo(name = "chapter_plan_confirmed", defaultValue = "1")
+    val chapterPlanConfirmed: Boolean = true,
+    @ColumnInfo(name = "plan_revision", defaultValue = "0")
+    val planRevision: Long = 0L,
+    @ColumnInfo(name = "active_chapter_id", defaultValue = "NULL")
+    val activeChapterId: String? = null,
     @ColumnInfo(name = "attempt_count")
     val attemptCount: Int,
     @ColumnInfo(name = "updated_at_epoch_ms")

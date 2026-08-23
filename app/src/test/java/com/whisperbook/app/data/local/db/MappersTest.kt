@@ -37,6 +37,9 @@ class MappersTest {
                     progressFraction = 0.3f,
                     message = "Finding voices",
                     retryable = false,
+                    chapterPlanConfirmed = false,
+                    planRevision = 7L,
+                    activeChapterId = "chapter-1",
                     attemptCount = 1,
                     updatedAtEpochMs = 42L,
                 ),
@@ -51,6 +54,9 @@ class MappersTest {
         assertEquals(1f, mapped.progressFraction)
         assertEquals(PreparationStage.FINDING_CHARACTERS, mapped.preparation.stage)
         assertEquals(3, mapped.preparation.completedUnits)
+        assertEquals(false, mapped.preparation.chapterPlanConfirmed)
+        assertEquals(7L, mapped.preparation.planRevision)
+        assertEquals("chapter-1", mapped.preparation.activeChapterId)
         assertEquals(42, mapped.chapterCount)
         assertEquals(6, mapped.currentChapterOrdinal)
         assertNull(mapped.sourceUri)

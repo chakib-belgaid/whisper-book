@@ -6,6 +6,7 @@ import com.whisperbook.app.domain.model.AudioSegmentState
 import com.whisperbook.app.domain.model.Book
 import com.whisperbook.app.domain.model.BookFormat
 import com.whisperbook.app.domain.model.Chapter
+import com.whisperbook.app.domain.model.ChapterPlanEntry
 import com.whisperbook.app.domain.model.CharacterColorRole
 import com.whisperbook.app.domain.model.CharacterAgeGroup
 import com.whisperbook.app.domain.model.CharacterGender
@@ -75,6 +76,9 @@ fun PreparationJobEntity.toDomain(): PreparationState = PreparationState(
     message = message,
     retryable = retryable,
     runState = enumValueOrDefault(runState, PreparationRunState.RUNNING),
+    chapterPlanConfirmed = chapterPlanConfirmed,
+    planRevision = planRevision.coerceAtLeast(0L),
+    activeChapterId = activeChapterId,
 )
 
 fun PreparationState.toEntity(
@@ -90,6 +94,9 @@ fun PreparationState.toEntity(
     message = message,
     retryable = retryable,
     runState = runState.name,
+    chapterPlanConfirmed = chapterPlanConfirmed,
+    planRevision = planRevision.coerceAtLeast(0L),
+    activeChapterId = activeChapterId,
     attemptCount = attemptCount.coerceAtLeast(0),
     updatedAtEpochMs = updatedAtEpochMs,
 )
@@ -117,6 +124,27 @@ fun ChapterHeaderProjection.toDomain(): Chapter = Chapter(
     passages = emptyList(),
     passageCount = passageCount.coerceAtLeast(0),
     unattributedPassageCount = unattributedPassageCount.coerceAtLeast(0),
+)
+
+fun ChapterPlanProjection.toDomain(): ChapterPlanEntry = ChapterPlanEntry(
+    chapter = Chapter(
+        id = chapterId,
+        bookId = bookId,
+        ordinal = ordinal,
+        title = title,
+        passages = emptyList(),
+        passageCount = passageCount.coerceAtLeast(0),
+        unattributedPassageCount = unattributedPassageCount.coerceAtLeast(0),
+    ),
+    isSelected = isSelected,
+    customPosition = customPosition.coerceAtLeast(0),
+)
+
+fun ChapterEntity.toHeaderDomain(): Chapter = Chapter(
+    id = id,
+    bookId = bookId,
+    ordinal = ordinal,
+    title = title,
 )
 
 fun Chapter.toEntity(): ChapterEntity = ChapterEntity(

@@ -18,6 +18,7 @@ Editable diagrams.net source: [system-architecture.drawio](diagrams/system-archi
 | --- | --- | --- |
 | `ui` | Compose screens, navigation, design tokens, accessibility semantics, and user-facing state | `WhisperbookApp`, `WhisperbookNavHost`, `WhisperbookAppState` |
 | `integration` | UI orchestration and process-level dependency composition | `WhisperbookViewModel`, `WhisperbookAppContainer`, `WhisperbookServices` |
+| `integration.flux` | Typed user actions, immutable transient app state, synchronous store, and pure reducer mutations | `WhisperbookAction`, `FluxStore`, `WhisperbookFluxState` |
 | `domain` | Stable data models and ports used across storage, preparation, and playback | `Models.kt`, `Ports.kt` |
 | `engine.document` | SAF import, byte-signature validation, EPUB parsing, PDF extraction, and offline OCR | `SafBookImporter`, `OfflinePublicationExtractor`, `AndroidPdfOcrHook` |
 | `engine.attribution` | Dialogue scanning, speaker attribution, alias handling, first-person narration detection, and confidence-bearing character profiles | `DialogueScanner`, `HeuristicSpeakerAttributor`, `CharacterProfileInferencer` |
@@ -36,14 +37,12 @@ The project does not enforce these boundaries with separate Gradle modules, so t
 
 ```text
 Compose UI
-    ↓
-ViewModel / integration
-    ↓
-domain ports and models
-    ↓
-data, preparation, audio, and playback implementations
-    ↓
-Android platform + Room + WorkManager + Media3 + sherpa-onnx
+    ↓ typed WhisperbookAction
+ViewModel effect dispatcher
+    ├──→ domain ports → data, preparation, audio, and playback → Android platform
+    └──→ WhisperbookMutation → pure reducer → FluxStore
+                                                ↓
+                     repository flows + immutable UI snapshot → Compose UI
 ```
 
 - UI code should consume screen state and actions rather than open databases, files, or media sessions directly.
@@ -51,6 +50,18 @@ Android platform + Room + WorkManager + Media3 + sherpa-onnx
 - The app container is the composition root. Avoid constructing alternate process-scoped dependency graphs in screens or workers.
 - Background workers resolve installed `PreparationDependencies` and persist checkpoints after each durable stage.
 - Playback reads prepared segments through `PlaybackQueueSource`; it should not know how a publication was parsed or attributed.
+
+## Flux application state
+
+The presentation/application boundary uses a Flux-style unidirectional data flow:
+
+1. Compose screens call `WhisperbookUiActions`, whose default wrappers create a typed `WhisperbookAction`.
+2. `WhisperbookViewModel.dispatch()` is the effect boundary. It validates the intent and invokes domain ports; reducers never perform I/O or launch coroutines.
+3. Synchronous results and asynchronous effect outcomes are expressed as `WhisperbookMutation` values.
+4. `whisperbookReducer` produces a new immutable `WhisperbookFluxState`; `FluxStore` is the only owner of transient selection, loading, operation, scheduling-error, and refresh state.
+5. Repository, DataStore, WorkManager, and Media3 flows remain durable sources of truth. The ViewModel combines those flows with the Flux store to expose one immutable `WhisperbookUiSnapshot` back to Compose.
+
+Compatibility methods on `WhisperbookViewModel` remain available to focused orchestration tests, but production UI events enter through the typed dispatcher. New UI behavior should add an action and route side effects through the ViewModel instead of introducing another mutable state holder.
 
 ## Runtime flow
 

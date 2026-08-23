@@ -16,14 +16,14 @@
         <mxCell id="compose" value="Jetpack Compose UI&#xa;Navigation · Library · Processing · Player · Read-along · Voice cast · Settings" style="rounded=1;whiteSpace=wrap;html=1;align=left;spacingLeft=18;strokeColor=#245D88;fillColor=#F7EDD7;fontColor=#10253D;fontStyle=1;fontSize=15;" vertex="1" parent="presentation">
           <mxGeometry x="20" y="42" width="705" height="46" as="geometry"/>
         </mxCell>
-        <mxCell id="uistate" value="WhisperbookAppState&#xa;immutable screen state" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#245D88;fillColor=#245D88;fontColor=#FFFFFF;fontStyle=1;fontSize=14;" vertex="1" parent="presentation">
+        <mxCell id="uistate" value="WhisperbookAppState&#xa;snapshot from store + repositories" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#245D88;fillColor=#245D88;fontColor=#FFFFFF;fontStyle=1;fontSize=14;" vertex="1" parent="presentation">
           <mxGeometry x="760" y="42" width="250" height="46" as="geometry"/>
         </mxCell>
 
         <mxCell id="application" value="APPLICATION" style="swimlane;html=1;startSize=28;rounded=1;strokeWidth=2;strokeColor=#9A7A47;fillColor=#F2E2C5;swimlaneFillColor=#9A7A47;fontColor=#FFFFFF;fontStyle=1;fontFamily=Courier New;fontSize=13;" vertex="1" parent="device">
           <mxGeometry x="30" y="190" width="1040" height="130" as="geometry"/>
         </mxCell>
-        <mxCell id="viewmodel" value="WhisperbookViewModel&#xa;Actions, state flows, navigation intent" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#9A7A47;fillColor=#FFF8E8;fontColor=#10253D;fontStyle=1;fontSize=14;" vertex="1" parent="application"><mxGeometry x="20" y="48" width="310" height="58" as="geometry"/></mxCell>
+        <mxCell id="viewmodel" value="ViewModel + FluxStore&#xa;Typed actions · effects · pure reducer" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#9A7A47;fillColor=#FFF8E8;fontColor=#10253D;fontStyle=1;fontSize=14;" vertex="1" parent="application"><mxGeometry x="20" y="48" width="310" height="58" as="geometry"/></mxCell>
         <mxCell id="container" value="WhisperbookAppContainer&#xa;Process-scoped dependency graph" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#9A7A47;fillColor=#FFF8E8;fontColor=#10253D;fontStyle=1;fontSize=14;" vertex="1" parent="application"><mxGeometry x="365" y="48" width="310" height="58" as="geometry"/></mxCell>
         <mxCell id="domain" value="Domain ports &amp; models&#xa;Stable interfaces around storage and engines" style="rounded=1;whiteSpace=wrap;html=1;strokeColor=#9A7A47;fillColor=#FFF8E8;fontColor=#10253D;fontStyle=1;fontSize=14;" vertex="1" parent="application"><mxGeometry x="710" y="48" width="310" height="58" as="geometry"/></mxCell>
 

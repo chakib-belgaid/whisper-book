@@ -100,7 +100,9 @@ class PreparationWorker @JvmOverloads constructor(
                     PreparationState(stage, message = stage.notificationMessage()),
                 ),
             )
-            dependencies.awaitNarrationProfiles()
+            if (stage in PreparationWorkPlan.narrationStages) {
+                dependencies.awaitNarrationProfiles()
+            }
             runner.run(bookId, stage, runAttemptCount, fromChapterOrdinal)
             BetaDiagnostics.performance(
                 "preparation_stage_completed",
@@ -297,12 +299,8 @@ internal class PreparationStageRunner(
         attemptCount: Int,
         fromChapterOrdinal: Int = 0,
     ) {
-        if (!requireBook(bookId).narrationSetupConfirmed) {
-            throw PreparationPipelineException(
-                code = "narration-setup-required",
-                message = "Choose a language and narrator before preparing voices",
-                retryable = false,
-            )
+        if (stage in PreparationWorkPlan.narrationStages && !canPrepareNarration(bookId, attemptCount)) {
+            return
         }
         when (stage) {
             PreparationStage.COPY_AND_VALIDATE -> validatePrivateCopy(bookId, attemptCount)
@@ -310,6 +308,8 @@ internal class PreparationStageRunner(
             PreparationStage.FINDING_CHARACTERS -> attributeSpeakers(bookId, attemptCount)
             PreparationStage.ASSIGNING_VOICES -> assignVoices(bookId, attemptCount)
             PreparationStage.PREPARING_AUDIO -> prepareAudio(bookId, attemptCount, fromChapterOrdinal)
+            PreparationStage.AWAITING_CHAPTER_SELECTION,
+            PreparationStage.AWAITING_NARRATION_SETUP,
             PreparationStage.READY,
             PreparationStage.FAILED,
             -> throw PreparationPipelineException(
@@ -318,6 +318,57 @@ internal class PreparationStageRunner(
                 retryable = false,
             )
         }
+    }
+
+    /**
+     * Narration workers can be restored independently by WorkManager. Recheck both durable gates
+     * in every worker so an old retry can never jump from parsing into attribution or synthesis.
+     * Reaching a gate is a successful stop, not a preparation failure.
+     */
+    private suspend fun canPrepareNarration(bookId: String, attemptCount: Int): Boolean {
+        val job = database.preparationJobDao().getForBook(bookId)
+            ?: throw PreparationPipelineException(
+                code = "preparation-job-missing",
+                message = "The preparation checkpoint is missing",
+                retryable = true,
+            )
+        if (!job.chapterPlanConfirmed) {
+            checkpoint(
+                bookId = bookId,
+                state = PreparationState(
+                    stage = PreparationStage.AWAITING_CHAPTER_SELECTION,
+                    completedUnits = database.chapterDao().getHeadersForBook(bookId).size,
+                    totalUnits = database.chapterDao().getHeadersForBook(bookId).size,
+                    progressFraction = 1f,
+                    message = "Choose the chapters you want to hear",
+                    chapterPlanConfirmed = false,
+                    planRevision = job.planRevision,
+                ),
+                attemptCount = attemptCount,
+            )
+            return false
+        }
+        if (
+            database.chapterPlanDao().getEntriesForBook(bookId).isEmpty() &&
+            database.chapterDao().getHeadersForBook(bookId).isNotEmpty()
+        ) {
+            // Compatibility repair for a confirmed pre-plan book or an interrupted migration.
+            database.chapterPlanDao().initializeAllSelected(bookId, nowEpochMs())
+        }
+        if (!requireBook(bookId).narrationSetupConfirmed) {
+            checkpoint(
+                bookId = bookId,
+                state = PreparationState(
+                    stage = PreparationStage.AWAITING_NARRATION_SETUP,
+                    message = "Choose a language and narrator",
+                    chapterPlanConfirmed = true,
+                    planRevision = job.planRevision,
+                ),
+                attemptCount = attemptCount,
+            )
+            return false
+        }
+        return true
     }
 
     suspend fun markFailed(bookId: String, failure: MappedPreparationError, attemptCount: Int) {
@@ -399,7 +450,10 @@ internal class PreparationStageRunner(
 
     private suspend fun extractChapters(bookId: String, attemptCount: Int) {
         val existing = database.chapterDao().observeForBook(bookId).first()
-        if (existing.isNotEmpty() && existing.any { it.passages.isNotEmpty() }) return
+        if (existing.isNotEmpty() && existing.any { it.passages.isNotEmpty() }) {
+            finishStructuralParsing(bookId, existing.size, attemptCount)
+            return
+        }
 
         checkpoint(
             bookId,
@@ -474,15 +528,17 @@ internal class PreparationStageRunner(
             database.chapterDao().deleteForBook(bookId)
             database.chapterDao().insertAll(chapters)
             database.passageDao().insertAll(passages)
+            database.chapterPlanDao().initializeAllSelected(bookId, nowEpochMs())
             database.preparationJobDao().upsert(
                 stateEntity(
                     bookId,
                     PreparationState(
-                        stage = PreparationStage.FINDING_CHARACTERS,
+                        stage = PreparationStage.AWAITING_CHAPTER_SELECTION,
                         completedUnits = chapters.size,
                         totalUnits = chapters.size,
                         progressFraction = 1f,
-                        message = "Found ${chapters.size} chapters",
+                        message = "Found ${chapters.size} chapters. Choose what to hear.",
+                        chapterPlanConfirmed = false,
                     ),
                     attemptCount,
                 ),
@@ -490,10 +546,37 @@ internal class PreparationStageRunner(
         }
     }
 
+    private suspend fun finishStructuralParsing(
+        bookId: String,
+        chapterCount: Int,
+        attemptCount: Int,
+    ) {
+        database.withTransaction {
+            database.chapterPlanDao().initializeAllSelected(bookId, nowEpochMs())
+            val current = database.preparationJobDao().getForBook(bookId)
+            if (current?.chapterPlanConfirmed != true) {
+                database.preparationJobDao().upsert(
+                    stateEntity(
+                        bookId = bookId,
+                        state = PreparationState(
+                            stage = PreparationStage.AWAITING_CHAPTER_SELECTION,
+                            completedUnits = chapterCount,
+                            totalUnits = chapterCount,
+                            progressFraction = 1f,
+                            message = "Found $chapterCount chapters. Choose what to hear.",
+                            chapterPlanConfirmed = false,
+                        ),
+                        attemptCount = attemptCount,
+                    ),
+                )
+            }
+        }
+    }
+
     private suspend fun attributeSpeakers(bookId: String, attemptCount: Int) {
-        val chapters = database.chapterDao().getHeadersForBook(bookId)
+        val chapters = selectedChapters(bookId)
         if (chapters.isEmpty()) {
-            throw PreparationPipelineException("chapters-missing", "Chapters must be read before attribution", false)
+            throw PreparationPipelineException("chapters-missing", "Select at least one chapter before attribution", false)
         }
 
         checkpoint(
@@ -547,7 +630,7 @@ internal class PreparationStageRunner(
                 attemptCount,
             )
             assignMissingVoices(bookId, voices, settings)
-            database.chapterDao().getHeadersForBook(bookId).firstOrNull()?.let { firstChapter ->
+            selectedChapters(bookId).firstOrNull()?.let { firstChapter ->
                 database.chapterDao().getById(firstChapter.id)?.let { chapter ->
                     materializeChapterVoiceSet(
                         bookId = bookId,
@@ -561,7 +644,7 @@ internal class PreparationStageRunner(
                 PreparationState(
                     stage = PreparationStage.PREPARING_AUDIO,
                     completedUnits = 0,
-                    totalUnits = database.chapterDao().getHeadersForBook(bookId).size,
+                    totalUnits = selectedChapters(bookId).size,
                     message = "The opening cast is ready",
                 ),
                 attemptCount,
@@ -588,9 +671,9 @@ internal class PreparationStageRunner(
         val languageCode = narrationProfile.narrationLanguageCode
             .takeIf { it in com.whisperbook.app.domain.model.NarrationLanguage.supportedCodes }
             ?: com.whisperbook.app.domain.model.NarrationLanguage.ENGLISH.code
-        val chapters = database.chapterDao().getHeadersForBook(bookId)
+        val chapters = selectedChapters(bookId)
         if (chapters.isEmpty()) {
-            throw PreparationPipelineException("chapters-missing", "Chapters must exist before audio is prepared", false)
+            throw PreparationPipelineException("chapters-missing", "Select at least one chapter before audio is prepared", false)
         }
         // WorkManager preserves the requested regeneration boundary across automatic retries.
         // Full preparation always supplies zero, while scoped regeneration may legitimately retry
@@ -599,39 +682,48 @@ internal class PreparationStageRunner(
         // Voice regeneration replaces the unique WorkManager chain. If it happens while a large
         // book is still being prepared, resume at the first chapter whose catalog is incomplete so
         // the remainder of the book is not stranded behind the replacement request.
-        val attributionStartOrdinal = if (requestedStartOrdinal == 0) {
+        val attributionStartIndex = if (requestedStartOrdinal == 0) {
             null
         } else {
             val characterIds = database.storyCharacterDao().getEntitiesForBook(bookId)
                 .mapTo(hashSetOf()) { it.id }
-            chapters.firstOrNull { chapter ->
+            chapters.indexOfFirst { chapter ->
                 val passages = database.passageDao().getForChapter(chapter.id)
                 passages.isEmpty() ||
                     passages.any { it.attributionRule == UNATTRIBUTED_RULE || it.speakerId !in characterIds }
-            }?.ordinal
+            }.takeIf { it >= 0 }
         }
-        val metadataStartOrdinal = firstMissingMetadataChapterOrdinal(bookId, chapters)
-        val effectiveStartOrdinal = listOfNotNull(
-            requestedStartOrdinal,
-            attributionStartOrdinal,
-            metadataStartOrdinal,
+        val requestedStartIndex = if (requestedStartOrdinal == 0) {
+            0
+        } else {
+            chapters.indexOfFirst { it.ordinal == requestedStartOrdinal }
+                .takeIf { it >= 0 }
+                ?: chapters.indexOfFirst { it.ordinal >= requestedStartOrdinal }.takeIf { it >= 0 }
+                ?: chapters.size
+        }
+        val metadataStartIndex = firstMissingMetadataChapterIndex(bookId, chapters)
+        val effectiveStartIndex = listOfNotNull(
+            requestedStartIndex,
+            attributionStartIndex,
+            metadataStartIndex,
         ).minOrNull() ?: 0
-        val targets = chapters.filter { it.ordinal >= effectiveStartOrdinal }
+        val targets = chapters.drop(effectiveStartIndex)
         if (targets.isEmpty()) {
             checkpoint(bookId, PreparationState.Ready, attemptCount)
             return
         }
 
-        val completedBeforeStart = chapters.size - targets.size
+        val completedChapterIds = chapters.take(effectiveStartIndex)
+            .mapTo(linkedSetOf(), ChapterEntity::id)
         checkpoint(
             bookId,
             PreparationState(
                 PreparationStage.PREPARING_AUDIO,
-                completedUnits = completedBeforeStart,
+                completedUnits = completedChapterIds.size,
                 totalUnits = chapters.size,
-                progressFraction = completedBeforeStart.toFloat() / chapters.size,
+                progressFraction = completedChapterIds.size.toFloat() / chapters.size,
                 message = chapterPreparationMessage(
-                    targets.first().ordinal,
+                    effectiveStartIndex,
                     targets.first().title,
                     chapters.size,
                 ),
@@ -653,21 +745,40 @@ internal class PreparationStageRunner(
                 },
             )
             var openingChunkPrepared = false
-            targets.forEachIndexed { targetIndex, chapterHeader ->
+            val eligibleChapterIds = targets.mapTo(linkedSetOf(), ChapterEntity::id)
+            while (true) {
                 requireNarrationProfileRevision(bookId, expectedProfileRevision)
-                val completedChapters = completedBeforeStart + targetIndex
+                val planBeforeBoundary = database.preparationJobDao().getForBook(bookId)
+                val latestChapters = selectedChapters(bookId)
+                val chapterHeader = latestChapters.firstOrNull { chapter ->
+                    (
+                        requestedStartOrdinal == 0 ||
+                            chapter.id in eligibleChapterIds ||
+                            chapter.ordinal >= requestedStartOrdinal
+                        ) && chapter.id !in completedChapterIds
+                }
+                if (chapterHeader == null) {
+                    // If the plan changed while the boundary was being evaluated, read it again
+                    // before declaring completion. This keeps newly ordered work from being lost.
+                    val planAfterBoundary = database.preparationJobDao().getForBook(bookId)
+                    if (planAfterBoundary?.planRevision != planBeforeBoundary?.planRevision) continue
+                    break
+                }
+                val selectedPosition = latestChapters.indexOfFirst { it.id == chapterHeader.id }
+                val completedChapters = latestChapters.count { it.id in completedChapterIds }
                 checkpoint(
                     bookId,
                     PreparationState(
                         stage = PreparationStage.PREPARING_AUDIO,
                         completedUnits = completedChapters,
-                        totalUnits = chapters.size,
-                        progressFraction = completedChapters.toFloat() / chapters.size,
+                        totalUnits = latestChapters.size,
+                        progressFraction = completedChapters.toFloat() / latestChapters.size,
                         message = chapterPreparationMessage(
-                            chapterHeader.ordinal,
+                            selectedPosition,
                             chapterHeader.title,
-                            chapters.size,
+                            latestChapters.size,
                         ),
+                        activeChapterId = chapterHeader.id,
                     ),
                     attemptCount,
                 )
@@ -675,7 +786,7 @@ internal class PreparationStageRunner(
                 val chapter = ensureChapterAttributed(
                     bookId = bookId,
                     chapterId = chapterHeader.id,
-                    isFinalChapter = chapterHeader.ordinal == chapters.last().ordinal,
+                    isFinalChapter = chapterHeader.id == latestChapters.last().id,
                 )
                 assignMissingVoices(bookId, voices, settings)
                 materializeChapterVoiceSet(bookId, chapter, expectedProfileRevision)
@@ -708,14 +819,19 @@ internal class PreparationStageRunner(
                     openingChunkPrepared = true
                 }
 
-                val readyChapters = completedChapters + 1
+                completedChapterIds += chapterHeader.id
+                val chaptersAfterBoundary = selectedChapters(bookId)
+                val readyChapters = chaptersAfterBoundary.count { it.id in completedChapterIds }
+                val totalAfterBoundary = chaptersAfterBoundary.size
                 checkpoint(
                     bookId,
                     PreparationState(
                         stage = PreparationStage.PREPARING_AUDIO,
                         completedUnits = readyChapters,
-                        totalUnits = chapters.size,
-                        progressFraction = readyChapters.toFloat() / chapters.size,
+                        totalUnits = totalAfterBoundary,
+                        progressFraction = if (totalAfterBoundary == 0) 0f else {
+                            readyChapters.toFloat() / totalAfterBoundary
+                        },
                         message = "${chapterBatch.chapterTitle} is ready to listen",
                     ),
                     attemptCount,
@@ -724,11 +840,11 @@ internal class PreparationStageRunner(
         } finally {
             engine.close()
         }
-        reconcileCharacterMetadata(bookId, chapters)
+        reconcileCharacterMetadata(bookId, selectedChapters(bookId))
         checkpoint(bookId, PreparationState.Ready, attemptCount)
     }
 
-    private suspend fun firstMissingMetadataChapterOrdinal(
+    private suspend fun firstMissingMetadataChapterIndex(
         bookId: String,
         chapters: List<ChapterEntity>,
     ): Int? {
@@ -737,9 +853,9 @@ internal class PreparationStageRunner(
         val snapshot = catalog.read(bookId)?.takeIf { current ->
             current.sourceSha256 == sourceSha256 &&
                 current.analysisVersion == CHARACTER_ANALYSIS_VERSION
-        } ?: return chapters.firstOrNull()?.ordinal
+        } ?: return chapters.indices.firstOrNull()
         val recordedChapterIds = snapshot.chapters.mapTo(hashSetOf()) { it.chapterId }
-        return chapters.firstOrNull { it.id !in recordedChapterIds }?.ordinal
+        return chapters.indexOfFirst { it.id !in recordedChapterIds }.takeIf { it >= 0 }
     }
 
     private suspend fun ensureChapterAttributed(
@@ -863,7 +979,7 @@ internal class PreparationStageRunner(
             snapshot.sourceSha256 == sourceSha256 &&
                 snapshot.analysisVersion == CHARACTER_ANALYSIS_VERSION
         }
-        val expectedChapterIds = database.chapterDao().getHeadersForBook(bookId)
+        val expectedChapterIds = selectedChapters(bookId)
             .mapTo(linkedSetOf()) { it.id }
         val recordedChapterIds = current?.chapters.orEmpty().mapTo(linkedSetOf()) { it.chapterId }
         val existingChapter = current?.chapters?.firstOrNull { it.chapterId == chapter.chapter.id }
@@ -1204,20 +1320,36 @@ internal class PreparationStageRunner(
         database.bookDao().observeById(bookId).first()?.book
             ?: throw PreparationPipelineException("book-not-found", "The imported book no longer exists", false)
 
+    private suspend fun selectedChapters(bookId: String): List<ChapterEntity> =
+        database.chapterPlanDao().getSelectedChapterHeaders(bookId)
+
     private suspend fun checkpoint(bookId: String, state: PreparationState, attemptCount: Int) {
-        database.preparationJobDao().upsert(stateEntity(bookId, state, attemptCount))
+        database.withTransaction {
+            // Serialize the plan-revision read with the progress write. Without this transaction,
+            // a chapter edit committed between the two statements could be overwritten by a
+            // stale worker checkpoint.
+            database.preparationJobDao().upsert(stateEntity(bookId, state, attemptCount))
+        }
         onStateCheckpoint(state)
     }
 
-    private fun stateEntity(
+    private suspend fun stateEntity(
         bookId: String,
         state: PreparationState,
         attemptCount: Int,
-    ): PreparationJobEntity = state.toEntity(
-        bookId = bookId,
-        attemptCount = attemptCount.coerceAtLeast(0),
-        updatedAtEpochMs = nowEpochMs(),
-    )
+    ): PreparationJobEntity {
+        val current = database.preparationJobDao().getForBook(bookId)
+        return state.copy(
+            // Confirmation and revision belong to the chapter plan, not an individual worker
+            // checkpoint. Always preserve the latest values written by the review UI.
+            chapterPlanConfirmed = current?.chapterPlanConfirmed ?: state.chapterPlanConfirmed,
+            planRevision = current?.planRevision ?: state.planRevision,
+        ).toEntity(
+            bookId = bookId,
+            attemptCount = attemptCount.coerceAtLeast(0),
+            updatedAtEpochMs = nowEpochMs(),
+        )
+    }
 
     private companion object {
         const val CHARACTER_ANALYSIS_VERSION = "heuristic-attribution-chapter-v1"
@@ -1322,6 +1454,8 @@ private fun String?.safeMessage(fallback: String = "Preparation could not finish
 private fun PreparationStage.notificationMessage(): String = when (this) {
     PreparationStage.COPY_AND_VALIDATE -> "Checking the private book copy"
     PreparationStage.READING_CHAPTERS -> "Reading chapters on this device"
+    PreparationStage.AWAITING_CHAPTER_SELECTION -> "Choose the chapters you want to hear"
+    PreparationStage.AWAITING_NARRATION_SETUP -> "Choose a language and narrator"
     PreparationStage.FINDING_CHARACTERS -> "Finding the voices in this story"
     PreparationStage.ASSIGNING_VOICES -> "Casting local voices"
     PreparationStage.PREPARING_AUDIO -> "Preparing the opening passages"

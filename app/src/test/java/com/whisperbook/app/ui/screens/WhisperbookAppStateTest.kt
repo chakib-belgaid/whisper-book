@@ -7,6 +7,7 @@ import com.whisperbook.app.domain.model.AppSettings
 import com.whisperbook.app.domain.model.Book
 import com.whisperbook.app.domain.model.BookFormat
 import com.whisperbook.app.domain.model.Chapter
+import com.whisperbook.app.domain.model.ChapterPlanEntry
 import com.whisperbook.app.domain.model.CharacterColorRole
 import com.whisperbook.app.domain.model.CharacterVoiceAssignment
 import com.whisperbook.app.domain.model.Passage
@@ -755,6 +756,100 @@ class WhisperbookAppStateTest {
         assertEquals(0.65f, state.chapterProgress)
         assertFalse(state.isPlaying)
         assertEquals(0L, state.chapterPositionMs)
+    }
+
+    @Test
+    fun `chapter review state exposes complete plan while playback chapters stay selected and ordered`() {
+        val source = listOf(
+            Chapter("chapter-1", "book-1", 0, "One"),
+            Chapter("chapter-2", "book-1", 1, "Two"),
+            Chapter("chapter-3", "book-1", 2, "Three"),
+        )
+        val preparation = PreparationState(
+            stage = PreparationStage.AWAITING_CHAPTER_SELECTION,
+            chapterPlanConfirmed = false,
+        )
+        val book = Book(
+            id = "book-1",
+            title = "Plan Book",
+            author = "Author",
+            format = BookFormat.EPUB,
+            sourceUri = null,
+            privateSourcePath = null,
+            coverPath = null,
+            preparation = preparation,
+            currentChapterId = null,
+            currentPassageId = null,
+            progressFraction = 0f,
+            lastOpenedAtEpochMs = 1L,
+            chapterCount = 3,
+            narrationSetupConfirmed = false,
+        )
+        val plan = listOf(
+            ChapterPlanEntry(source[0], isSelected = true, customPosition = 1),
+            ChapterPlanEntry(source[1], isSelected = false, customPosition = 2),
+            ChapterPlanEntry(source[2], isSelected = true, customPosition = 0),
+        )
+        val state = WhisperbookAppState()
+
+        state.synchronize(
+            WhisperbookUiSnapshot(
+                books = listOf(book),
+                selectedBook = book,
+                chapterPlan = plan,
+                chapters = listOf(source[2], source[0]),
+                selectedChapter = source[2],
+                preparation = preparation,
+            ),
+        )
+
+        assertEquals(book, state.currentBook)
+        assertTrue(state.requiresChapterReview)
+        assertFalse(state.narrationSetupRequired)
+        assertFalse(state.isBookParsing)
+        assertFalse(state.isBookPreparing)
+        assertEquals(2, state.selectedChapterCount)
+        assertEquals(listOf("chapter-3", "chapter-1", "chapter-2"), state.chapterPlan.map { it.chapter.id })
+        assertEquals(listOf("chapter-3", "chapter-1"), state.chapters.map(ChapterUi::id))
+    }
+
+    @Test
+    fun `parsing is active before narration setup becomes required`() {
+        val preparation = PreparationState(
+            stage = PreparationStage.READING_CHAPTERS,
+            progressFraction = 0.4f,
+            chapterPlanConfirmed = false,
+        )
+        val book = Book(
+            id = "book-1",
+            title = "Parsing Book",
+            author = null,
+            format = BookFormat.PDF,
+            sourceUri = null,
+            privateSourcePath = null,
+            coverPath = null,
+            preparation = preparation,
+            currentChapterId = null,
+            currentPassageId = null,
+            progressFraction = 0f,
+            lastOpenedAtEpochMs = 1L,
+            narrationSetupConfirmed = false,
+        )
+        val state = WhisperbookAppState()
+
+        state.synchronize(
+            WhisperbookUiSnapshot(
+                books = listOf(book),
+                selectedBook = book,
+                preparation = preparation,
+            ),
+        )
+
+        assertTrue(state.isBookParsing)
+        assertFalse(state.isBookPreparing)
+        assertFalse(state.requiresChapterReview)
+        assertFalse(state.narrationSetupRequired)
+        assertFalse(state.requiresNarrationSetup(book.id))
     }
 }
 

@@ -102,7 +102,11 @@ fun LibraryScreen(
                 ) {
                     SectionHeading(
                         when {
+                            current.needsChapterReview -> "Choose chapters"
                             current.needsNarrationSetup -> "Finish setup"
+                            current.preparation.stage == com.whisperbook.app.domain.model.PreparationStage.COPY_AND_VALIDATE ||
+                                current.preparation.stage == com.whisperbook.app.domain.model.PreparationStage.READING_CHAPTERS ->
+                                "Parsing book"
                             current.canListen -> "Continue Listening"
                             else -> "Preparing audiobook"
                         },
@@ -142,6 +146,7 @@ fun LibraryScreen(
                                         }
                                     },
                                     contentDescription = when {
+                                        current.needsChapterReview -> "Choose chapters for ${current.title}"
                                         current.needsNarrationSetup -> "Set up narration for ${current.title}"
                                         current.canListen -> "Resume ${current.title}"
                                         else -> "Open ${current.title}"
@@ -211,10 +216,10 @@ fun LibraryScreen(
                                 overflow = TextOverflow.Ellipsis,
                             )
                             Text(
-                                text = if (book.needsNarrationSetup) {
-                                    "Narration setup needed"
-                                } else {
-                                    book.author
+                                text = when {
+                                    book.needsChapterReview -> "Chapter choices needed"
+                                    book.needsNarrationSetup -> "Narration setup needed"
+                                    else -> book.author
                                 },
                                 color = WhisperbookTheme.colors.inkMuted,
                                 style = WhisperbookTheme.typography.label,
@@ -230,6 +235,7 @@ fun LibraryScreen(
 }
 
 internal fun LibraryBookUi.libraryProgressLabel(): String = when {
+    needsChapterReview -> "Choose which chapters to hear"
     needsNarrationSetup -> "Narration setup needed"
     preparation.runState == com.whisperbook.app.domain.model.PreparationRunState.PAUSED ->
         "Preparation paused · progress saved"
@@ -237,10 +243,17 @@ internal fun LibraryBookUi.libraryProgressLabel(): String = when {
         "Preparation cancelled"
     preparation.stage == com.whisperbook.app.domain.model.PreparationStage.FAILED ->
         "Preparation needs attention"
+    preparation.stage == com.whisperbook.app.domain.model.PreparationStage.COPY_AND_VALIDATE ->
+        "Validating book on this device"
+    totalChapters <= 0 -> "Finding chapters…"
+    preparation.stage == com.whisperbook.app.domain.model.PreparationStage.READING_CHAPTERS &&
+        preparation.totalUnits > 0 ->
+        "Reading ${preparation.completedUnits.coerceIn(0, preparation.totalUnits)} of ${preparation.totalUnits}"
+    preparation.stage == com.whisperbook.app.domain.model.PreparationStage.READING_CHAPTERS ->
+        "Reading chapters on this device"
     preparation.stage == com.whisperbook.app.domain.model.PreparationStage.PREPARING_AUDIO &&
         preparation.totalUnits > 0 ->
         "${preparation.completedUnits.coerceIn(0, preparation.totalUnits)} of ${preparation.totalUnits} chapters prepared"
-    totalChapters <= 0 -> "Finding chapters…"
     preparation.stage != com.whisperbook.app.domain.model.PreparationStage.READY ->
         "$totalChapters chapters found · preparing audio"
     else -> "Chapter ${chapter.coerceIn(1, totalChapters)} of $totalChapters"

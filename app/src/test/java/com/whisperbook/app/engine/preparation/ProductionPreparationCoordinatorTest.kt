@@ -32,6 +32,8 @@ class ProductionPreparationCoordinatorTest {
         )
         assertFalse(PreparationStage.READY in PreparationWorkPlan.stages)
         assertFalse(PreparationStage.FAILED in PreparationWorkPlan.stages)
+        assertFalse(PreparationStage.AWAITING_CHAPTER_SELECTION in PreparationWorkPlan.stages)
+        assertFalse(PreparationStage.AWAITING_NARRATION_SETUP in PreparationWorkPlan.stages)
     }
 
     @Test
@@ -45,7 +47,57 @@ class ProductionPreparationCoordinatorTest {
 
         assertEquals(listOf("prepare-book-book-42", "prepare-book-book-42"), scheduler.enqueuedNames)
         assertEquals(listOf("book-42", "book-42"), scheduler.enqueuedBookIds)
+        assertEquals(
+            listOf(PreparationWorkPlan.parsingStages, PreparationWorkPlan.parsingStages),
+            scheduler.enqueuedStages,
+        )
         assertEquals(listOf("prepare-book-book-42"), scheduler.cancelledNames)
+    }
+
+    @Test
+    fun `awaiting chapter review is a durable stop with no scheduled worker`() = runTest {
+        val scheduler = RecordingScheduler()
+        val jobs = FakePreparationJobDao()
+        jobs.upsert(
+            preparationJob().copy(
+                stage = PreparationStage.AWAITING_CHAPTER_SELECTION.name,
+                chapterPlanConfirmed = false,
+            ),
+        )
+        val coordinator = ProductionPreparationCoordinator(scheduler, jobs)
+
+        coordinator.enqueue("book-42")
+
+        assertTrue(scheduler.enqueuedStages.isEmpty())
+        assertEquals(
+            PreparationStage.AWAITING_CHAPTER_SELECTION.name,
+            jobs.getForBook("book-42")?.stage,
+        )
+    }
+
+    @Test
+    fun `confirmed chapter plan waits for narration then schedules only narration stages`() = runTest {
+        val scheduler = RecordingScheduler()
+        val jobs = FakePreparationJobDao()
+        jobs.upsert(
+            preparationJob().copy(
+                stage = PreparationStage.AWAITING_NARRATION_SETUP.name,
+                chapterPlanConfirmed = true,
+            ),
+        )
+        var narrationConfirmed = false
+        val coordinator = ProductionPreparationCoordinator(
+            scheduler = scheduler,
+            preparationJobs = jobs,
+            narrationSetupConfirmed = { narrationConfirmed },
+        )
+
+        coordinator.enqueue("book-42")
+        assertTrue(scheduler.enqueuedStages.isEmpty())
+
+        narrationConfirmed = true
+        coordinator.enqueue("book-42")
+        assertEquals(listOf(PreparationWorkPlan.narrationStages), scheduler.enqueuedStages)
     }
 
     @Test
@@ -215,11 +267,17 @@ private class RecordingScheduler : PreparationWorkScheduler {
     val enqueuedNames = mutableListOf<String>()
     val enqueuedBookIds = mutableListOf<String>()
     val cancelledNames = mutableListOf<String>()
+    val enqueuedStages = mutableListOf<List<PreparationStage>>()
     val audioRestarts = mutableListOf<AudioRestart>()
 
-    override suspend fun enqueueUniqueChain(uniqueName: String, bookId: String) {
+    override suspend fun enqueueUniqueChain(
+        uniqueName: String,
+        bookId: String,
+        stages: List<PreparationStage>,
+    ) {
         enqueuedNames += uniqueName
         enqueuedBookIds += bookId
+        enqueuedStages += stages
     }
 
     override suspend fun cancelUnique(uniqueName: String) {
@@ -253,5 +311,65 @@ private class FakePreparationJobDao : PreparationJobDao {
     override suspend fun upsert(job: PreparationJobEntity) {
         jobs[job.bookId] = job
         observed.getOrPut(job.bookId) { MutableStateFlow(null) }.value = job
+    }
+
+    override suspend fun incrementPlanRevision(bookId: String, updatedAtEpochMs: Long): Int =
+        update(bookId) { current ->
+            current.copy(
+                planRevision = current.planRevision + 1,
+                updatedAtEpochMs = updatedAtEpochMs,
+            )
+        }
+
+    override suspend fun confirmChapterPlan(
+        bookId: String,
+        nextStage: String,
+        updatedAtEpochMs: Long,
+    ): Int = update(bookId, predicate = { !it.chapterPlanConfirmed }) { current ->
+        current.copy(
+            chapterPlanConfirmed = true,
+            planRevision = current.planRevision + 1,
+            stage = nextStage,
+            activeChapterId = null,
+            updatedAtEpochMs = updatedAtEpochMs,
+        )
+    }
+
+    override suspend fun awaitChapterSelection(
+        bookId: String,
+        stage: String,
+        message: String,
+        updatedAtEpochMs: Long,
+    ): Int = update(bookId) { current ->
+        current.copy(
+            stage = stage,
+            completedUnits = 0,
+            totalUnits = 0,
+            progressFraction = 0f,
+            message = message,
+            retryable = false,
+            runState = PreparationRunState.RUNNING.name,
+            chapterPlanConfirmed = false,
+            activeChapterId = null,
+            updatedAtEpochMs = updatedAtEpochMs,
+        )
+    }
+
+    override suspend fun setActiveChapter(
+        bookId: String,
+        chapterId: String?,
+        updatedAtEpochMs: Long,
+    ): Int = update(bookId) { current ->
+        current.copy(activeChapterId = chapterId, updatedAtEpochMs = updatedAtEpochMs)
+    }
+
+    private suspend fun update(
+        bookId: String,
+        predicate: (PreparationJobEntity) -> Boolean = { true },
+        transform: (PreparationJobEntity) -> PreparationJobEntity,
+    ): Int {
+        val current = jobs[bookId]?.takeIf(predicate) ?: return 0
+        upsert(transform(current))
+        return 1
     }
 }

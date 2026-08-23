@@ -38,7 +38,7 @@ jobs:
         shell: bash
         run: |
           tag_version="${GITHUB_REF_NAME#v}"
-          gradle_version="$(sed -n 's/^[[:space:]]*versionName = "\([^"]*\)"/\1/p' app/build.gradle.kts)"
+          gradle_version="$(./gradlew -q :app:printVersionName)"
           if [[ -z "${gradle_version}" || "${tag_version}" != "${gradle_version}" ]]; then
             echo "Tag ${GITHUB_REF_NAME} does not match Android versionName ${gradle_version:-<missing>}" >&2
             exit 1
@@ -64,4 +64,4 @@ jobs:
             release/whisperbook-${GITHUB_REF_NAME}-debug.apk \
             release/whisperbook-${GITHUB_REF_NAME}-debug.apk.sha256 \
             --title "Whisperbook ${GITHUB_REF_NAME}" \
-            --notes "Installable debug-signed Android APK for the initial Whisperbook release. The app runs offline, requires Android 8.0 or newer, and currently supports arm64 devices."
+            --notes "Installable debug-signed Android APK for Whisperbook ${GITHUB_REF_NAME}. The app runs offline, requires Android 8.0 or newer, and currently supports arm64 devices."

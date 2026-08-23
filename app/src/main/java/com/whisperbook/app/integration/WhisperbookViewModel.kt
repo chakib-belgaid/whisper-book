@@ -11,6 +11,7 @@ import com.whisperbook.app.domain.model.BookMp3ExportStage
 import com.whisperbook.app.domain.model.NarrationLanguage
 import com.whisperbook.app.domain.model.Book
 import com.whisperbook.app.domain.model.Chapter
+import com.whisperbook.app.domain.model.ChapterPlanEntry
 import com.whisperbook.app.domain.model.CharacterVoiceAssignment
 import com.whisperbook.app.domain.model.PlaybackCursor
 import com.whisperbook.app.domain.model.PlaybackPreparationProgress
@@ -23,11 +24,17 @@ import com.whisperbook.app.domain.model.SpeakerCorrectionScope
 import com.whisperbook.app.domain.model.VoiceRegenerationRequest
 import com.whisperbook.app.domain.model.VoiceRegenerationScope
 import com.whisperbook.app.diagnostics.BetaDiagnostics
+import com.whisperbook.app.integration.flux.FluxStore
+import com.whisperbook.app.integration.flux.OperationKind
+import com.whisperbook.app.integration.flux.OperationState
+import com.whisperbook.app.integration.flux.WhisperbookAction
+import com.whisperbook.app.integration.flux.WhisperbookFluxState
+import com.whisperbook.app.integration.flux.WhisperbookMutation
+import com.whisperbook.app.integration.flux.whisperbookReducer
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -35,6 +42,7 @@ import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.mapLatest
 import kotlinx.coroutines.flow.shareIn
 import kotlinx.coroutines.flow.stateIn
@@ -46,13 +54,22 @@ import kotlinx.coroutines.sync.withLock
 class WhisperbookViewModel(
     private val services: WhisperbookServices,
 ) : ViewModel() {
-    private val selectedBookId = MutableStateFlow<String?>(null)
-    private val selectedChapterId = MutableStateFlow<String?>(null)
-    private val loadingChapterId = MutableStateFlow<String?>(null)
-    private val operation = MutableStateFlow(OperationState())
-    private val preparationSchedulingErrors = MutableStateFlow<Map<String, String>>(emptyMap())
-    private val storageRefreshVersion = MutableStateFlow(0L)
-    private val voiceRetentionRefreshVersion = MutableStateFlow(0L)
+    private val store: FluxStore<WhisperbookFluxState, WhisperbookMutation> =
+        FluxStore(WhisperbookFluxState(), whisperbookReducer)
+    private val storeState: StateFlow<WhisperbookFluxState> = store.state
+    private val currentStoreState: WhisperbookFluxState get() = store.currentState
+    private fun reduce(action: WhisperbookMutation) = store.dispatch(action)
+    private fun updateOperation(state: OperationState) =
+        reduce(WhisperbookMutation.OperationChanged(state))
+    private val selectedBookId: Flow<String?> = storeState.map { state -> state.selectedBookId }
+        .distinctUntilChanged()
+    private val selectedChapterId: Flow<String?> = storeState.map { state -> state.selectedChapterId }
+        .distinctUntilChanged()
+    private val storageRefreshVersion: Flow<Long> = storeState.map { state -> state.storageRefreshVersion }
+        .distinctUntilChanged()
+    private val voiceRetentionRefreshVersion: Flow<Long> = storeState
+        .map { state -> state.voiceRetentionRefreshVersion }
+        .distinctUntilChanged()
     private var voicePreviewJob: Job? = null
     private var bookExportJob: Job? = null
     private var chapterSelectionJob: Job? = null
@@ -70,8 +87,46 @@ class WhisperbookViewModel(
     private val selectedBook: Flow<Book?> = combine(books, selectedBookId) { allBooks, bookId ->
         bookId?.let { id -> allBooks.firstOrNull { it.id == id } }
     }.distinctUntilChanged()
-    private val chapterHeaders: SharedFlow<List<Chapter>> = selectedBookId.flatMapLatest { bookId ->
-        if (bookId == null) flowOf(emptyList()) else services.libraryRepository.observeChapterHeaders(bookId)
+    private val selectedBookChapterData: SharedFlow<SelectedBookChapterData> =
+        selectedBookId.flatMapLatest { bookId ->
+            if (bookId == null) {
+                flowOf(SelectedBookChapterData())
+            } else {
+                combine(
+                    services.libraryRepository.observeChapterHeaders(bookId),
+                    services.libraryRepository.observeChapterPlan(bookId),
+                ) { headers, plan -> SelectedBookChapterData(headers, plan) }
+            }
+        }.shareIn(
+            scope = viewModelScope,
+            started = SharingStarted.Eagerly,
+            replay = 1,
+        )
+    private val chapterHeaders: SharedFlow<List<Chapter>> = selectedBookChapterData.map { it.headers }
+        .shareIn(
+            scope = viewModelScope,
+            started = SharingStarted.Eagerly,
+            replay = 1,
+        )
+    private val chapterPlan: SharedFlow<List<ChapterPlanEntry>> = selectedBookChapterData.map { it.plan }
+        .shareIn(
+            scope = viewModelScope,
+            started = SharingStarted.Eagerly,
+            replay = 1,
+        )
+    private val selectedChapterHeaders: SharedFlow<List<Chapter>> = selectedBookChapterData.map { data ->
+        val headers = data.headers
+        val plan = data.plan
+        if (plan.isEmpty()) {
+            headers
+        } else {
+            val headersById = headers.associateBy(Chapter::id)
+            plan.asSequence()
+                .filter(ChapterPlanEntry::isSelected)
+                .sortedBy(ChapterPlanEntry::customPosition)
+                .map { entry -> headersById[entry.chapter.id] ?: entry.chapter }
+                .toList()
+        }
     }.shareIn(
         scope = viewModelScope,
         started = SharingStarted.Eagerly,
@@ -79,7 +134,7 @@ class WhisperbookViewModel(
     )
     private val selectedChapter: StateFlow<Chapter?> = combine(
         selectedBookId,
-        chapterHeaders,
+        selectedChapterHeaders,
         selectedChapterId,
     ) { bookId, headers, requestedChapterId ->
         bookId to (requestedChapterId?.takeIf { requested -> headers.any { it.id == requested } }
@@ -99,7 +154,7 @@ class WhisperbookViewModel(
             initialValue = null,
         )
     private val chapters: Flow<List<Chapter>> = combine(
-        chapterHeaders,
+        selectedChapterHeaders,
         selectedChapter,
     ) { headers, selected ->
         headers.map { header ->
@@ -148,21 +203,23 @@ class WhisperbookViewModel(
         .mapLatest { runCatching { services.localStorageBytes() }.getOrDefault(0L) }
         .distinctUntilChanged()
 
+    private val selectedBookPlanState = combine(selectedBook, chapterPlan) { book, plan ->
+        SelectedBookPlanState(book, plan)
+    }
     private val libraryState = combine(
         books,
-        selectedBook,
+        selectedBookPlanState,
         chapters,
         selectedChapter,
         characters,
-    ) { allBooks, book, allChapters, chapter, cast ->
-        LibraryState(allBooks, book, allChapters, chapter, cast)
+    ) { allBooks, bookPlan, allChapters, chapter, cast ->
+        LibraryState(allBooks, bookPlan.book, bookPlan.chapterPlan, allChapters, chapter, cast)
     }
     private val operationState = combine(
-        operation,
-        loadingChapterId,
+        storeState,
         services.playbackGateway.preparationProgress,
-    ) { operationState, chapterId, audioProgress ->
-        PendingOperationState(operationState, chapterId, audioProgress)
+    ) { fluxState, audioProgress ->
+        PendingOperationState(fluxState.operation, fluxState.loadingChapterId, audioProgress)
     }
     private val voiceState = combine(voiceAssignments, revertibleVoiceChange) { assignments, change ->
         VoiceState(assignments, change)
@@ -181,8 +238,8 @@ class WhisperbookViewModel(
         libraryState,
         sessionState,
         storageBytes,
-        preparationSchedulingErrors,
-    ) { library, session, bytes, schedulingErrors ->
+        storeState,
+    ) { library, session, bytes, fluxState ->
         val selectedBookId = library.selectedBook?.id
         val selectedPlayback = session.playback?.takeIf { it.bookId == selectedBookId }
         val selectedAudioProgress = session.pendingOperation.audioProgress
@@ -194,6 +251,7 @@ class WhisperbookViewModel(
         WhisperbookUiSnapshot(
             books = library.books,
             selectedBook = library.selectedBook,
+            chapterPlan = library.chapterPlan,
             chapters = library.chapters,
             selectedChapter = library.selectedChapter,
             characters = library.characters,
@@ -214,7 +272,7 @@ class WhisperbookViewModel(
                 ?: foregroundOperation.progressFraction,
             errorMessage = foregroundOperation.errorMessage
                 ?: selectedBookId
-                    ?.let(schedulingErrors::get)
+                    ?.let(fluxState.preparationSchedulingErrors::get)
                     .takeUnless { foregroundOperation.isBusy },
             isExportingBook = selectedBookExport?.isBusy == true,
             bookExportMessage = selectedBookExport?.let { it.errorMessage ?: it.statusMessage },
@@ -230,26 +288,28 @@ class WhisperbookViewModel(
     init {
         viewModelScope.launch {
             books.collect { currentBooks ->
-                val selected = selectedBookId.value
+                val selected = currentStoreState.selectedBookId
                 if (selected == null || currentBooks.none { it.id == selected }) {
                     val next = currentBooks.firstOrNull()
-                    selectedBookId.value = next?.id
-                    selectedChapterId.value = next?.let(::rememberedChapterId)
+                    reduce(
+                        WhisperbookMutation.BookSelected(
+                            bookId = next?.id,
+                            chapterId = next?.let(::rememberedChapterId),
+                        ),
+                    )
                 }
                 preparationSchedulingMutex.withLock {
                     val currentBookIds = currentBooks.mapTo(hashSetOf(), Book::id)
                     reconciledPreparationBookIds.retainAll(currentBookIds)
                     booksPendingDeletion.retainAll(currentBookIds)
-                    preparationSchedulingErrors.value = preparationSchedulingErrors.value
-                        .filterKeys(currentBookIds::contains)
+                    reduce(WhisperbookMutation.SchedulingErrorsRetained(currentBookIds))
+                    currentBooks.asSequence()
+                        .filter { book -> book.preparation.stage.isChapterPlanGate() }
+                        .mapTo(hashSetOf(), Book::id)
+                        .let(reconciledPreparationBookIds::removeAll)
                 }
                 currentBooks.asSequence()
-                    .filter { book ->
-                        book.narrationSetupConfirmed &&
-                            book.preparation.runState == PreparationRunState.RUNNING &&
-                            book.preparation.stage != PreparationStage.READY &&
-                            book.preparation.stage != PreparationStage.FAILED
-                    }
+                    .filter(Book::shouldReconcilePreparation)
                     .forEach { book ->
                         try {
                             ensurePreparationScheduled(book.id)
@@ -262,11 +322,12 @@ class WhisperbookViewModel(
             }
         }
         viewModelScope.launch {
-            chapterHeaders.collect { currentChapters ->
-                val selected = selectedChapterId.value
+            selectedChapterHeaders.collect { currentChapters ->
+                val selected = currentStoreState.selectedChapterId
                 if (selected == null || currentChapters.none { it.id == selected }) {
-                    selectedChapterId.value = currentChapters.firstOrNull()?.id.also { chapterId ->
-                        val bookId = selectedBookId.value
+                    currentChapters.firstOrNull()?.id.also { chapterId ->
+                        reduce(WhisperbookMutation.ChapterSelected(chapterId))
+                        val bookId = currentStoreState.selectedBookId
                         if (bookId != null && chapterId != null) {
                             selectedChapterIdsByBook[bookId] = chapterId
                         }
@@ -279,36 +340,104 @@ class WhisperbookViewModel(
                 cursor ?: return@collect
                 // Playback may keep publishing while the user browses another book. It must not
                 // pull navigation back to the active queue or replace that book's chapter choice.
-                if (cursor.bookId != selectedBookId.value) return@collect
-                loadingChapterId.value?.let { pendingChapterId ->
+                if (cursor.bookId != currentStoreState.selectedBookId) return@collect
+                currentStoreState.loadingChapterId?.let { pendingChapterId ->
                     if (cursor.chapterId != pendingChapterId) {
                         return@collect
                     }
-                    loadingChapterId.value = null
+                    reduce(WhisperbookMutation.ChapterLoadingChanged(null))
                 }
                 selectedChapterIdsByBook[cursor.bookId] = cursor.chapterId
-                if (selectedChapterId.value != cursor.chapterId) {
-                    selectedChapterId.value = cursor.chapterId
+                if (currentStoreState.selectedChapterId != cursor.chapterId) {
+                    reduce(WhisperbookMutation.ChapterSelected(cursor.chapterId))
                 }
             }
         }
     }
 
+    /** Central Flux dispatcher. Effects call ports and reduce their results back into the store. */
+    fun dispatch(action: WhisperbookAction) {
+        when (action) {
+            is WhisperbookAction.ImportBook -> importBook(action.uri)
+            is WhisperbookAction.SetChapterSelected ->
+                setChapterSelected(action.chapterId, action.selected)
+            is WhisperbookAction.MoveChapter ->
+                moveChapter(action.chapterId, action.targetSelectedPosition)
+            WhisperbookAction.SelectAllChapters -> selectAllChapters()
+            WhisperbookAction.DeselectAllChapters -> deselectAllChapters()
+            WhisperbookAction.RestoreOriginalChapterOrder -> restoreOriginalChapterOrder()
+            WhisperbookAction.ResetChapterPlan -> resetChapterPlan()
+            WhisperbookAction.ConfirmChapterPlan -> confirmChapterPlan()
+            is WhisperbookAction.ConfirmNarrationSetup ->
+                confirmNarrationSetup(action.languageCode, action.narratorVoiceId)
+            WhisperbookAction.RetryPreparation -> retryPreparation()
+            WhisperbookAction.PausePreparation -> pausePreparation()
+            WhisperbookAction.ResumePreparation -> resumePreparation()
+            WhisperbookAction.CancelPreparation -> cancelPreparation()
+            WhisperbookAction.DeleteSelectedBook -> deleteSelectedBook()
+            is WhisperbookAction.ExportSelectedBook -> exportSelectedBook(action.destination)
+            is WhisperbookAction.SelectBook -> selectBook(action.bookId)
+            is WhisperbookAction.SelectChapter -> selectChapter(action.chapterId)
+            WhisperbookAction.PlayPreviousChapter -> playPreviousChapter()
+            WhisperbookAction.PlayNextChapter -> playNextChapter()
+            WhisperbookAction.PlaySelectedChapter -> playSelectedChapter()
+            WhisperbookAction.PlayOrPause -> playOrPause()
+            is WhisperbookAction.SeekBy -> seekBy(action.deltaMs)
+            is WhisperbookAction.SeekToFraction -> seekToFraction(action.fraction)
+            is WhisperbookAction.SeekToPassage -> seekToPassage(action.passageId)
+            is WhisperbookAction.CorrectPassageSpeaker -> correctPassageSpeaker(
+                action.passageId,
+                action.speakerId,
+                action.scope,
+            )
+            is WhisperbookAction.CorrectPassageSpeakers -> correctPassageSpeakers(
+                action.passageIds,
+                action.speakerId,
+                action.scope,
+            )
+            WhisperbookAction.CycleSpeed -> cycleSpeed()
+            WhisperbookAction.CycleNarrationChunkSize -> cycleNarrationChunkSize()
+            is WhisperbookAction.DownloadLanguagePack -> downloadLanguagePack(action.languageCode)
+            is WhisperbookAction.SelectNarrationLanguage -> selectNarrationLanguage(action.languageCode)
+            WhisperbookAction.CycleSleepTimer -> cycleSleepTimer()
+            is WhisperbookAction.CycleVoice -> cycleVoice(action.characterId)
+            is WhisperbookAction.AssignVoice -> assignVoice(
+                action.characterId,
+                action.voiceId,
+                action.regenerationScope,
+            )
+            WhisperbookAction.RevertVoiceChange -> revertVoiceChange()
+            is WhisperbookAction.PreviewCharacter -> previewCharacter(action.characterId)
+            is WhisperbookAction.PreviewVoice -> previewVoice(action.voiceId, action.characterName)
+            is WhisperbookAction.PreviewNarrationSetupVoice ->
+                previewNarrationSetupVoice(action.voiceId, action.languageCode)
+            is WhisperbookAction.SetAutoScroll -> setAutoScroll(action.enabled)
+            is WhisperbookAction.SetKeepScreenAwake -> setKeepScreenAwake(action.enabled)
+            is WhisperbookAction.SetLargerText -> setLargerText(action.enabled)
+            WhisperbookAction.CompleteOnboarding -> completeOnboarding()
+            WhisperbookAction.ClearMessage -> clearMessage()
+        }
+    }
+
     fun selectBook(bookId: String) {
-        if (bookId.isBlank() || selectedBookId.value == bookId) return
+        if (bookId.isBlank() || currentStoreState.selectedBookId == bookId) return
         cancelChapterSelection()
-        selectedBookId.value = bookId
-        selectedChapterId.value = books.value
-            .firstOrNull { it.id == bookId }
-            ?.let(::rememberedChapterId)
+        reduce(
+            WhisperbookMutation.BookSelected(
+                bookId = bookId,
+                chapterId = books.value
+                    .firstOrNull { it.id == bookId }
+                    ?.let(::rememberedChapterId),
+            ),
+        )
     }
 
     fun selectChapter(chapterId: String) {
-        if (chapterId.isBlank() || chapterId == selectedChapterId.value) return
-        val bookId = selectedBookId.value ?: return
+        if (chapterId.isBlank() || chapterId == currentStoreState.selectedChapterId) return
+        val bookId = currentStoreState.selectedBookId ?: return
         if (uiState.value.chapters.none { it.id == chapterId }) return
         selectedChapterIdsByBook[bookId] = chapterId
-        selectedChapterId.value = chapterId
+        reduce(WhisperbookMutation.ChapterSelected(chapterId))
         openChapter(bookId, chapterId)
     }
 
@@ -317,24 +446,77 @@ class WhisperbookViewModel(
     fun playNextChapter() = playAdjacentChapter(1)
 
     fun importBook(uri: Uri) = launchOperation("Importing your book", "book_import") {
-        services.libraryRepository.importBook(
+        val bookId = services.libraryRepository.importBook(
             uri,
             NarrationLanguage.ENGLISH.code,
-        ).getOrThrow().also { bookId ->
-            selectedBookId.value = bookId
-            selectedChapterIdsByBook.remove(bookId)
-            selectedChapterId.value = null
+        ).getOrThrow()
+        selectedChapterIdsByBook.remove(bookId)
+        reduce(WhisperbookMutation.BookSelected(bookId, null))
+        scheduleImportedParsing(bookId)
+        "Book imported. Reading its chapters on this device."
+    }
+
+    fun setChapterSelected(chapterId: String, selected: Boolean) = launchOperation {
+        val bookId = currentStoreState.selectedBookId ?: error("Open a book before choosing chapters")
+        services.libraryRepository.setChapterSelected(bookId, chapterId, selected)
+        null
+    }
+
+    fun moveChapter(chapterId: String, targetSelectedPosition: Int) = launchOperation {
+        val bookId = currentStoreState.selectedBookId ?: error("Open a book before reordering chapters")
+        services.libraryRepository.moveChapter(bookId, chapterId, targetSelectedPosition)
+        null
+    }
+
+    fun selectAllChapters() = launchOperation {
+        val bookId = currentStoreState.selectedBookId ?: error("Open a book before choosing chapters")
+        services.libraryRepository.selectAllChapters(bookId)
+        null
+    }
+
+    fun deselectAllChapters() = launchOperation {
+        val bookId = currentStoreState.selectedBookId ?: error("Open a book before choosing chapters")
+        services.libraryRepository.deselectAllChapters(bookId)
+        null
+    }
+
+    fun restoreOriginalChapterOrder() = launchOperation {
+        val bookId = currentStoreState.selectedBookId ?: error("Open a book before reordering chapters")
+        services.libraryRepository.restoreOriginalChapterOrder(bookId)
+        null
+    }
+
+    fun resetChapterPlan() = launchOperation {
+        val bookId = currentStoreState.selectedBookId ?: error("Open a book before choosing chapters")
+        services.libraryRepository.resetChapterPlan(bookId)
+        null
+    }
+
+    fun confirmChapterPlan() = launchOperation("Saving chapter choices", "chapter_plan_confirm") {
+        val snapshot = uiState.value
+        val book = snapshot.selectedBook ?: error("Open a book before choosing chapters")
+        if (snapshot.chapterPlan.none(ChapterPlanEntry::isSelected)) {
+            error("Select at least one chapter to continue")
         }
-        "Book opened. Confirm its language and narrator to begin voice generation."
+        services.libraryRepository.confirmChapterPlan(book.id)
+        if (book.narrationSetupConfirmed) {
+            ensurePreparationScheduled(book.id, force = true, knownConfirmed = true)
+            "Chapter choices saved. Updating your audiobook."
+        } else {
+            "Chapter choices saved. Choose the language and narrator next."
+        }
     }
 
     fun confirmNarrationSetup(languageCode: String, narratorVoiceId: String) = launchOperation(
         "Saving narration choices",
         "narration_setup",
     ) {
-        val bookId = selectedBookId.value ?: error("Open a book before choosing its narration")
+        val bookId = currentStoreState.selectedBookId ?: error("Open a book before choosing its narration")
         val book = books.value.firstOrNull { it.id == bookId }
             ?: error("Open a book before choosing its narration")
+        if (!book.preparation.chapterPlanConfirmed) {
+            error("Choose at least one chapter before setting up narration")
+        }
         if (book.narrationSetupConfirmed) return@launchOperation null
         val language = NarrationLanguage.fromCode(languageCode)
             ?: error("Choose a supported narration language")
@@ -346,14 +528,22 @@ class WhisperbookViewModel(
             }
         }
         services.libraryRepository.confirmNarrationSetup(book.id, language.code, voice.id)
-        ensurePreparationScheduled(book.id, knownConfirmed = true)
+        ensurePreparationScheduled(book.id, force = true, knownConfirmed = true)
         "Generating ${language.displayName} narration with ${voice.displayName} on this device."
     }
 
     fun retryPreparation() {
-        val bookId = selectedBookId.value ?: return
+        val bookId = currentStoreState.selectedBookId ?: return
         val book = books.value.firstOrNull { it.id == bookId } ?: return
-        if (!book.narrationSetupConfirmed) {
+        if (book.preparation.stage == PreparationStage.AWAITING_CHAPTER_SELECTION) {
+            launchOperation { error("Choose at least one chapter before continuing") }
+            return
+        }
+        if (!book.preparation.stage.isParsingStage() && !book.preparation.chapterPlanConfirmed) {
+            launchOperation { error("Choose at least one chapter before continuing") }
+            return
+        }
+        if (!book.preparation.stage.isParsingStage() && !book.narrationSetupConfirmed) {
             launchOperation { error("Choose a language and narrator before preparing voices") }
             return
         }
@@ -364,36 +554,36 @@ class WhisperbookViewModel(
     }
 
     fun pausePreparation() {
-        val bookId = selectedBookId.value ?: return
+        val bookId = currentStoreState.selectedBookId ?: return
         launchOperation("Pausing preparation", "preparation_pause") {
             preparationSchedulingMutex.withLock {
                 services.preparationCoordinator.pause(bookId)
                 reconciledPreparationBookIds.remove(bookId)
-                preparationSchedulingErrors.value = preparationSchedulingErrors.value - bookId
+                reduce(WhisperbookMutation.SchedulingErrorCleared(bookId))
             }
             "Preparation paused. Your progress is saved on this device."
         }
     }
 
     fun resumePreparation() {
-        val bookId = selectedBookId.value ?: return
+        val bookId = currentStoreState.selectedBookId ?: return
         launchOperation("Resuming preparation", "preparation_resume") {
             preparationSchedulingMutex.withLock {
                 services.preparationCoordinator.resume(bookId)
                 reconciledPreparationBookIds.add(bookId)
-                preparationSchedulingErrors.value = preparationSchedulingErrors.value - bookId
+                reduce(WhisperbookMutation.SchedulingErrorCleared(bookId))
             }
             "Preparation resumed from your saved progress."
         }
     }
 
     fun cancelPreparation() {
-        val bookId = selectedBookId.value ?: return
+        val bookId = currentStoreState.selectedBookId ?: return
         launchOperation("Stopping preparation", "preparation_cancel") {
             preparationSchedulingMutex.withLock {
                 services.preparationCoordinator.cancel(bookId)
                 reconciledPreparationBookIds.remove(bookId)
-                preparationSchedulingErrors.value = preparationSchedulingErrors.value - bookId
+                reduce(WhisperbookMutation.SchedulingErrorCleared(bookId))
             }
             "Preparation stopped."
         }
@@ -408,33 +598,65 @@ class WhisperbookViewModel(
             val currentBook = books.value.firstOrNull { it.id == bookId }
             if (currentBook == null || bookId in booksPendingDeletion) {
                 reconciledPreparationBookIds.remove(bookId)
-                preparationSchedulingErrors.value = preparationSchedulingErrors.value - bookId
+                reduce(WhisperbookMutation.SchedulingErrorCleared(bookId))
                 return@withLock
             }
-            if (!knownConfirmed && !currentBook.narrationSetupConfirmed) return@withLock
+            val stage = currentBook.preparation.stage
+            if (stage == PreparationStage.AWAITING_CHAPTER_SELECTION) return@withLock
+            if (stage == PreparationStage.AWAITING_NARRATION_SETUP && !knownConfirmed) return@withLock
+            if (!stage.isParsingStage() && !currentBook.preparation.chapterPlanConfirmed) return@withLock
+            if (!stage.isParsingStage() && !knownConfirmed && !currentBook.narrationSetupConfirmed) {
+                return@withLock
+            }
             if (!force && currentBook.preparation.runState != PreparationRunState.RUNNING) {
-                preparationSchedulingErrors.value = preparationSchedulingErrors.value - bookId
+                reduce(WhisperbookMutation.SchedulingErrorCleared(bookId))
                 return@withLock
             }
             if (
                 !force &&
                 currentBook.preparation.stage in setOf(PreparationStage.READY, PreparationStage.FAILED)
             ) {
-                preparationSchedulingErrors.value = preparationSchedulingErrors.value - bookId
+                reduce(WhisperbookMutation.SchedulingErrorCleared(bookId))
                 return@withLock
             }
             if (force) reconciledPreparationBookIds.remove(bookId)
             if (!reconciledPreparationBookIds.add(bookId)) return@withLock
             try {
                 services.preparationCoordinator.enqueue(bookId)
-                preparationSchedulingErrors.value = preparationSchedulingErrors.value - bookId
+                reduce(WhisperbookMutation.SchedulingErrorCleared(bookId))
             } catch (failure: Throwable) {
                 reconciledPreparationBookIds.remove(bookId)
-                preparationSchedulingErrors.value = preparationSchedulingErrors.value + (
-                    bookId to userFacingOperationError(
+                reduce(
+                    WhisperbookMutation.SchedulingErrorRecorded(
+                        bookId = bookId,
+                        message = userFacingOperationError(
                         failure,
                         fallback = "Preparation could not start. Please try again.",
-                    )
+                        ),
+                    ),
+                )
+                throw failure
+            }
+        }
+    }
+
+    /** Imports are persisted before the books flow necessarily emits, so schedule from the ID. */
+    private suspend fun scheduleImportedParsing(bookId: String) {
+        preparationSchedulingMutex.withLock {
+            if (bookId in booksPendingDeletion || !reconciledPreparationBookIds.add(bookId)) return@withLock
+            try {
+                services.preparationCoordinator.enqueue(bookId)
+                reduce(WhisperbookMutation.SchedulingErrorCleared(bookId))
+            } catch (failure: Throwable) {
+                reconciledPreparationBookIds.remove(bookId)
+                reduce(
+                    WhisperbookMutation.SchedulingErrorRecorded(
+                        bookId = bookId,
+                        message = userFacingOperationError(
+                        failure,
+                        fallback = "Parsing could not start. Please try again.",
+                        ),
+                    ),
                 )
                 throw failure
             }
@@ -442,7 +664,7 @@ class WhisperbookViewModel(
     }
 
     fun deleteSelectedBook() = launchOperation("Removing book", "book_remove") {
-        val bookId = selectedBookId.value ?: return@launchOperation null
+        val bookId = currentStoreState.selectedBookId ?: return@launchOperation null
         if (uiState.value.playback?.bookId == bookId) {
             services.playbackGateway.pause()
         }
@@ -452,15 +674,14 @@ class WhisperbookViewModel(
                 services.preparationCoordinator.cancel(bookId)
                 services.libraryRepository.deleteBook(bookId)
                 reconciledPreparationBookIds.remove(bookId)
-                preparationSchedulingErrors.value = preparationSchedulingErrors.value - bookId
+                reduce(WhisperbookMutation.SchedulingErrorCleared(bookId))
             } catch (failure: Throwable) {
                 booksPendingDeletion.remove(bookId)
                 throw failure
             }
         }
         selectedChapterIdsByBook.remove(bookId)
-        selectedBookId.value = null
-        selectedChapterId.value = null
+        reduce(WhisperbookMutation.BookSelected(null, null))
         "Book removed from this device."
     }
 
@@ -471,29 +692,29 @@ class WhisperbookViewModel(
         return viewModelScope.launch {
             val startedAtMs = monotonicNowMs()
             BetaDiagnostics.info("book_mp3_export_started")
-            operation.value = OperationState(
+            updateOperation(OperationState(
                 isBusy = true,
                 statusMessage = "Preparing ${book.title} for MP3 export",
                 progressFraction = 0f,
                 kind = OperationKind.BOOK_MP3_EXPORT,
                 targetBookId = book.id,
-            )
+            ))
             try {
                 val exported = services.bookMp3Exporter.export(book.id, destination) { progress ->
-                    operation.value = OperationState(
+                    updateOperation(OperationState(
                         isBusy = true,
                         statusMessage = progress.exportStatus(book.title),
                         progressFraction = progress.progressFraction,
                         kind = OperationKind.BOOK_MP3_EXPORT,
                         targetBookId = book.id,
-                    )
+                    ))
                 }
-                operation.value = OperationState(
+                updateOperation(OperationState(
                     statusMessage = "Exported ${book.title} as MP3 (${exported.bytesWritten.toFileSize()}).",
                     progressFraction = 1f,
                     kind = OperationKind.BOOK_MP3_EXPORT,
                     targetBookId = book.id,
-                )
+                ))
                 BetaDiagnostics.performance(
                     "book_mp3_export_completed",
                     mapOf(
@@ -502,7 +723,7 @@ class WhisperbookViewModel(
                     ),
                 )
             } catch (cancellation: CancellationException) {
-                operation.value = OperationState()
+                updateOperation(OperationState())
                 throw cancellation
             } catch (failure: Throwable) {
                 BetaDiagnostics.error(
@@ -510,14 +731,14 @@ class WhisperbookViewModel(
                     failure,
                     mapOf("elapsed_ms" to (monotonicNowMs() - startedAtMs)),
                 )
-                operation.value = OperationState(
+                updateOperation(OperationState(
                     errorMessage = userFacingOperationError(
                         failure,
                         fallback = "The book could not be exported as MP3. Please try again.",
                     ),
                     kind = OperationKind.BOOK_MP3_EXPORT,
                     targetBookId = book.id,
-                )
+                ))
             }
         }.also { bookExportJob = it }
     }
@@ -749,9 +970,6 @@ class WhisperbookViewModel(
                 -> currentChapter
             }
             val fromChapterOrdinal = requestChapter.ordinal
-            if (fromChapterOrdinal !in snapshot.chapters.indices) {
-                error("There is no chapter at that voice-change boundary")
-            }
             val speed = snapshot.settings.speakingSpeed
             services.applyVoiceRegeneration(
                 VoiceRegenerationRequest(
@@ -768,7 +986,7 @@ class WhisperbookViewModel(
                     fromChapterOrdinal = fromChapterOrdinal,
                 ),
             )
-            voiceRetentionRefreshVersion.value += 1L
+            reduce(WhisperbookMutation.VoiceRetentionRefreshRequested)
             refreshStorageUsage()
             val boundary = when (regenerationScope) {
                 VoiceRegenerationScope.WHOLE_BOOK -> "the whole book"
@@ -786,7 +1004,7 @@ class WhisperbookViewModel(
             .maxByOrNull(RevertibleVoiceChange::expiresAtEpochMs)
             ?: error("The previous voice is no longer available")
         check(services.revertVoiceChange(change)) { "The previous voice is no longer available" }
-        voiceRetentionRefreshVersion.value += 1L
+        reduce(WhisperbookMutation.VoiceRetentionRefreshRequested)
         refreshStorageUsage()
         "Previous narration restored. Missing chapters will finish in the background."
     }
@@ -812,7 +1030,7 @@ class WhisperbookViewModel(
     }
 
     fun clearMessage() {
-        operation.value = OperationState()
+        updateOperation(OperationState())
     }
 
     override fun onCleared() {
@@ -831,30 +1049,30 @@ class WhisperbookViewModel(
             ?: "Preparing chapter audio on this device. You can keep using Whisperbook."
         val request = ++chapterSelectionRequest
         chapterSelectionJob?.cancel()
-        loadingChapterId.value = chapterId
+        reduce(WhisperbookMutation.ChapterLoadingChanged(chapterId))
         return viewModelScope.launch {
-            operation.value = OperationState(isBusy = true, statusMessage = status)
+            updateOperation(OperationState(isBusy = true, statusMessage = status))
             try {
                 services.playbackGateway.playBook(bookId, chapterId)
                 if (request == chapterSelectionRequest) {
                     refreshStorageUsage()
-                    operation.value = OperationState()
+                    updateOperation(OperationState())
                 }
             } catch (cancellation: CancellationException) {
                 if (request == chapterSelectionRequest) {
-                    loadingChapterId.value = null
-                    operation.value = OperationState()
+                    reduce(WhisperbookMutation.ChapterLoadingChanged(null))
+                    updateOperation(OperationState())
                 }
                 throw cancellation
             } catch (failure: Throwable) {
                 if (request == chapterSelectionRequest) {
-                    loadingChapterId.value = null
-                    operation.value = OperationState(
+                    reduce(WhisperbookMutation.ChapterLoadingChanged(null))
+                    updateOperation(OperationState(
                         errorMessage = userFacingOperationError(
                             failure,
                             fallback = "This chapter could not be prepared.",
                         ),
-                    )
+                    ))
                 }
             }
         }.also { chapterSelectionJob = it }
@@ -862,7 +1080,7 @@ class WhisperbookViewModel(
 
     private fun playAdjacentChapter(offset: Int) {
         val snapshot = uiState.value
-        val currentChapterId = selectedChapterId.value ?: snapshot.selectedChapter?.id ?: return
+        val currentChapterId = currentStoreState.selectedChapterId ?: snapshot.selectedChapter?.id ?: return
         val currentIndex = snapshot.chapters.indexOfFirst { it.id == currentChapterId }
         val targetChapter = snapshot.chapters.getOrNull(currentIndex + offset) ?: return
         selectChapter(targetChapter.id)
@@ -872,8 +1090,8 @@ class WhisperbookViewModel(
         chapterSelectionRequest += 1
         chapterSelectionJob?.cancel()
         chapterSelectionJob = null
-        loadingChapterId.value = null
-        operation.value = OperationState()
+        reduce(WhisperbookMutation.ChapterLoadingChanged(null))
+        updateOperation(OperationState())
     }
 
     private fun rememberedChapterId(book: Book): String? =
@@ -886,7 +1104,7 @@ class WhisperbookViewModel(
     }
 
     private fun refreshStorageUsage() {
-        storageRefreshVersion.value += 1L
+        reduce(WhisperbookMutation.StorageRefreshRequested)
     }
 
     private fun changeNarrationLanguage(
@@ -928,12 +1146,12 @@ class WhisperbookViewModel(
         val isUserVisibleWork = status != null
         diagnosticEvent?.let { BetaDiagnostics.info("${it}_started") }
         if (isUserVisibleWork) {
-            operation.value = OperationState(isBusy = true, statusMessage = status)
+            updateOperation(OperationState(isBusy = true, statusMessage = status))
         }
         try {
             val resultMessage = block()
             if (isUserVisibleWork || resultMessage != null) {
-                operation.value = OperationState(statusMessage = resultMessage)
+                updateOperation(OperationState(statusMessage = resultMessage))
             }
             diagnosticEvent?.let { event ->
                 BetaDiagnostics.performance(
@@ -949,9 +1167,9 @@ class WhisperbookViewModel(
                 failure = failure,
                 details = mapOf("elapsed_ms" to (monotonicNowMs() - startedAtMs)),
             )
-            operation.value = OperationState(
+            updateOperation(OperationState(
                 errorMessage = userFacingOperationError(failure),
-            )
+            ))
         }
     }
 
@@ -991,9 +1209,20 @@ internal fun voicePreviewText(characterName: String, languageCode: String = "en"
 private data class LibraryState(
     val books: List<Book>,
     val selectedBook: Book?,
+    val chapterPlan: List<ChapterPlanEntry>,
     val chapters: List<Chapter>,
     val selectedChapter: Chapter?,
     val characters: List<StoryCharacter>,
+)
+
+private data class SelectedBookPlanState(
+    val book: Book?,
+    val chapterPlan: List<ChapterPlanEntry>,
+)
+
+private data class SelectedBookChapterData(
+    val headers: List<Chapter> = emptyList(),
+    val plan: List<ChapterPlanEntry> = emptyList(),
 )
 
 private data class SessionState(
@@ -1021,17 +1250,6 @@ private data class PendingOperationState(
     val chapterId: String?,
     val audioProgress: PlaybackPreparationProgress?,
 )
-
-private data class OperationState(
-    val isBusy: Boolean = false,
-    val statusMessage: String? = null,
-    val errorMessage: String? = null,
-    val progressFraction: Float? = null,
-    val kind: OperationKind? = null,
-    val targetBookId: String? = null,
-)
-
-private enum class OperationKind { BOOK_MP3_EXPORT }
 
 private fun BookMp3ExportProgress.exportStatus(bookTitle: String): String = when (stage) {
     BookMp3ExportStage.PREPARING_AUDIO ->
@@ -1096,3 +1314,19 @@ private data class BookStorageState(
     val privateSourcePath: String?,
     val preparationStage: com.whisperbook.app.domain.model.PreparationStage,
 )
+
+private fun PreparationStage.isParsingStage(): Boolean =
+    this == PreparationStage.COPY_AND_VALIDATE || this == PreparationStage.READING_CHAPTERS
+
+private fun PreparationStage.isChapterPlanGate(): Boolean =
+    this == PreparationStage.AWAITING_CHAPTER_SELECTION ||
+        this == PreparationStage.AWAITING_NARRATION_SETUP
+
+private fun Book.shouldReconcilePreparation(): Boolean {
+    val state = preparation
+    if (state.runState != PreparationRunState.RUNNING) return false
+    if (state.stage == PreparationStage.READY || state.stage == PreparationStage.FAILED) return false
+    if (state.stage.isChapterPlanGate()) return false
+    return state.stage.isParsingStage() ||
+        (state.chapterPlanConfirmed && narrationSetupConfirmed)
+}

@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Interactive map of every Whisperbook screen, route, gate, dialog, and in-screen action.">
+  <title>Whisperbook interactive navigation map</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#diagram">Skip to navigation map</a>
+
+  <header class="masthead">
+    <div class="brand-block">
+      <div class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 48 48" role="img">
+          <path d="M8 11.5c6.6-2 12-.7 16 3.8v24.2c-4-4.3-9.4-5.6-16-3.7V11.5Z"/>
+          <path d="M40 11.5c-6.6-2-12-.7-16 3.8v24.2c4-4.3 9.4-5.6 16-3.7V11.5Z"/>
+          <path d="M24 15.3v24.2"/>
+        </svg>
+      </div>
+      <div>
+        <h1>Whisperbook navigation</h1>
+        <p>Every screen, gate, handoff, and action in the current Android flow.</p>
+      </div>
+    </div>
+
+    <div class="header-tools">
+      <label class="search-control" for="search-input">
+        <span class="sr-only">Search screens and actions</span>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="m16 16 4 4"/></svg>
+        <input id="search-input" type="search" placeholder="Find a screen or action" autocomplete="off">
+        <kbd>/</kbd>
+      </label>
+      <button class="quiet-button" id="focus-mode" type="button" aria-pressed="false">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 3H3v5M16 3h5v5M8 21H3v-5M16 21h5v-5"/></svg>
+        Expand map
+      </button>
+    </div>
+  </header>
+
+  <main class="app-shell">
+    <aside class="panel journey-panel" aria-labelledby="journey-heading">
+      <div class="panel-heading">
+        <div>
+          <p class="panel-kicker">Guided view</p>
+          <h2 id="journey-heading">Choose a journey</h2>
+        </div>
+        <span class="screen-count" id="screen-count">12 screens</span>
+      </div>
+
+      <label class="select-label" for="journey-select">Highlight one end-to-end path</label>
+      <div class="select-wrap">
+        <select id="journey-select"></select>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 9 5 5 5-5"/></svg>
+      </div>
+
+      <section class="journey-copy" aria-live="polite">
+        <h3 id="journey-title"></h3>
+        <p id="journey-description"></p>
+        <ol id="journey-steps"></ol>
+      </section>
+
+      <section class="filter-section" aria-labelledby="filter-heading">
+        <h3 id="filter-heading">Connection layers</h3>
+        <div id="filter-list" class="filter-list"></div>
+      </section>
+
+      <section class="legend" aria-labelledby="legend-heading">
+        <h3 id="legend-heading">How to read the map</h3>
+        <div class="legend-item"><span class="legend-line primary"></span><span>Direct route</span></div>
+        <div class="legend-item"><span class="legend-line conditional"></span><span>State-dependent gate</span></div>
+        <div class="legend-item"><span class="legend-line persistent"></span><span>Persistent tab</span></div>
+        <div class="legend-item"><span class="legend-line overlay"></span><span>Sheet, dialog, or system picker</span></div>
+      </section>
+
+      <div class="map-tip">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v18M3 12h18M5.6 5.6l12.8 12.8M18.4 5.6 5.6 18.4"/></svg>
+        <p>Drag the stage to pan. Select a card to reveal every action available from it.</p>
+      </div>
+    </aside>
+
+    <section class="map-column" aria-labelledby="map-heading">
+      <div class="map-toolbar">
+        <div>
+          <p class="panel-kicker">Live route graph</p>
+          <h2 id="map-heading">App navigation stage</h2>
+        </div>
+        <div class="map-toolbar-actions" aria-label="Map controls">
+          <button class="icon-button" id="zoom-out" type="button" aria-label="Zoom out">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/></svg>
+          </button>
+          <output id="zoom-level" aria-live="polite">100%</output>
+          <button class="icon-button" id="zoom-in" type="button" aria-label="Zoom in">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+          </button>
+          <button class="text-button" id="fit-map" type="button">Fit map</button>
+        </div>
+      </div>
+
+      <div class="diagram-shell" id="diagram" tabindex="0" aria-label="Interactive Whisperbook navigation diagram">
+        <div class="stage-scenery" aria-hidden="true">
+          <span class="moon"></span>
+          <span class="hill hill-one"></span>
+          <span class="hill hill-two"></span>
+        </div>
+        <div class="diagram-world" id="diagram-world">
+          <svg class="edges" id="edge-layer" viewBox="0 0 1740 1140" aria-hidden="true">
+            <defs>
+              <marker id="arrow-primary" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth"><path d="M1 1 9 5 1 9Z"/></marker>
+              <marker id="arrow-conditional" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth"><path d="M1 1 9 5 1 9Z"/></marker>
+              <marker id="arrow-persistent" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth"><path d="M1 1 9 5 1 9Z"/></marker>
+              <marker id="arrow-overlay" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth"><path d="M1 1 9 5 1 9Z"/></marker>
+              <marker id="arrow-back" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto" markerUnits="strokeWidth"><path d="M1 1 9 5 1 9Z"/></marker>
+            </defs>
+          </svg>
+          <div class="node-layer" id="node-layer"></div>
+        </div>
+
+        <div class="search-empty" id="search-empty" hidden>
+          <strong>No matching screen or action</strong>
+          <button type="button" id="clear-search">Clear search</button>
+        </div>
+
+        <div class="map-status" id="map-status" role="status" aria-live="polite"></div>
+      </div>
+    </section>
+
+    <aside class="panel inspector" aria-labelledby="inspector-heading">
+      <div id="inspector-content"></div>
+    </aside>
+  </main>
+
+  <template id="node-template">
+    <button class="map-node" type="button">
+      <span class="node-tab"><span class="node-index"></span><span class="node-kind"></span></span>
+      <span class="node-body">
+        <span class="node-icon" aria-hidden="true"></span>
+        <span class="node-text"><strong></strong><small></small></span>
+      </span>
+      <span class="node-route"></span>
+    </button>
+  </template>
+
+  <script src="app.js"></script>
+</body>
+</html>
