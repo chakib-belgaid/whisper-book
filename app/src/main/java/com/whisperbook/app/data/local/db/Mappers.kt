@@ -14,6 +14,7 @@ import com.whisperbook.app.domain.model.NarrationPerspective
 import com.whisperbook.app.domain.model.Passage
 import com.whisperbook.app.domain.model.PlaybackCursor
 import com.whisperbook.app.domain.model.PreparationStage
+import com.whisperbook.app.domain.model.PreparationRunState
 import com.whisperbook.app.domain.model.PreparationState
 import com.whisperbook.app.domain.model.StoryCharacter
 
@@ -73,6 +74,7 @@ fun PreparationJobEntity.toDomain(): PreparationState = PreparationState(
     progressFraction = progressFraction.normalized(default = 0f, minimum = 0f, maximum = 1f),
     message = message,
     retryable = retryable,
+    runState = enumValueOrDefault(runState, PreparationRunState.RUNNING),
 )
 
 fun PreparationState.toEntity(
@@ -87,6 +89,7 @@ fun PreparationState.toEntity(
     progressFraction = progressFraction.normalized(default = 0f, minimum = 0f, maximum = 1f),
     message = message,
     retryable = retryable,
+    runState = runState.name,
     attemptCount = attemptCount.coerceAtLeast(0),
     updatedAtEpochMs = updatedAtEpochMs,
 )

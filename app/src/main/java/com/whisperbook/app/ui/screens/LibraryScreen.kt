@@ -231,6 +231,10 @@ fun LibraryScreen(
 
 internal fun LibraryBookUi.libraryProgressLabel(): String = when {
     needsNarrationSetup -> "Narration setup needed"
+    preparation.runState == com.whisperbook.app.domain.model.PreparationRunState.PAUSED ->
+        "Preparation paused · progress saved"
+    preparation.runState == com.whisperbook.app.domain.model.PreparationRunState.CANCELLED ->
+        "Preparation cancelled"
     preparation.stage == com.whisperbook.app.domain.model.PreparationStage.FAILED ->
         "Preparation needs attention"
     preparation.stage == com.whisperbook.app.domain.model.PreparationStage.PREPARING_AUDIO &&

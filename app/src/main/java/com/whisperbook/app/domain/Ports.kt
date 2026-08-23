@@ -192,8 +192,12 @@ interface AudioSegmentStore {
 interface PreparationCoordinator {
     /** Returns only after the durable work request has been accepted by the scheduler. */
     suspend fun enqueue(bookId: String)
+    /** Pauses durable work after WorkManager has stopped the active worker. */
+    suspend fun pause(bookId: String)
+    /** Resumes a paused job from its persisted preparation checkpoints. */
+    suspend fun resume(bookId: String)
     suspend fun regenerateAudio(bookId: String, fromChapterOrdinal: Int)
-    /** Returns only after WorkManager has acknowledged the cancellation. */
+    /** Stops future work while retaining already completed local preparation. */
     suspend fun cancel(bookId: String)
     fun observe(bookId: String): Flow<PreparationState>
 }

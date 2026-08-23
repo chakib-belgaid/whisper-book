@@ -91,6 +91,9 @@ fun ProcessingScreen(
     onContinueInBackground: () -> Unit,
     onReady: () -> Unit,
     onRetry: () -> Unit,
+    onPause: () -> Unit,
+    onResume: () -> Unit,
+    onCancel: () -> Unit,
     onBackToImport: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -162,6 +165,29 @@ fun ProcessingScreen(
                 )
                 Spacer(Modifier.height(3.dp))
                 StoryProgressBar(appState.preparationProgress)
+                if (appState.isPreparationPaused || appState.isPreparationCancelled) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        text = if (appState.isPreparationPaused) {
+                            "Paused — your progress is saved on this device."
+                        } else {
+                            "Cancelled — completed work is still saved on this device."
+                        },
+                        color = WhisperbookTheme.colors.onStage,
+                        style = WhisperbookTheme.typography.label,
+                        textAlign = TextAlign.Center,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .semantics {
+                                stateDescription = if (appState.isPreparationPaused) {
+                                    "Paused"
+                                } else {
+                                    "Cancelled"
+                                }
+                            }
+                            .testTag("processing-run-state"),
+                    )
+                }
                 Spacer(Modifier.height(10.dp))
 
                 ParchmentPanel(
@@ -175,27 +201,30 @@ fun ProcessingScreen(
                     )
                 }
                 Spacer(Modifier.height(10.dp))
+                val continueInBackground = {
+                    if (
+                        Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+                        ContextCompat.checkSelfPermission(
+                            context,
+                            Manifest.permission.POST_NOTIFICATIONS,
+                        ) != PackageManager.PERMISSION_GRANTED
+                    ) {
+                        notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    }
+                    onContinueInBackground()
+                }
                 PapercraftButton(
-                    text = if (appState.preparationStage >= 3) {
-                        "Listen now"
-                    } else {
-                        "Continue in background"
+                    text = when {
+                        appState.isPreparationPaused -> "Resume"
+                        appState.isPreparationCancelled -> "Start again"
+                        appState.preparationStage >= 3 -> "Listen now"
+                        else -> "Continue in background"
                     },
-                    onClick = if (appState.preparationStage >= 3) {
-                        onReady
-                    } else {
-                        {
-                            if (
-                                Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-                                ContextCompat.checkSelfPermission(
-                                    context,
-                                    Manifest.permission.POST_NOTIFICATIONS,
-                                ) != PackageManager.PERMISSION_GRANTED
-                            ) {
-                                notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
-                            }
-                            onContinueInBackground()
-                        }
+                    onClick = when {
+                        appState.isPreparationPaused -> onResume
+                        appState.isPreparationCancelled -> onRetry
+                        appState.preparationStage >= 3 -> onReady
+                        else -> continueInBackground
                     },
                     variant = PapercraftButtonVariant.Accent,
                     modifier = Modifier
@@ -205,7 +234,41 @@ fun ProcessingScreen(
                     isLoading = appState.isBusy,
                     loadingDescription = appState.statusMessage ?: "Preparing your audiobook",
                 )
-                if (appState.preparationStage >= 3) {
+                if (!appState.isPreparationCancelled && appState.preparationStage < 4) {
+                    Spacer(Modifier.height(8.dp))
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        if (!appState.isPreparationPaused) {
+                            PapercraftButton(
+                                text = "Pause",
+                                onClick = onPause,
+                                enabled = !appState.isBusy,
+                                variant = PapercraftButtonVariant.Parchment,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .testTag("processing-pause-action"),
+                            )
+                        }
+                        PapercraftButton(
+                            text = "Cancel",
+                            onClick = onCancel,
+                            enabled = !appState.isBusy,
+                            variant = PapercraftButtonVariant.Parchment,
+                            modifier = Modifier
+                                .weight(1f)
+                                .testTag("processing-cancel-action"),
+                        )
+                    }
+                }
+                if (
+                    appState.preparationStage >= 3 &&
+                    !appState.isPreparationPaused &&
+                    !appState.isPreparationCancelled
+                ) {
                     Text(
                         text = "Playback starts with the opening lines while the rest records in the background.",
                         color = WhisperbookTheme.colors.onStage,

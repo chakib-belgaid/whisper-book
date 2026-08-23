@@ -132,6 +132,12 @@ enum class PreparationStage {
     FAILED,
 }
 
+enum class PreparationRunState {
+    RUNNING,
+    PAUSED,
+    CANCELLED,
+}
+
 @Immutable
 data class PreparationState(
     val stage: PreparationStage,
@@ -140,6 +146,7 @@ data class PreparationState(
     val progressFraction: Float = 0f,
     val message: String? = null,
     val retryable: Boolean = false,
+    val runState: PreparationRunState = PreparationRunState.RUNNING,
 ) {
     companion object {
         val Ready = PreparationState(PreparationStage.READY, progressFraction = 1f)
@@ -205,7 +212,7 @@ data class PlaybackNarrationReload(
 data class AppSettings(
     val onboardingComplete: Boolean = false,
     val installedLanguagePackCodes: Set<String> = setOf(NarrationLanguage.ENGLISH.code),
-    val narrationChunkChars: Int = NarrationTextChunker.MAX_CHARS,
+    val narrationChunkChars: Int = NarrationTextChunker.TARGET_CHARS,
     val speakingSpeed: Float = 1f,
     val sleepTimerMinutes: Int = 30,
     val keepScreenAwake: Boolean = false,

@@ -20,7 +20,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PreparationJobEntity::class,
         PlaybackCheckpointEntity::class,
     ],
-    version = 5,
+    version = 6,
     exportSchema = true,
 )
 abstract class WhisperBookDatabase : RoomDatabase() {
@@ -43,7 +43,7 @@ abstract class WhisperBookDatabase : RoomDatabase() {
                 WhisperBookDatabase::class.java,
                 name,
             )
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5, MIGRATION_5_6)
                 .build()
 
         val MIGRATION_1_2: Migration = object : Migration(1, 2) {
@@ -191,6 +191,15 @@ abstract class WhisperBookDatabase : RoomDatabase() {
                 database.execSQL(
                     "ALTER TABLE `books` ADD COLUMN `narration_setup_confirmed` " +
                         "INTEGER NOT NULL DEFAULT 1",
+                )
+            }
+        }
+
+        val MIGRATION_5_6: Migration = object : Migration(5, 6) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                database.execSQL(
+                    "ALTER TABLE `preparation_jobs` ADD COLUMN `run_state` " +
+                        "TEXT NOT NULL DEFAULT 'RUNNING'",
                 )
             }
         }

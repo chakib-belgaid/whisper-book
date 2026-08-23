@@ -11,8 +11,10 @@ import androidx.work.await
 import androidx.work.workDataOf
 import com.whisperbook.app.data.local.db.PreparationJobDao
 import com.whisperbook.app.data.local.db.toDomain
+import com.whisperbook.app.data.local.db.toEntity
 import com.whisperbook.app.diagnostics.BetaDiagnostics
 import com.whisperbook.app.domain.PreparationCoordinator
+import com.whisperbook.app.domain.model.PreparationRunState
 import com.whisperbook.app.domain.model.PreparationStage
 import com.whisperbook.app.domain.model.PreparationState
 import java.util.concurrent.TimeUnit
@@ -45,7 +47,32 @@ class ProductionPreparationCoordinator internal constructor(
                 "policy" to PreparationWorkPlan.existingWorkPolicy.name,
             ),
         )
-        scheduler.enqueueUniqueChain(PreparationWorkPlan.uniqueName(bookId), bookId)
+        scheduleAsRunning(bookId) {
+            scheduler.enqueueUniqueChain(PreparationWorkPlan.uniqueName(bookId), bookId)
+        }
+    }
+
+    override suspend fun pause(bookId: String) {
+        require(bookId.isNotBlank()) { "bookId must not be blank" }
+        BetaDiagnostics.info(
+            "preparation_pause_requested",
+            mapOf("book_key" to preparationCorrelationKey(bookId)),
+        )
+        scheduler.cancelUnique(PreparationWorkPlan.uniqueName(bookId))
+        updateRunState(bookId, PreparationRunState.PAUSED)
+    }
+
+    override suspend fun resume(bookId: String) {
+        require(bookId.isNotBlank()) { "bookId must not be blank" }
+        val current = preparationJobs.getForBook(bookId)?.toDomain()
+        if (current?.runState != PreparationRunState.PAUSED) return
+        BetaDiagnostics.info(
+            "preparation_resume_requested",
+            mapOf("book_key" to preparationCorrelationKey(bookId)),
+        )
+        scheduleAsRunning(bookId) {
+            scheduler.enqueueUniqueChain(PreparationWorkPlan.uniqueName(bookId), bookId)
+        }
     }
 
     override suspend fun regenerateAudio(bookId: String, fromChapterOrdinal: Int) {
@@ -60,11 +87,13 @@ class ProductionPreparationCoordinator internal constructor(
                 "from_chapter_ordinal" to fromChapterOrdinal,
             ),
         )
-        scheduler.replaceWithAudioGeneration(
-            uniqueName = PreparationWorkPlan.uniqueName(bookId),
-            bookId = bookId,
-            fromChapterOrdinal = fromChapterOrdinal,
-        )
+        scheduleAsRunning(bookId) {
+            scheduler.replaceWithAudioGeneration(
+                uniqueName = PreparationWorkPlan.uniqueName(bookId),
+                bookId = bookId,
+                fromChapterOrdinal = fromChapterOrdinal,
+            )
+        }
     }
 
     override suspend fun cancel(bookId: String) {
@@ -74,6 +103,7 @@ class ProductionPreparationCoordinator internal constructor(
             mapOf("book_key" to preparationCorrelationKey(bookId)),
         )
         scheduler.cancelUnique(PreparationWorkPlan.uniqueName(bookId))
+        updateRunState(bookId, PreparationRunState.CANCELLED)
     }
 
     override fun observe(bookId: String): Flow<PreparationState> {
@@ -86,6 +116,36 @@ class ProductionPreparationCoordinator internal constructor(
                 )
             }
             .distinctUntilChanged()
+    }
+
+    private suspend fun scheduleAsRunning(bookId: String, schedule: suspend () -> Unit) {
+        val previous = preparationJobs.getForBook(bookId)
+        previous?.let { job ->
+            preparationJobs.upsert(
+                job.toDomain()
+                    .copy(runState = PreparationRunState.RUNNING)
+                    .toEntity(bookId, job.attemptCount, System.currentTimeMillis()),
+            )
+        }
+        try {
+            schedule()
+        } catch (failure: Throwable) {
+            previous?.let { preparationJobs.upsert(it) }
+            throw failure
+        }
+    }
+
+    private suspend fun updateRunState(bookId: String, runState: PreparationRunState) {
+        val current = preparationJobs.getForBook(bookId) ?: return
+        val state = current.toDomain()
+        if (state.stage == PreparationStage.READY || state.stage == PreparationStage.FAILED) return
+        preparationJobs.upsert(
+            state.copy(runState = runState).toEntity(
+                bookId = bookId,
+                attemptCount = current.attemptCount,
+                updatedAtEpochMs = System.currentTimeMillis(),
+            ),
+        )
     }
 }
 

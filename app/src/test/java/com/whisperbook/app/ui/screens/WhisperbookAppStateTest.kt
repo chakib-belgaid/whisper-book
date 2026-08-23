@@ -11,6 +11,7 @@ import com.whisperbook.app.domain.model.CharacterColorRole
 import com.whisperbook.app.domain.model.CharacterVoiceAssignment
 import com.whisperbook.app.domain.model.Passage
 import com.whisperbook.app.domain.model.PlaybackCursor
+import com.whisperbook.app.domain.model.PreparationRunState
 import com.whisperbook.app.domain.model.PreparationStage
 import com.whisperbook.app.domain.model.PreparationState
 import com.whisperbook.app.domain.model.StoryCharacter
@@ -81,6 +82,44 @@ class WhisperbookAppStateTest {
         )
 
         assertEquals("Finding chapters…", item.libraryProgressLabel())
+    }
+
+    @Test
+    fun `paused and cancelled preparation remain visible without looking active`() {
+        val paused = PreparationState(
+            stage = PreparationStage.READING_CHAPTERS,
+            progressFraction = 0.4f,
+            runState = PreparationRunState.PAUSED,
+        )
+        val state = WhisperbookAppState()
+
+        state.synchronize(WhisperbookUiSnapshot(preparation = paused))
+
+        assertTrue(state.isPreparationPaused)
+        assertFalse(state.isPreparationCancelled)
+        assertFalse(state.isBookPreparing)
+        assertEquals(
+            "Preparation paused · progress saved",
+            LibraryBookUi(
+                id = "book",
+                title = "Story",
+                author = "Author",
+                chapter = 1,
+                totalChapters = 10,
+                progress = 0.2f,
+                preparation = paused,
+            ).libraryProgressLabel(),
+        )
+
+        state.synchronize(
+            WhisperbookUiSnapshot(
+                preparation = paused.copy(runState = PreparationRunState.CANCELLED),
+            ),
+        )
+
+        assertFalse(state.isPreparationPaused)
+        assertTrue(state.isPreparationCancelled)
+        assertFalse(state.isBookPreparing)
     }
 
     @Test
@@ -461,6 +500,84 @@ class WhisperbookAppStateTest {
     }
 
     @Test
+    fun `reader keeps consecutive sections for one voice in one card`() {
+        val chapter = Chapter(
+            id = "chapter-1",
+            bookId = "book-1",
+            ordinal = 0,
+            title = "Chapter 1",
+            passages = listOf(
+                Passage("p1", "chapter-1", 0, "First narrator paragraph.", "narrator", 1f, "narration"),
+                Passage("p2", "chapter-1", 1, "Second narrator paragraph.", "narrator", 1f, "narration"),
+                Passage("p3", "chapter-1", 2, "A spoken reply.", "elara", 1f, "dialogue"),
+                Passage("p4", "chapter-1", 3, "Narration resumes.", "narrator", 1f, "narration"),
+            ),
+        )
+        val state = WhisperbookAppState()
+
+        state.synchronize(
+            WhisperbookUiSnapshot(
+                chapters = listOf(chapter),
+                selectedChapter = chapter,
+                characters = listOf(
+                    StoryCharacter("narrator", "book-1", "Narrator", emptySet(), CharacterColorRole.NARRATOR, 0),
+                    StoryCharacter("elara", "book-1", "Elara", emptySet(), CharacterColorRole.ELARA_BURGUNDY, 1),
+                ),
+            ),
+        )
+
+        assertEquals(3, state.readerPassages.size)
+        assertEquals("First narrator paragraph.\n\nSecond narrator paragraph.", state.readerPassages[0].text)
+        assertEquals(listOf("p1", "p2"), state.readerPassages[0].sourcePassageIds)
+        assertEquals(listOf("narrator", "elara", "narrator"), state.readerPassages.map(PassageUi::speakerId))
+    }
+
+    @Test
+    fun `reader card tracks every playback chunk it contains`() {
+        val text = List(30) { index -> "Sentence $index ends cleanly." }.joinToString(" ")
+        val chapter = chapterWithPassage(
+            id = "chapter-1",
+            ordinal = 0,
+            speakerId = BuiltInCharacters.NARRATOR_ID,
+            attributionRule = "narration",
+            text = text,
+        )
+        val state = WhisperbookAppState()
+
+        state.synchronize(
+            WhisperbookUiSnapshot(
+                chapters = listOf(chapter),
+                selectedChapter = chapter,
+                settings = AppSettings(narrationChunkChars = 80),
+            ),
+        )
+
+        assertTrue(state.passages.size > 1)
+        assertEquals(1, state.readerPassages.size)
+        assertEquals(state.passages.map(PassageUi::id), state.readerPassages.single().playbackPassageIds)
+        assertEquals(text, state.readerPassages.single().text)
+    }
+
+    @Test
+    fun `reader preserves paragraph breaks from the source section`() {
+        val text = "First paragraph remains visible.\n\nSecond paragraph keeps its spacing."
+        val chapter = chapterWithPassage(
+            id = "chapter-1",
+            ordinal = 0,
+            speakerId = BuiltInCharacters.NARRATOR_ID,
+            attributionRule = "narration",
+            text = text,
+        )
+        val state = WhisperbookAppState()
+
+        state.synchronize(
+            WhisperbookUiSnapshot(chapters = listOf(chapter), selectedChapter = chapter),
+        )
+
+        assertEquals(text, state.readerPassages.single().text)
+    }
+
+    @Test
     fun `changing narration chunk size reprojects reader passages`() {
         val text = List(20) { index -> "Sentence $index ends cleanly." }.joinToString(" ")
         val chapter = chapterWithPassage(
@@ -480,7 +597,8 @@ class WhisperbookAppStateTest {
             ),
         )
         val smallChunkCount = state.passages.size
-        assertTrue(state.passages.all { it.text.length <= 80 })
+        assertTrue(state.passages.any { it.text.length > 80 })
+        assertTrue(state.passages.all { it.text.length <= NarrationTextChunker.MAX_CHARS })
 
         state.synchronize(
             WhisperbookUiSnapshot(

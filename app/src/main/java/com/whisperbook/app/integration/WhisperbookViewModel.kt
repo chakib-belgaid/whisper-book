@@ -15,6 +15,7 @@ import com.whisperbook.app.domain.model.CharacterVoiceAssignment
 import com.whisperbook.app.domain.model.PlaybackCursor
 import com.whisperbook.app.domain.model.PlaybackPreparationProgress
 import com.whisperbook.app.domain.model.PreparationStage
+import com.whisperbook.app.domain.model.PreparationRunState
 import com.whisperbook.app.domain.model.PreparationState
 import com.whisperbook.app.domain.model.RevertibleVoiceChange
 import com.whisperbook.app.domain.model.StoryCharacter
@@ -245,6 +246,7 @@ class WhisperbookViewModel(
                 currentBooks.asSequence()
                     .filter { book ->
                         book.narrationSetupConfirmed &&
+                            book.preparation.runState == PreparationRunState.RUNNING &&
                             book.preparation.stage != PreparationStage.READY &&
                             book.preparation.stage != PreparationStage.FAILED
                     }
@@ -361,6 +363,30 @@ class WhisperbookViewModel(
         }
     }
 
+    fun pausePreparation() {
+        val bookId = selectedBookId.value ?: return
+        launchOperation("Pausing preparation", "preparation_pause") {
+            preparationSchedulingMutex.withLock {
+                services.preparationCoordinator.pause(bookId)
+                reconciledPreparationBookIds.remove(bookId)
+                preparationSchedulingErrors.value = preparationSchedulingErrors.value - bookId
+            }
+            "Preparation paused. Your progress is saved on this device."
+        }
+    }
+
+    fun resumePreparation() {
+        val bookId = selectedBookId.value ?: return
+        launchOperation("Resuming preparation", "preparation_resume") {
+            preparationSchedulingMutex.withLock {
+                services.preparationCoordinator.resume(bookId)
+                reconciledPreparationBookIds.add(bookId)
+                preparationSchedulingErrors.value = preparationSchedulingErrors.value - bookId
+            }
+            "Preparation resumed from your saved progress."
+        }
+    }
+
     fun cancelPreparation() {
         val bookId = selectedBookId.value ?: return
         launchOperation("Stopping preparation", "preparation_cancel") {
@@ -386,6 +412,10 @@ class WhisperbookViewModel(
                 return@withLock
             }
             if (!knownConfirmed && !currentBook.narrationSetupConfirmed) return@withLock
+            if (!force && currentBook.preparation.runState != PreparationRunState.RUNNING) {
+                preparationSchedulingErrors.value = preparationSchedulingErrors.value - bookId
+                return@withLock
+            }
             if (
                 !force &&
                 currentBook.preparation.stage in setOf(PreparationStage.READY, PreparationStage.FAILED)
@@ -596,21 +626,34 @@ class WhisperbookViewModel(
         passageId: String,
         speakerId: String,
         scope: SpeakerCorrectionScope,
+    ): Job = correctPassageSpeakers(listOf(passageId), speakerId, scope)
+
+    fun correctPassageSpeakers(
+        passageIds: List<String>,
+        speakerId: String,
+        scope: SpeakerCorrectionScope,
     ): Job = launchOperation("Correcting the attributed voice", "speaker_correction") {
         val snapshot = uiState.value
         val book = snapshot.selectedBook ?: error("Choose a book before correcting a voice")
-        val passage = snapshot.selectedChapter?.passages
-            ?.firstOrNull { it.id == passageId }
-            ?: error("That phrase is no longer available")
+        val distinctPassageIds = passageIds.distinct()
+        val passages = snapshot.selectedChapter?.passages
+            ?.filter { it.id in distinctPassageIds }
+            .orEmpty()
+        if (passages.size != distinctPassageIds.size) error("That section is no longer available")
         val speaker = snapshot.characters.firstOrNull { it.id == speakerId }
             ?: error("That voice is no longer available in this book")
-        if (passage.speakerId == speaker.id) return@launchOperation null
-        val correctedCount = services.applySpeakerCorrection(book.id, passage.id, speaker.id, scope)
+        if (passages.all { it.speakerId == speaker.id }) return@launchOperation null
+        val correctedCount = services.applySpeakerCorrections(
+            book.id,
+            distinctPassageIds,
+            speaker.id,
+            scope,
+        )
         refreshStorageUsage()
         when (correctedCount) {
             0 -> null
-            1 -> "This phrase will now be read by ${speaker.displayName}."
-            else -> "$correctedCount matching phrases will now be read by ${speaker.displayName}."
+            1 -> "This section will now be read by ${speaker.displayName}."
+            else -> "$correctedCount sections will now be read by ${speaker.displayName}."
         }
     }
 
@@ -649,7 +692,7 @@ class WhisperbookViewModel(
             )
             services.preparationCoordinator.regenerateAudio(book.id, 0)
         }
-        "$normalized-character narration chunks selected. Only the opening chunk is prepared ahead."
+        "Natural paragraph phrasing updated. Only the opening section is prepared ahead."
     }
 
     fun downloadLanguagePack(languageCode: String): Job {

@@ -4,6 +4,7 @@ import androidx.work.ExistingWorkPolicy
 import app.cash.turbine.test
 import com.whisperbook.app.data.local.db.PreparationJobDao
 import com.whisperbook.app.data.local.db.PreparationJobEntity
+import com.whisperbook.app.domain.model.PreparationRunState
 import com.whisperbook.app.domain.model.PreparationStage
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -64,6 +65,28 @@ class ProductionPreparationCoordinatorTest {
             PreparationWorkPlan.input("book-42", PreparationStage.PREPARING_AUDIO, 3)
                 .getInt(PreparationWorkPlan.KEY_FROM_CHAPTER_ORDINAL, -1),
         )
+    }
+
+    @Test
+    fun `pause resume and cancel persist control state around unique work`() = runTest {
+        val scheduler = RecordingScheduler()
+        val jobs = FakePreparationJobDao()
+        jobs.upsert(preparationJob())
+        val coordinator = ProductionPreparationCoordinator(scheduler, jobs)
+
+        coordinator.pause("book-42")
+        assertEquals(PreparationRunState.PAUSED.name, jobs.getForBook("book-42")?.runState)
+
+        coordinator.resume("book-42")
+        assertEquals(PreparationRunState.RUNNING.name, jobs.getForBook("book-42")?.runState)
+
+        coordinator.cancel("book-42")
+        assertEquals(PreparationRunState.CANCELLED.name, jobs.getForBook("book-42")?.runState)
+        assertEquals(
+            listOf("prepare-book-book-42", "prepare-book-book-42"),
+            scheduler.cancelledNames,
+        )
+        assertEquals(listOf("prepare-book-book-42"), scheduler.enqueuedNames)
     }
 
     @Test
@@ -175,6 +198,18 @@ class ProductionPreparationCoordinatorTest {
         assertNotEquals(key, preparationCorrelationKey("book-43-sensitive-local-id"))
     }
 }
+
+private fun preparationJob() = PreparationJobEntity(
+    bookId = "book-42",
+    stage = PreparationStage.READING_CHAPTERS.name,
+    completedUnits = 4,
+    totalUnits = 10,
+    progressFraction = 0.4f,
+    message = "Reading chapter 4 of 10",
+    retryable = false,
+    attemptCount = 0,
+    updatedAtEpochMs = 1L,
+)
 
 private class RecordingScheduler : PreparationWorkScheduler {
     val enqueuedNames = mutableListOf<String>()

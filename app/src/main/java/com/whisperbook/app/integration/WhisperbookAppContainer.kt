@@ -300,25 +300,44 @@ class WhisperbookAppContainer(context: Context) : WhisperbookServices, Closeable
         passageId: String,
         speakerId: String,
         scope: SpeakerCorrectionScope,
+    ): Int = applySpeakerCorrections(bookId, listOf(passageId), speakerId, scope)
+
+    override suspend fun applySpeakerCorrections(
+        bookId: String,
+        passageIds: List<String>,
+        speakerId: String,
+        scope: SpeakerCorrectionScope,
     ): Int = withContext(Dispatchers.IO) {
         narrationProfilesReady.await()
-        require(bookId.isNotBlank() && passageId.isNotBlank() && speakerId.isNotBlank())
+        val distinctPassageIds = passageIds.distinct()
+        require(
+            bookId.isNotBlank() &&
+                distinctPassageIds.isNotEmpty() &&
+                distinctPassageIds.none(String::isBlank) &&
+                speakerId.isNotBlank(),
+        )
         database.bookDao().getById(bookId) ?: error("This book is no longer in the library")
         val targetCharacter = database.storyCharacterDao().getEntitiesForBook(bookId)
             .firstOrNull { it.id == speakerId }
             ?: error("The selected voice does not belong to this book")
         val passages = database.passageDao().getForBook(bookId)
-        val source = passages.firstOrNull { it.id == passageId }
-            ?: error("The selected phrase does not belong to this book")
-        if (source.speakerId == targetCharacter.id) return@withContext 0
+        val sources = passages.filter { it.id in distinctPassageIds }
+        if (sources.size != distinctPassageIds.size) {
+            error("The selected section does not belong to this book")
+        }
+        val sourceSpeakerIds = sources.mapTo(linkedSetOf()) { it.speakerId }
+        check(sourceSpeakerIds.size == 1) { "A reader section must belong to one voice" }
+        val sourceSpeakerId = sourceSpeakerIds.single()
+        if (sourceSpeakerId == targetCharacter.id) return@withContext 0
 
-        val sourceMatchKey = speakerPhraseMatchKey(source.text)
+        val sourceMatchKeys = sources
+            .mapTo(linkedSetOf()) { speakerPhraseMatchKey(it.text) }
+            .filterTo(linkedSetOf(), String::isNotBlank)
         val affectedPassages = when (scope) {
-            SpeakerCorrectionScope.THIS_PASSAGE -> listOf(source)
+            SpeakerCorrectionScope.THIS_PASSAGE -> sources
             SpeakerCorrectionScope.MATCHING_PHRASES -> passages.filter { candidate ->
-                candidate.speakerId == source.speakerId &&
-                    sourceMatchKey.isNotBlank() &&
-                    speakerPhraseMatchKey(candidate.text) == sourceMatchKey
+                candidate.speakerId == sourceSpeakerId &&
+                    speakerPhraseMatchKey(candidate.text) in sourceMatchKeys
             }
         }
         if (affectedPassages.isEmpty()) return@withContext 0
@@ -336,7 +355,7 @@ class WhisperbookAppContainer(context: Context) : WhisperbookServices, Closeable
         // Keep the current queue's files alive during the profile reload. No previous assignment
         // is attached, so this safety retention is not exposed as a reversible cast change.
         audioSegmentStore.retainForCharacter(
-            characterId = source.speakerId,
+            characterId = sourceSpeakerId,
             passageIds = affectedPassageIds,
             bookId = bookId,
         )

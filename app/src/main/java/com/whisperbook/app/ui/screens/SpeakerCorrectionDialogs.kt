@@ -72,7 +72,7 @@ internal fun AttributedSpeakerPickerSheet(
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Text(
-                    "Who should read this phrase?",
+                    "Who should read this section?",
                     color = colors.ink,
                     style = WhisperbookTheme.typography.title,
                     textAlign = TextAlign.Center,
@@ -160,9 +160,9 @@ internal fun SpeakerCorrectionScopeDialog(
         title = { Text("Apply this voice correction?") },
         text = {
             Text(
-                "Use ${target.character}'s ${target.voice} voice for just this phrase, or for matching " +
-                    "phrases in ${bookTitle.ifBlank { "this book" }}. Matching ignores case and punctuation " +
-                    "but only changes phrases currently attributed to ${passage.speakerName}.",
+                "Use ${target.character}'s ${target.voice} voice for this section, or for matching " +
+                    "sections in ${bookTitle.ifBlank { "this book" }}. Matching ignores case and punctuation " +
+                    "but only changes sections currently attributed to ${passage.speakerName}.",
             )
         },
         confirmButton = {
@@ -172,13 +172,13 @@ internal fun SpeakerCorrectionScopeDialog(
                     modifier = Modifier.fillMaxWidth().testTag("correct-this-phrase"),
                     colors = ButtonDefaults.textButtonColors(contentColor = WhisperbookTheme.colors.action),
                 ) {
-                    Text("Just this phrase")
+                    Text("Just this section")
                 }
                 TextButton(
                     onClick = { onConfirm(SpeakerCorrectionScope.MATCHING_PHRASES) },
                     modifier = Modifier.fillMaxWidth().testTag("correct-matching-phrases"),
                 ) {
-                    Text("All matching phrases")
+                    Text("All matching sections")
                 }
                 TextButton(onClick = onDismiss, modifier = Modifier.fillMaxWidth()) {
                     Text("Keep current attribution")

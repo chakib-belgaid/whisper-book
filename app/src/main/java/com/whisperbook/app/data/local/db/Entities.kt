@@ -317,6 +317,8 @@ data class PreparationJobEntity(
     val message: String?,
     @ColumnInfo(name = "retryable")
     val retryable: Boolean,
+    @ColumnInfo(name = "run_state", defaultValue = "'RUNNING'")
+    val runState: String = "RUNNING",
     @ColumnInfo(name = "attempt_count")
     val attemptCount: Int,
     @ColumnInfo(name = "updated_at_epoch_ms")

@@ -149,6 +149,9 @@ fun WhisperbookNavHost(
                         navController.navigate(WhisperbookDestination.NowPlaying.route)
                     },
                     onRetry = appState::retryPreparation,
+                    onPause = appState::pausePreparation,
+                    onResume = appState::resumePreparation,
+                    onCancel = appState::cancelPreparation,
                     onBackToImport = {
                         navController.navigate(WhisperbookDestination.ImportBook.route) {
                             popUpTo(WhisperbookDestination.ImportBook.route) { inclusive = true }

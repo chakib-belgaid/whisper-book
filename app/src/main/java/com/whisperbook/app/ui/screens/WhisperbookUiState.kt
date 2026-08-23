@@ -17,6 +17,7 @@ import com.whisperbook.app.domain.model.CharacterColorRole
 import com.whisperbook.app.domain.model.CharacterVoiceAssignment
 import com.whisperbook.app.domain.model.NarrationLanguage
 import com.whisperbook.app.domain.model.PreparationStage
+import com.whisperbook.app.domain.model.PreparationRunState
 import com.whisperbook.app.domain.model.PreparationState
 import com.whisperbook.app.domain.model.StoryCharacter
 import com.whisperbook.app.domain.model.SpeakerCorrectionScope
@@ -32,6 +33,9 @@ interface WhisperbookUiActions {
     fun importBook(uri: Uri)
     fun confirmNarrationSetup(languageCode: String, narratorVoiceId: String) = Unit
     fun retryPreparation()
+    fun pausePreparation()
+    fun resumePreparation()
+    fun cancelPreparation()
     fun deleteSelectedBook()
     fun exportSelectedBook(destination: Uri)
     fun selectBook(bookId: String)
@@ -44,6 +48,13 @@ interface WhisperbookUiActions {
     fun seekToFraction(fraction: Float)
     fun seekToPassage(passageId: String)
     fun correctPassageSpeaker(passageId: String, speakerId: String, scope: SpeakerCorrectionScope)
+    fun correctPassageSpeakers(
+        passageIds: List<String>,
+        speakerId: String,
+        scope: SpeakerCorrectionScope,
+    ) = passageIds.distinct().forEach { passageId ->
+        correctPassageSpeaker(passageId, speakerId, scope)
+    }
     fun cycleSpeed()
     fun cycleNarrationChunkSize()
     fun downloadLanguagePack(languageCode: String)
@@ -120,7 +131,40 @@ data class PassageUi(
     val sourcePassageId: String = id,
     val speakerId: String = "",
     val speakerName: String = speaker.name,
+    val playbackPassageIds: List<String> = listOf(id),
+    val sourcePassageIds: List<String> = listOf(sourcePassageId),
 )
+
+internal fun groupReaderPassages(
+    passages: List<PassageUi>,
+    maxGroupChars: Int = MAX_SAFE_READER_GROUP_CHARS,
+): List<PassageUi> {
+    require(maxGroupChars > 0) { "maxGroupChars must be positive" }
+    val grouped = mutableListOf<PassageUi>()
+    passages.forEach { passage ->
+        val previous = grouped.lastOrNull()
+        val separator = if (previous?.sourcePassageIds?.lastOrNull() == passage.sourcePassageId) {
+            " "
+        } else {
+            "\n\n"
+        }
+        val canJoin = previous != null &&
+            previous.speakerId == passage.speakerId &&
+            previous.text.length + separator.length + passage.text.length <= maxGroupChars
+        if (!canJoin) {
+            grouped += passage
+        } else {
+            grouped[grouped.lastIndex] = previous.copy(
+                text = previous.text + separator + passage.text,
+                playbackPassageIds = previous.playbackPassageIds + passage.playbackPassageIds,
+                sourcePassageIds = (previous.sourcePassageIds + passage.sourcePassageIds).distinct(),
+            )
+        }
+    }
+    return grouped
+}
+
+private const val MAX_SAFE_READER_GROUP_CHARS = 24_000
 
 private data class CharacterPassageUi(
     val name: String,
@@ -205,6 +249,9 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
             ),
         )
     }
+    val readerPassages = mutableStateListOf<PassageUi>().apply {
+        addAll(groupReaderPassages(passages))
+    }
 
     var importedUri by mutableStateOf<Uri?>(null)
         private set
@@ -274,7 +321,7 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
         private set
     var narrationSetupRequired by mutableStateOf(false)
         private set
-    var narrationChunkChars by mutableIntStateOf(NarrationTextChunker.MAX_CHARS)
+    var narrationChunkChars by mutableIntStateOf(NarrationTextChunker.TARGET_CHARS)
         private set
     var installedLanguagePackCodes by mutableStateOf(setOf(NarrationLanguage.ENGLISH.code))
         private set
@@ -289,7 +336,15 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
         get() = passages.firstOrNull { it.id == activePassageId } ?: passages.firstOrNull()
     val isBookPreparing: Boolean
         get() = !narrationSetupRequired &&
-            preparationStatus?.stage?.let { it != PreparationStage.READY && it != PreparationStage.FAILED } == true
+            preparationStatus?.let { preparation ->
+                preparation.runState == PreparationRunState.RUNNING &&
+                    preparation.stage != PreparationStage.READY &&
+                    preparation.stage != PreparationStage.FAILED
+            } == true
+    val isPreparationPaused: Boolean
+        get() = preparationStatus?.runState == PreparationRunState.PAUSED
+    val isPreparationCancelled: Boolean
+        get() = preparationStatus?.runState == PreparationRunState.CANCELLED
     val canListen: Boolean
         get() = !narrationSetupRequired &&
             totalChapters > 0 &&
@@ -303,17 +358,26 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
         snapshot: WhisperbookUiSnapshot,
         projectionDispatcher: CoroutineDispatcher = Dispatchers.Default,
     ) {
-        val projectedPassages = if (shouldSynchronizePassages(snapshot)) {
-            withContext(projectionDispatcher) { projectPassages(snapshot) }
+        val projection = if (shouldSynchronizePassages(snapshot)) {
+            withContext(projectionDispatcher) {
+                projectPassages(snapshot).let { playbackPassages ->
+                    playbackPassages to projectReaderPassages(snapshot, playbackPassages)
+                }
+            }
         } else {
             null
         }
-        synchronize(snapshot, projectedPassages)
+        synchronize(
+            snapshot = snapshot,
+            projectedPassages = projection?.first,
+            projectedReaderPassages = projection?.second,
+        )
     }
 
     fun synchronize(
         snapshot: WhisperbookUiSnapshot,
         projectedPassages: List<PassageUi>? = null,
+        projectedReaderPassages: List<PassageUi>? = null,
     ) {
         if (snapshot.voices !== synchronizedVoices) {
             voiceOptions.clear()
@@ -440,8 +504,13 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
                 ?.let { narrator -> narrationSetupNarratorVoiceId = narrator.voiceId }
         }
         if (shouldSynchronizePassages(snapshot)) {
+            val nextPassages = projectedPassages ?: projectPassages(snapshot)
             passages.clear()
-            passages.addAll(projectedPassages ?: projectPassages(snapshot))
+            passages.addAll(nextPassages)
+            readerPassages.clear()
+            readerPassages.addAll(
+                projectedReaderPassages ?: projectReaderPassages(snapshot, nextPassages),
+            )
             synchronizedPassageChapter = snapshot.selectedChapter
             synchronizedPassageCharacters = snapshot.characters
             synchronizedPassageChunkChars = snapshot.settings.narrationChunkChars
@@ -563,6 +632,28 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
         }
     }
 
+    private fun projectReaderPassages(
+        snapshot: WhisperbookUiSnapshot,
+        playbackPassages: List<PassageUi>,
+    ): List<PassageUi> {
+        val playbackBySourceId = playbackPassages.groupBy(PassageUi::sourcePassageId)
+        val sourcePassages = snapshot.selectedChapter?.passages.orEmpty().flatMap { source ->
+            val playback = playbackBySourceId[source.id].orEmpty()
+            if (playback.isEmpty() || source.text.length > MAX_SAFE_READER_GROUP_CHARS) {
+                groupReaderPassages(playback)
+            } else {
+                listOf(
+                    playback.first().copy(
+                        text = source.text.trim(),
+                        playbackPassageIds = playback.flatMap(PassageUi::playbackPassageIds),
+                        sourcePassageIds = listOf(source.id),
+                    ),
+                )
+            }
+        }
+        return groupReaderPassages(sourcePassages)
+    }
+
     private fun com.whisperbook.app.domain.model.PreparationState.overallProgress(): Float {
         val local = progressFraction.coerceIn(0f, 1f)
         return when (stage) {
@@ -639,6 +730,18 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
         importError = null
         preparationFailed = false
         productionActions?.retryPreparation()
+    }
+
+    fun pausePreparation() {
+        productionActions?.pausePreparation()
+    }
+
+    fun resumePreparation() {
+        productionActions?.resumePreparation()
+    }
+
+    fun cancelPreparation() {
+        productionActions?.cancelPreparation()
     }
 
     fun deleteSelectedBook() {
@@ -755,20 +858,31 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
         passageId: String,
         speakerId: String,
         scope: SpeakerCorrectionScope,
+    ) = correctPassageSpeakers(listOf(passageId), speakerId, scope)
+
+    fun correctPassageSpeakers(
+        passageIds: List<String>,
+        speakerId: String,
+        scope: SpeakerCorrectionScope,
     ) {
+        val distinctPassageIds = passageIds.distinct()
+        if (distinctPassageIds.isEmpty()) return
         if (productionActions == null) {
             val target = cast.firstOrNull { it.id == speakerId } ?: return
-            val source = passages.firstOrNull { it.sourcePassageId == passageId } ?: return
+            val source = passages.firstOrNull { it.sourcePassageId in distinctPassageIds } ?: return
             val sourceSpeakerId = source.speakerId
-            val sourceKey = speakerPhraseMatchKey(source.text)
+            val sourceKeys = passages
+                .filter { it.sourcePassageId in distinctPassageIds }
+                .mapTo(linkedSetOf(), PassageUi::text)
+                .mapTo(linkedSetOf(), ::speakerPhraseMatchKey)
+                .filterTo(linkedSetOf(), String::isNotBlank)
             passages.indices.forEach { index ->
                 val candidate = passages[index]
                 val matches = when (scope) {
-                    SpeakerCorrectionScope.THIS_PASSAGE -> candidate.sourcePassageId == passageId
+                    SpeakerCorrectionScope.THIS_PASSAGE -> candidate.sourcePassageId in distinctPassageIds
                     SpeakerCorrectionScope.MATCHING_PHRASES ->
                         candidate.speakerId == sourceSpeakerId &&
-                            sourceKey.isNotBlank() &&
-                            speakerPhraseMatchKey(candidate.text) == sourceKey
+                            speakerPhraseMatchKey(candidate.text) in sourceKeys
                 }
                 if (matches) {
                     passages[index] = candidate.copy(
@@ -778,8 +892,10 @@ class WhisperbookAppState(private val productionActions: WhisperbookUiActions? =
                     )
                 }
             }
+            readerPassages.clear()
+            readerPassages.addAll(groupReaderPassages(passages))
         }
-        productionActions?.correctPassageSpeaker(passageId, speakerId, scope)
+        productionActions?.correctPassageSpeakers(distinctPassageIds, speakerId, scope)
     }
 
     fun updateAutoScroll(value: Boolean) {

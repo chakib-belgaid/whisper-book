@@ -55,6 +55,35 @@ class PassageTextChunkerTest {
     }
 
     @Test
+    fun `narration keeps a complete paragraph beyond its target size`() {
+        val paragraph = "A paragraph should remain a natural listening unit. ".repeat(4).trim()
+
+        val chunks = NarrationTextChunker.chunks(
+            passageId = "paragraph-1",
+            text = paragraph,
+            maxChars = 80,
+        )
+
+        assertEquals(listOf(PassageTextChunk("paragraph-1", paragraph)), chunks)
+        assertTrue(chunks.single().text.length > 80)
+        assertTrue(chunks.single().text.length <= NarrationTextChunker.MAX_CHARS)
+    }
+
+    @Test
+    fun `narration preserves explicit paragraph boundaries`() {
+        val firstParagraph = "The first paragraph has its own complete thought."
+        val secondParagraph = "The second paragraph begins after a visible break."
+
+        val chunks = NarrationTextChunker.chunks(
+            passageId = "paragraphs",
+            text = "$firstParagraph\n\n$secondParagraph",
+            maxChars = 80,
+        )
+
+        assertEquals(listOf(firstParagraph, secondParagraph), chunks.map(PassageTextChunk::text))
+    }
+
+    @Test
     fun `short narration passage keeps its source id for existing cache reuse`() {
         val chunks = NarrationTextChunker.chunks("passage-short", "A short opening line.")
 
@@ -63,7 +92,7 @@ class PassageTextChunkerTest {
 
     @Test
     fun `invalid configurable narration size falls back to default`() {
-        assertEquals(NarrationTextChunker.MAX_CHARS, NarrationTextChunker.normalizeMaxChars(0))
+        assertEquals(NarrationTextChunker.TARGET_CHARS, NarrationTextChunker.normalizeMaxChars(0))
         assertEquals(80, NarrationTextChunker.normalizeMaxChars(80))
         assertEquals(240, NarrationTextChunker.normalizeMaxChars(240))
     }

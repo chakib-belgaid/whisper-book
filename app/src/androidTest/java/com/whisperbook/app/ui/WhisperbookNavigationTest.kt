@@ -511,6 +511,9 @@ private class NavigationBookActions(
     override fun confirmNarrationSetup(languageCode: String, narratorVoiceId: String) =
         onConfirmNarrationSetup(languageCode, narratorVoiceId)
     override fun retryPreparation() = Unit
+    override fun pausePreparation() = Unit
+    override fun resumePreparation() = Unit
+    override fun cancelPreparation() = Unit
     override fun deleteSelectedBook() = Unit
     override fun exportSelectedBook(destination: Uri) = Unit
     override fun selectBook(bookId: String) = onSelectBook(bookId)

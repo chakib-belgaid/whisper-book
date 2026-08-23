@@ -56,7 +56,7 @@ class NarrationSynthesisPlannerTest {
     }
 
     @Test
-    fun `configured chunk size bounds every synthesis unit`() {
+    fun `configured chunk target prefers complete sentences within the model limit`() {
         val text = List(40) { index -> "Sentence $index ends cleanly." }.joinToString(" ")
 
         val units = NarrationSynthesisPlanner.plan(
@@ -70,7 +70,9 @@ class NarrationSynthesisPlannerTest {
         )
 
         assertTrue(units.size > 1)
-        assertTrue(units.all { it.request.text.length <= 80 })
+        assertTrue(units.any { it.request.text.length > 80 })
+        assertTrue(units.all { it.request.text.length <= NarrationTextChunker.MAX_CHARS })
+        assertTrue(units.dropLast(1).all { it.request.text.endsWith('.') })
         assertEquals(text, units.joinToString(" ") { it.request.text })
     }
 

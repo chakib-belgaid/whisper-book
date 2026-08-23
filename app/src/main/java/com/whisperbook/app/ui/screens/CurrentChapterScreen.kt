@@ -69,7 +69,10 @@ fun CurrentChapterScreen(
     modifier: Modifier = Modifier,
 ) {
     val listState = rememberLazyListState()
-    val activeIndex = appState.passages.indexOfFirst { it.id == appState.activePassageId }.coerceAtLeast(0)
+    val readerPassages = appState.readerPassages
+    val activeIndex = readerPassages
+        .indexOfFirst { appState.activePassageId in it.playbackPassageIds }
+        .coerceAtLeast(0)
     var hasObservedInitialPassage by rememberSaveable { mutableStateOf(false) }
     var showChapterPicker by rememberSaveable { mutableStateOf(false) }
     var correctingPassageId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -77,7 +80,7 @@ fun CurrentChapterScreen(
     LaunchedEffect(activeIndex, appState.autoScroll) {
         if (!hasObservedInitialPassage) {
             hasObservedInitialPassage = true
-        } else if (appState.autoScroll && appState.passages.isNotEmpty()) {
+        } else if (appState.autoScroll && readerPassages.isNotEmpty()) {
             listState.animateScrollToItem(activeIndex)
         }
     }
@@ -118,24 +121,27 @@ fun CurrentChapterScreen(
                 contentPadding = PaddingValues(top = 7.dp, bottom = 96.dp),
                 verticalArrangement = Arrangement.spacedBy(5.dp),
             ) {
-                if (appState.passages.isEmpty()) {
+                if (readerPassages.isEmpty()) {
                     item {
                         ParchmentPanel(modifier = Modifier.fillMaxWidth(), contentPadding = PaddingValues(18.dp)) {
                             Text("This chapter's text is still being prepared on your device.", color = WhisperbookTheme.colors.ink, style = WhisperbookTheme.typography.body)
                         }
                     }
                 }
-                itemsIndexed(appState.passages, key = { _, passage -> passage.id }) { index, passage ->
+                itemsIndexed(readerPassages, key = { _, passage -> passage.id }) { index, passage ->
                     SpeakerPassageCard(
                         speakerName = passage.speakerName,
                         passage = passage.text,
                         accentColor = speakerColor(passage.speaker),
-                        isActive = passage.id == appState.activePassageId,
-                        onClick = { appState.selectPassage(passage.id) },
+                        isActive = appState.activePassageId in passage.playbackPassageIds,
+                        onClick = { appState.selectPassage(passage.playbackPassageIds.first()) },
                         onChangeAttributedVoice = appState.cast
                             .takeIf { it.isNotEmpty() && passage.speakerId.isNotBlank() }
                             ?.let { { correctingPassageId = passage.id } },
-                        progress = if (passage.id == appState.activePassageId && appState.activePassageDurationMs > 0L) {
+                        progress = if (
+                            appState.activePassageId in passage.playbackPassageIds &&
+                            appState.activePassageDurationMs > 0L
+                        ) {
                             appState.activePassagePositionMs.toFloat()
                                 .div(appState.activePassageDurationMs)
                                 .coerceIn(0f, 1f)
@@ -147,8 +153,8 @@ fun CurrentChapterScreen(
                 }
             }
         }
-        if (appState.passages.isNotEmpty()) {
-            val active = appState.passages[activeIndex]
+        if (readerPassages.isNotEmpty()) {
+            val active = readerPassages[activeIndex]
             val cast = appState.cast.firstOrNull { member -> member.id == active.speakerId }
             FloatingMiniPlayer(
                 speakerName = active.speakerName,
@@ -180,7 +186,7 @@ fun CurrentChapterScreen(
         )
     }
     correctingPassageId?.let { passageId ->
-        appState.passages.firstOrNull { it.id == passageId }?.let { passage ->
+        readerPassages.firstOrNull { it.id == passageId }?.let { passage ->
             AttributedSpeakerPickerSheet(
                 passage = passage,
                 cast = appState.cast,
@@ -201,8 +207,8 @@ fun CurrentChapterScreen(
             bookTitle = appState.currentBookTitle,
             onConfirm = { scope ->
                 pendingSpeakerCorrection = null
-                appState.correctPassageSpeaker(
-                    passageId = pending.passage.sourcePassageId,
+                appState.correctPassageSpeakers(
+                    passageIds = pending.passage.sourcePassageIds,
                     speakerId = pending.target.id,
                     scope = scope,
                 )

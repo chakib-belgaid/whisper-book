@@ -38,6 +38,14 @@ interface WhisperbookServices {
         speakerId: String,
         scope: SpeakerCorrectionScope,
     ): Int
+    suspend fun applySpeakerCorrections(
+        bookId: String,
+        passageIds: List<String>,
+        speakerId: String,
+        scope: SpeakerCorrectionScope,
+    ): Int = passageIds.distinct().sumOf { passageId ->
+        applySpeakerCorrection(bookId, passageId, speakerId, scope)
+    }
     suspend fun retainedVoiceChanges(bookId: String, characterIds: List<String>): List<RevertibleVoiceChange>
     suspend fun revertVoiceChange(change: RevertibleVoiceChange): Boolean
     suspend fun deletePersistedAudioForCharacter(characterId: String)

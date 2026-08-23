@@ -48,13 +48,13 @@ fun SettingsScreen(
                 GoldenSettingsRow("Speaking speed", value = "${appState.speed}×", icon = Icons.Outlined.Speed, onClick = appState::cycleSpeed)
                 CompactDivider()
                 GoldenSettingsRow(
-                    "Narration chunk size",
-                    value = "${appState.narrationChunkChars} chars",
+                    "Narration phrasing",
+                    value = narrationPacingLabel(appState.narrationChunkChars),
                     icon = Icons.Outlined.Tune,
                     onClick = appState::cycleNarrationChunkSize,
                 )
                 Text(
-                    "Smaller chunks start sooner. Whisperbook records only the first chunk before you listen.",
+                    "Paragraphs stay together when the local voice model allows it. Long paragraphs split at sentence boundaries.",
                     color = WhisperbookTheme.colors.ink.copy(alpha = 0.72f),
                     style = WhisperbookTheme.typography.body.copy(fontSize = 12.sp, lineHeight = 16.sp),
                     modifier = Modifier.padding(horizontal = 3.dp, vertical = 4.dp),
@@ -144,6 +144,12 @@ fun SettingsScreen(
         }
     }
 
+}
+
+private fun narrationPacingLabel(targetChars: Int): String = when (targetChars) {
+    in Int.MIN_VALUE until 160 -> "Short"
+    160 -> "Natural"
+    else -> "Long"
 }
 
 internal fun formatStorageBytes(bytes: Long): String {

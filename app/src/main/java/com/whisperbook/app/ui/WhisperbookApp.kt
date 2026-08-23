@@ -280,6 +280,9 @@ private class ViewModelUiActions(
         viewModel.clearMessage()
         viewModel.retryPreparation()
     }
+    override fun pausePreparation() = viewModel.pausePreparation()
+    override fun resumePreparation() = viewModel.resumePreparation()
+    override fun cancelPreparation() = viewModel.cancelPreparation()
     override fun deleteSelectedBook() = viewModel.deleteSelectedBook().let { Unit }
     override fun exportSelectedBook(destination: android.net.Uri) =
         viewModel.exportSelectedBook(destination).let { Unit }
@@ -297,6 +300,11 @@ private class ViewModelUiActions(
         speakerId: String,
         scope: com.whisperbook.app.domain.model.SpeakerCorrectionScope,
     ) = viewModel.correctPassageSpeaker(passageId, speakerId, scope).let { Unit }
+    override fun correctPassageSpeakers(
+        passageIds: List<String>,
+        speakerId: String,
+        scope: com.whisperbook.app.domain.model.SpeakerCorrectionScope,
+    ) = viewModel.correctPassageSpeakers(passageIds, speakerId, scope).let { Unit }
     override fun cycleSpeed() = viewModel.cycleSpeed()
     override fun cycleNarrationChunkSize() = viewModel.cycleNarrationChunkSize()
     override fun downloadLanguagePack(languageCode: String) =

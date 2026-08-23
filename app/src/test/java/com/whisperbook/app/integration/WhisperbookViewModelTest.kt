@@ -25,6 +25,7 @@ import com.whisperbook.app.domain.model.CharacterVoiceAssignment
 import com.whisperbook.app.domain.model.PlaybackCursor
 import com.whisperbook.app.domain.model.PlaybackPreparationProgress
 import com.whisperbook.app.domain.model.Passage
+import com.whisperbook.app.domain.model.PreparationRunState
 import com.whisperbook.app.domain.model.PreparationStage
 import com.whisperbook.app.domain.model.PreparationState
 import com.whisperbook.app.domain.model.RevertibleVoiceChange
@@ -258,6 +259,53 @@ class WhisperbookViewModelTest {
         advanceUntilIdle()
 
         assertEquals(listOf("enqueue:book-a"), services.events.filter { it.startsWith("enqueue:") })
+    }
+
+    @Test
+    fun pausedAndCancelledBooksAreNotAutomaticallyRescheduled() = runTest(dispatcher) {
+        val services = FakeServices().apply {
+            books.value = listOf(
+                book("book-a").copy(
+                    preparation = PreparationState(
+                        stage = PreparationStage.READING_CHAPTERS,
+                        progressFraction = 0.4f,
+                        runState = PreparationRunState.PAUSED,
+                    ),
+                ),
+                book("book-b").copy(
+                    preparation = PreparationState(
+                        stage = PreparationStage.PREPARING_AUDIO,
+                        progressFraction = 0.6f,
+                        runState = PreparationRunState.CANCELLED,
+                    ),
+                ),
+            )
+        }
+
+        WhisperbookViewModel(services)
+        advanceUntilIdle()
+
+        assertTrue(services.events.none { it.startsWith("enqueue:") })
+    }
+
+    @Test
+    fun preparationControlsPauseResumeAndCancelTheSelectedBook() = runTest(dispatcher) {
+        val services = FakeServices()
+        val viewModel = WhisperbookViewModel(services)
+        advanceUntilIdle()
+        services.events.clear()
+
+        viewModel.pausePreparation()
+        advanceUntilIdle()
+        viewModel.resumePreparation()
+        advanceUntilIdle()
+        viewModel.cancelPreparation()
+        advanceUntilIdle()
+
+        assertEquals(
+            listOf("pause-preparation:book-a", "resume-preparation:book-a", "cancel:book-a"),
+            services.events,
+        )
     }
 
     @Test
@@ -582,7 +630,7 @@ class WhisperbookViewModelTest {
             assertEquals(listOf("elara", "elara", "fox"), passages.map(Passage::speakerId))
             assertTrue(services.events.last().endsWith(":MATCHING_PHRASES:2"))
             assertEquals(
-                "2 matching phrases will now be read by Elara.",
+                "2 sections will now be read by Elara.",
                 viewModel.uiState.value.statusMessage,
             )
             cancelAndIgnoreRemainingEvents()
@@ -1230,6 +1278,12 @@ private class FakeServices : WhisperbookServices {
         override suspend fun enqueue(bookId: String) {
             events += "enqueue:$bookId"
             enqueueHandler(bookId)
+        }
+        override suspend fun pause(bookId: String) {
+            events += "pause-preparation:$bookId"
+        }
+        override suspend fun resume(bookId: String) {
+            events += "resume-preparation:$bookId"
         }
         override suspend fun cancel(bookId: String) {
             events += "cancel:$bookId"

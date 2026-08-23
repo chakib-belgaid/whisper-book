@@ -60,7 +60,7 @@ class LanguagePackSettingsAndroidTest {
         }
 
         composeRule.onNodeWithText("Playback & preparation").assertExists()
-        composeRule.onNodeWithText("Narration chunk size").assertExists().performClick()
+        composeRule.onNodeWithText("Narration phrasing").assertExists().performClick()
         composeRule.onNodeWithText("Default narrator").assertDoesNotExist()
         composeRule.onNodeWithText("Language packs").assertDoesNotExist()
         composeRule.onNodeWithText("French · Français").assertDoesNotExist()
