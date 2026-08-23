@@ -37,8 +37,15 @@ class AndroidPdfOcrHookTest {
         val output = hook.extractText(File("synthetic.pdf")) { completed, total ->
             progress += completed to total
         }
+        val pages = OcrPageTextAssembler.assemblePages(
+            listOf(
+                IndexedValue(1, " Third\r\npage. "),
+                IndexedValue(0, " First page. "),
+            ),
+        )
 
         assertEquals("First page.\n\nSecond paragraph.\n\nThird page.", output)
+        assertEquals(listOf("First page.", "Third\npage."), pages)
         assertEquals(listOf(1 to 2, 2 to 2), progress)
         assertEquals(listOf(0, 1), source.renderOrder)
         assertEquals(listOf(0, 1), recognizer.recognitionOrder)

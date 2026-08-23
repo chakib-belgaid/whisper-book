@@ -64,7 +64,19 @@ class AndroidPdfOcrHook private constructor(
     override suspend fun extractText(
         file: File,
         onProgress: suspend (completedUnits: Int, totalUnits: Int) -> Unit,
-    ): String = withContext(Dispatchers.Default) {
+    ): String = extractPages(file, onProgress)
+        .mapNotNull { page ->
+            ParagraphNormalizer.normalize(page)
+                .takeIf(List<String>::isNotEmpty)
+                ?.joinToString("\n\n")
+        }
+        .joinToString("\n\n")
+        .trim()
+
+    override suspend fun extractPages(
+        file: File,
+        onProgress: suspend (completedUnits: Int, totalUnits: Int) -> Unit,
+    ): List<String> = withContext(Dispatchers.Default) {
         val source = openSource(file)
         source.use {
             if (source.pageCount <= 0) throw EmptyPdfException("The PDF contains no pages.")
@@ -84,8 +96,8 @@ class AndroidPdfOcrHook private constructor(
                     }
                     onProgress(pageIndex + 1, source.pageCount)
                 }
-                OcrPageTextAssembler.assemble(results)
-                    .takeIf(String::isNotBlank)
+                OcrPageTextAssembler.assemblePages(results)
+                    .takeIf { pages -> pages.any(String::isNotBlank) }
                     ?: throw EmptyPdfException("No text was recognized on any PDF page.")
             }
         }
@@ -133,13 +145,23 @@ internal fun interface OcrPageRecognizerFactory {
 }
 
 internal object OcrPageTextAssembler {
-    fun assemble(results: List<IndexedValue<String>>): String {
-        if (results.isEmpty()) return ""
+    fun assemblePages(results: List<IndexedValue<String>>): List<String> {
+        if (results.isEmpty()) return emptyList()
         require(results.map { it.index }.distinct().size == results.size) { "OCR page indexes must be unique" }
         return results
             .sortedBy(IndexedValue<String>::index)
-            .mapNotNull { indexed ->
-                ParagraphNormalizer.normalize(indexed.value)
+            .map { indexed ->
+                indexed.value
+                    .replace("\r\n", "\n")
+                    .replace('\r', '\n')
+                    .trim()
+            }
+    }
+
+    fun assemble(results: List<IndexedValue<String>>): String {
+        return assemblePages(results)
+            .mapNotNull { page ->
+                ParagraphNormalizer.normalize(page)
                     .takeIf(List<String>::isNotEmpty)
                     ?.joinToString("\n\n")
             }

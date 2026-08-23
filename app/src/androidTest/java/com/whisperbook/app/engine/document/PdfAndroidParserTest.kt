@@ -14,6 +14,7 @@ import com.whisperbook.app.domain.model.BookFormat
 import java.io.File
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -62,6 +63,21 @@ class PdfAndroidParserTest {
         assertEquals(18 to 18, updates.last())
     }
 
+    @Test
+    fun excludesPhysicalPageMarginsAndRecurringPageFurniture() = runBlocking {
+        val file = File(context.cacheDir, "structured-pages.pdf")
+        writeStructuredPdf(file)
+
+        val publication = OfflinePublicationExtractor(context).extract(imported(file)).getOrThrow()
+        val text = publication.chapters.flatMap { it.paragraphs }.joinToString("\n")
+
+        assertFalse(text.contains("Running Book Header"))
+        assertFalse(text.contains("Publisher Footer"))
+        assertFalse(text.lineSequence().any { it.trim() in setOf("41", "42", "43") })
+        assertTrue(text.contains("Elara crossed the moonlit bridge."))
+        assertTrue(text.contains("The forest remembers us."))
+    }
+
     private fun imported(file: File) = ImportedBook(
         title = "Offline PDF Story",
         author = "Device Test",
@@ -105,6 +121,33 @@ class PdfAndroidParserTest {
         canvas.drawText("Elara crossed the moonlit bridge.", 80f, 280f, body)
         canvas.drawText("\"The forest remembers us,\" she said.", 80f, 365f, body)
         canvas.drawText("A fox waited beside the old lantern.", 80f, 450f, body)
+    }
+
+    private fun writeStructuredPdf(file: File) {
+        val document = PdfDocument()
+        repeat(3) { pageIndex ->
+            val pageInfo = PdfDocument.PageInfo.Builder(PAGE_WIDTH, PAGE_HEIGHT, pageIndex + 1).create()
+            val page = document.startPage(pageInfo)
+            val margin = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.BLACK
+                textSize = 28f
+                typeface = Typeface.create(Typeface.SERIF, Typeface.NORMAL)
+            }
+            val body = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                color = Color.BLACK
+                textSize = 42f
+                typeface = Typeface.create(Typeface.SERIF, Typeface.NORMAL)
+            }
+            page.canvas.drawColor(Color.WHITE)
+            page.canvas.drawText("Running Book Header", 80f, 45f, margin)
+            page.canvas.drawText("Elara crossed the moonlit bridge.", 80f, 260f, body)
+            page.canvas.drawText("The forest remembers us.", 80f, 350f, body)
+            page.canvas.drawText("Publisher Footer", 80f, 1_535f, margin)
+            page.canvas.drawText("${41 + pageIndex}", 1_050f, 1_555f, margin)
+            document.finishPage(page)
+        }
+        file.outputStream().use(document::writeTo)
+        document.close()
     }
 
     private companion object {

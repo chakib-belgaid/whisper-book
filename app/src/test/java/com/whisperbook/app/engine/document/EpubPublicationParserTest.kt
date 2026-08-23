@@ -35,7 +35,7 @@ class EpubPublicationParserTest {
                 )
                 zip.entry(
                     "OEBPS/text/chapter1.xhtml",
-                    """<html xmlns="http://www.w3.org/1999/xhtml"><body><h1>CHAPTER I</h1><p>The forest woke.</p><p>“Follow me,” said Elara.</p></body></html>""",
+                    """<html xmlns="http://www.w3.org/1999/xhtml"><body><header><p>Lantern Tales running header</p><h1>CHAPTER I</h1></header><p>The forest woke.</p><p role="doc-pagebreak">12</p><p>“Follow me,” said Elara.</p><footer><p>A. Storyteller · 2026</p></footer></body></html>""",
                 )
             }
 

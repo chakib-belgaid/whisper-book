@@ -4,7 +4,6 @@ import android.content.Context
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.pdmodel.encryption.InvalidPasswordException
-import com.tom_roush.pdfbox.text.PDFTextStripper
 import com.whisperbook.app.domain.ExtractedChapter
 import com.whisperbook.app.domain.ExtractedPublication
 import com.whisperbook.app.domain.ImportedBook
@@ -37,6 +36,15 @@ fun interface PdfOcrHook {
         val text = extractText(file)
         onProgress(1, 1)
         return text
+    }
+
+    suspend fun extractPages(
+        file: File,
+        onProgress: suspend (completedUnits: Int, totalUnits: Int) -> Unit,
+    ): List<String>? {
+        val text = extractText(file)
+        onProgress(1, 1)
+        return text?.let(::listOf)
     }
 }
 
@@ -79,21 +87,16 @@ class OfflinePublicationExtractor(
                 val pageCount = document.numberOfPages
                 if (pageCount <= 0) throw EmptyPdfException("The PDF contains no pages.")
                 val progressTotal = pdfProgressTotal(pageCount)
-                val text = StringBuilder()
+                val pages = ArrayList<String>(pageCount)
+                val pageTextExtractor = PdfPageTextExtractor()
                 for (firstPage in 1..pageCount step PDF_TEXT_BATCH_SIZE) {
                     coroutineContext.ensureActive()
                     val lastPage = minOf(firstPage + PDF_TEXT_BATCH_SIZE - 1, pageCount)
-                    val batch = PDFTextStripper().apply {
-                        sortByPosition = true
-                        startPage = firstPage
-                        endPage = lastPage
-                    }.getText(document)
-                    if (text.isNotEmpty() && batch.isNotBlank()) text.append('\n')
-                    text.append(batch)
+                    pages += pageTextExtractor.extract(document, firstPage, lastPage)
                     onProgress(lastPage, progressTotal)
                 }
                 PdfTextPass(
-                    text = text.toString(),
+                    pages = pages,
                     title = document.documentInformation?.title?.trim()?.takeIf(String::isNotBlank),
                     author = document.documentInformation?.author?.trim()?.takeIf(String::isNotBlank),
                     pageCount = pageCount,
@@ -107,19 +110,20 @@ class OfflinePublicationExtractor(
 
         val pageCount = pdfData.pageCount
         val progressTotal = pdfProgressTotal(pageCount)
-        val extractedText = if (pdfData.text.isBlank()) {
-            pdfOcrHook.extractText(book.privateFile) { completed, total ->
+        val extractedPages = if (pdfData.pages.none(String::isNotBlank)) {
+            pdfOcrHook.extractPages(book.privateFile) { completed, total ->
                 onProgress(
                     pdfOcrProgress(pageCount, completed, total),
                     progressTotal,
                 )
-            }.orEmpty().takeIf(String::isNotBlank)
+            }.orEmpty().takeIf { pages -> pages.any(String::isNotBlank) }
                 ?: throw EmptyPdfException("No text was recognized on any PDF page.")
         } else {
             onProgress(progressTotal, progressTotal)
-            pdfData.text
+            pdfData.pages
         }
 
+        val extractedText = PdfPageStructureCleaner.clean(extractedPages)
         val chapters = chapterDetector.detect(ParagraphNormalizer.normalize(extractedText))
         check(chapters.isNotEmpty()) { "No readable text was found in the PDF" }
         return ExtractedPublication(
@@ -135,7 +139,7 @@ class OfflinePublicationExtractor(
 }
 
 private data class PdfTextPass(
-    val text: String,
+    val pages: List<String>,
     val title: String?,
     val author: String?,
     val pageCount: Int,
@@ -198,13 +202,13 @@ internal class EpubPublicationParser(
                     if (html != null) {
                         coroutineContext.ensureActive()
                         val document = Jsoup.parse(html.inputStream(), null, "", Parser.xmlParser())
-                        document.select("script,style,nav,noscript,svg").remove()
+                        val heading = document.selectFirst("h1,h2,h3,title")
+                            ?.text()
+                            ?.trim()
+                            ?.takeIf(String::isNotBlank)
+                        removeNonReadingEpubStructure(document)
                         val content = extractReadableElements(document.body() ?: document)
                         if (content.isNotEmpty()) {
-                            val heading = document.selectFirst("h1,h2,h3,title")
-                                ?.text()
-                                ?.trim()
-                                ?.takeIf(String::isNotBlank)
                             add(
                                 DocumentSection(
                                     title = heading,
@@ -314,12 +318,44 @@ internal class EpubPublicationParser(
             .toList()
     }
 
+    private fun removeNonReadingEpubStructure(document: org.jsoup.nodes.Document) {
+        document.select("script,style,nav,noscript,svg,header,footer").remove()
+        document.getAllElements().toList().forEach { element ->
+            val roleTokens = element.attr("role").lowercase().split(Regex("\\s+")).filter(String::isNotBlank)
+            val epubTypeTokens = element.attr("epub:type").lowercase().split(Regex("\\s+")).filter(String::isNotBlank)
+            val structureClass = element.classNames().any { className ->
+                className.lowercase() in nonReadingStructureClasses
+            }
+            if (
+                roleTokens.any { it in nonReadingStructureRoles } ||
+                epubTypeTokens.any { it in nonReadingEpubTypes } ||
+                structureClass
+            ) {
+                element.remove()
+            }
+        }
+    }
+
     private data class ManifestItem(
         val id: String,
         val path: String,
         val mediaType: String,
         val properties: String,
     )
+
+    private companion object {
+        val nonReadingStructureRoles = setOf("banner", "contentinfo", "doc-pagebreak")
+        val nonReadingEpubTypes = setOf("pagebreak")
+        val nonReadingStructureClasses = setOf(
+            "pagebreak",
+            "page-break",
+            "page-number",
+            "pagenum",
+            "page_num",
+            "running-header",
+            "running-footer",
+        )
+    }
 }
 
 private suspend fun ZipFile.readEntry(path: String): ByteArray =
