@@ -3,10 +3,14 @@ package com.whisperbook.app.ui
 import androidx.activity.ComponentActivity
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.toMutableStateList
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.assertIsEnabled
 import androidx.compose.ui.test.assertIsNotEnabled
+import androidx.compose.ui.test.assertIsNotSelected
+import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -34,7 +38,7 @@ class ChapterReviewScreenTest {
         composeRule.onNodeWithText("3 of 3 selected").assertIsDisplayed()
         composeRule.onNodeWithTag("confirm-chapter-plan").assertIsEnabled()
         composeRule.onNodeWithText("Continue with all chapters").assertIsDisplayed()
-        composeRule.onNodeWithText("Skipped for now").assertExists()
+        composeRule.onNodeWithText("Chapters").assertIsDisplayed()
     }
 
     @Test
@@ -69,13 +73,31 @@ class ChapterReviewScreenTest {
     }
 
     @Test
-    fun searchKeepsSectionsVisibleAndDisablesReordering() {
+    fun togglingChapterPreservesItsVisibleListPosition() {
+        showStatefulScreen(chapters(selected = setOf("chapter-1", "chapter-2", "chapter-3")))
+        val chapter = composeRule.onNodeWithTag("chapter-plan-chapter-2")
+        val initialTop = chapter.fetchSemanticsNode().boundsInRoot.top
+
+        chapter.performClick()
+        composeRule.waitForIdle()
+
+        chapter.assertIsNotSelected()
+        assertEquals(initialTop, chapter.fetchSemanticsNode().boundsInRoot.top, 0f)
+
+        chapter.performClick()
+        composeRule.waitForIdle()
+
+        chapter.assertIsSelected()
+        assertEquals(initialTop, chapter.fetchSemanticsNode().boundsInRoot.top, 0f)
+    }
+
+    @Test
+    fun searchKeepsChapterListVisibleAndDisablesReordering() {
         showScreen(chapters = chapters(selected = setOf("chapter-1", "chapter-2", "chapter-3")))
 
         composeRule.onNodeWithTag("chapter-search").performTextInput("Three")
 
-        composeRule.onNodeWithText("Included").assertIsDisplayed()
-        composeRule.onNodeWithText("Skipped for now").assertIsDisplayed()
+        composeRule.onNodeWithText("Chapters").assertIsDisplayed()
         composeRule.onNodeWithText("Reordering is available after clearing search.").assertIsDisplayed()
         composeRule.onNodeWithTag("move-chapter-3-earlier").assertIsNotEnabled()
         composeRule.onNodeWithTag("move-chapter-3-later").assertIsNotEnabled()
@@ -144,6 +166,31 @@ class ChapterReviewScreenTest {
                     onSelectAll = onSelectAll,
                     onDeselectAll = {},
                     onRestoreOriginalOrder = onRestoreOriginalOrder,
+                    onReset = {},
+                    onContinue = {},
+                    onBack = {},
+                )
+            }
+        }
+    }
+
+    private fun showStatefulScreen(initialChapters: List<ChapterPlanEntry>) {
+        composeRule.setContent {
+            val chapterPlan = remember { initialChapters.toMutableStateList() }
+            WhisperbookTheme {
+                ChapterReviewScreen(
+                    contentPadding = PaddingValues(),
+                    chapters = chapterPlan,
+                    onToggleChapter = { id, selected ->
+                        val index = chapterPlan.indexOfFirst { it.chapter.id == id }
+                        if (index >= 0) {
+                            chapterPlan[index] = chapterPlan[index].copy(isSelected = selected)
+                        }
+                    },
+                    onMoveChapter = { _, _ -> },
+                    onSelectAll = {},
+                    onDeselectAll = {},
+                    onRestoreOriginalOrder = {},
                     onReset = {},
                     onContinue = {},
                     onBack = {},

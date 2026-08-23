@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.captureToImage
+import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
@@ -90,6 +91,83 @@ class ProcessingScreenResponsiveTest {
             backgroundStatusBounds.top >= playerDeckBounds.bottom,
         )
         captureScreenshot("now-playing")
+    }
+
+    @Test
+    fun backgroundPreparationStatusExpandsToRevealFullTextAndCollapsesAgain() {
+        val detail = "Preparing passage 1 of 63 for Chapter 2 on this device. " +
+            "Running in the background while you keep reading the current chapter."
+        val preparation = PreparationState(
+            stage = PreparationStage.PREPARING_AUDIO,
+            progressFraction = 0.2f,
+            message = detail,
+        )
+        val book = testBook("Expansion test").copy(preparation = preparation)
+        val appState = WhisperbookAppState().apply {
+            synchronize(
+                WhisperbookUiSnapshot(
+                    books = listOf(book),
+                    selectedBook = book,
+                    preparation = preparation,
+                ),
+            )
+        }
+
+        composeRule.setContent {
+            WhisperbookApp(
+                appState = appState,
+                navController = rememberNavController(),
+                startDestination = WhisperbookDestination.Library.route,
+            )
+        }
+
+        val collapsedHeight = bounds("background-operation-status").height
+        composeRule.onNodeWithTag("background-operation-status").performClick()
+        composeRule.waitForIdle()
+        val expandedHeight = bounds("background-operation-status").height
+
+        assertTrue("Pressing the status must reveal more of its text", expandedHeight > collapsedHeight)
+
+        composeRule.onNodeWithTag("background-operation-status").performClick()
+        composeRule.waitForIdle()
+        val collapsedAgainHeight = bounds("background-operation-status").height
+        assertTrue(
+            "Pressing the expanded status must collapse it",
+            collapsedAgainHeight <= collapsedHeight + 1f,
+        )
+    }
+
+    @Test
+    fun backgroundPreparationStatusShowsProgressBarAndPercentage() {
+        val preparation = PreparationState(
+            stage = PreparationStage.PREPARING_AUDIO,
+            completedUnits = 1,
+            totalUnits = 5,
+            progressFraction = 0.2f,
+            message = "Chapter 1 is ready to listen",
+        )
+        val book = testBook("Progress test").copy(preparation = preparation)
+        val appState = WhisperbookAppState().apply {
+            synchronize(
+                WhisperbookUiSnapshot(
+                    books = listOf(book),
+                    selectedBook = book,
+                    preparation = preparation,
+                ),
+            )
+        }
+
+        composeRule.setContent {
+            WhisperbookApp(
+                appState = appState,
+                navController = rememberNavController(),
+                startDestination = WhisperbookDestination.Library.route,
+            )
+        }
+
+        composeRule.onNodeWithTag("background-operation-progress", useUnmergedTree = true).assertExists()
+        composeRule.onNodeWithTag("background-operation-progress-label", useUnmergedTree = true)
+            .assertTextEquals("20%")
     }
 
     private fun bounds(tag: String): Rect =

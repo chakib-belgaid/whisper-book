@@ -18,7 +18,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.outlined.AutoStories
 import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.DeleteOutline
@@ -96,8 +95,28 @@ fun LibraryScreen(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 val current = appState.books.first()
+                val currentActionDescription = when {
+                    current.needsChapterReview -> "Choose chapters for ${current.title}"
+                    current.needsNarrationSetup -> "Set up narration for ${current.title}"
+                    current.canListen -> "Resume ${current.title}"
+                    else -> "Open ${current.title}"
+                }
                 ParchmentPanel(
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .paperClickable(
+                            onClick = {
+                                if (current.canListen) {
+                                    onResume(current.id)
+                                } else {
+                                    onBook(current.id)
+                                }
+                            },
+                            role = Role.Button,
+                            fold = PaperFold.Card,
+                            onClickLabel = currentActionDescription,
+                        )
+                        .semantics { contentDescription = currentActionDescription },
                     contentPadding = PaddingValues(12.dp),
                 ) {
                     SectionHeading(
@@ -136,33 +155,10 @@ fun LibraryScreen(
                                 overflow = TextOverflow.Ellipsis,
                             )
                             StorySlider(current.progress, {}, enabled = false, modifier = Modifier.fillMaxWidth())
-                            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                                EmbossedCircularButton(
-                                    onClick = {
-                                        if (current.canListen) {
-                                            onResume(current.id)
-                                        } else {
-                                            onBook(current.id)
-                                        }
-                                    },
-                                    contentDescription = when {
-                                        current.needsChapterReview -> "Choose chapters for ${current.title}"
-                                        current.needsNarrationSetup -> "Set up narration for ${current.title}"
-                                        current.canListen -> "Resume ${current.title}"
-                                        else -> "Open ${current.title}"
-                                    },
-                                    size = 52.dp,
-                                ) {
-                                    Icon(
-                                        imageVector = if (current.canListen) {
-                                            Icons.Filled.PlayArrow
-                                        } else {
-                                            Icons.Outlined.AutoStories
-                                        },
-                                        contentDescription = null,
-                                        modifier = Modifier.size(30.dp),
-                                    )
-                                }
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.End,
+                            ) {
                                 EmbossedCircularButton(
                                     onClick = { pendingRemoveBookId = current.id },
                                     contentDescription = "Remove ${current.title} from library",

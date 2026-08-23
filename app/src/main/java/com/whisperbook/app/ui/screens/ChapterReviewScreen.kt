@@ -81,11 +81,11 @@ fun ChapterReviewScreen(
     var actionsExpanded by rememberSaveable { mutableStateOf(false) }
     val orderedChapters = chapters.sortedBy { it.customPosition }
     val selectedChapters = orderedChapters.filter { it.isSelected }
-    val skippedChapters = orderedChapters.filterNot { it.isSelected }
     val normalizedQuery = searchQuery.trim()
     val searchActive = normalizedQuery.isNotEmpty()
-    val includedResults = selectedChapters.filter { it.matches(normalizedQuery) }
-    val skippedResults = skippedChapters.filter { it.matches(normalizedQuery) }
+    val visibleChapters = orderedChapters.filter { it.matches(normalizedQuery) }
+    val includedResults = visibleChapters.filter { it.isSelected }
+    val skippedResults = visibleChapters.filterNot { it.isSelected }
     val selectedPositionById = selectedChapters
         .mapIndexed { index, entry -> entry.chapter.id to index }
         .toMap()
@@ -256,62 +256,37 @@ fun ChapterReviewScreen(
                 }
             }
 
-            item(key = "included-heading") {
+            item(key = "chapter-list-heading") {
                 ChapterSectionHeading(
-                    title = "Included",
+                    title = "Chapters",
                     supportingText = when {
-                        searchActive -> "${includedResults.size} matching selected chapters"
-                        selectedChapters.isEmpty() -> "No chapters selected"
-                        else -> "Listening and preparation order"
+                        searchActive -> "${visibleChapters.size} matching chapters"
+                        chapters.isEmpty() -> "No chapters found"
+                        else -> "Selected chapters play in listening order"
                     },
                 )
             }
             items(
-                items = includedResults,
-                key = { "included-${it.chapter.id}" },
+                items = visibleChapters,
+                key = { "chapter-${it.chapter.id}" },
             ) { entry ->
-                val selectedIndex = selectedPositionById.getValue(entry.chapter.id)
+                val selectedIndex = selectedPositionById[entry.chapter.id]
                 ChapterPlanRow(
                     entry = entry,
-                    listeningPosition = selectedIndex + 1,
-                    canMoveEarlier = !searchActive && selectedIndex > 0,
-                    canMoveLater = !searchActive && selectedIndex in 0 until selectedChapters.lastIndex,
-                    onToggle = { onToggleChapter(entry.chapter.id, false) },
+                    listeningPosition = selectedIndex?.plus(1),
+                    canMoveEarlier = !searchActive && selectedIndex != null && selectedIndex > 0,
+                    canMoveLater = !searchActive && selectedIndex != null && selectedIndex < selectedChapters.lastIndex,
+                    onToggle = { onToggleChapter(entry.chapter.id, !entry.isSelected) },
                     onMoveEarlier = {
-                        onMoveChapter(entry.chapter.id, selectedIndex - 1)
+                        selectedIndex?.let { onMoveChapter(entry.chapter.id, it - 1) }
                     },
                     onMoveLater = {
-                        onMoveChapter(entry.chapter.id, selectedIndex + 1)
+                        selectedIndex?.let { onMoveChapter(entry.chapter.id, it + 1) }
                     },
                 )
             }
 
-            item(key = "skipped-heading") {
-                ChapterSectionHeading(
-                    title = "Skipped for now",
-                    supportingText = when {
-                        searchActive -> "${skippedResults.size} matching skipped chapters"
-                        skippedChapters.isEmpty() -> "Nothing skipped"
-                        else -> "Still available whenever you want them"
-                    },
-                )
-            }
-            items(
-                items = skippedResults,
-                key = { "skipped-${it.chapter.id}" },
-            ) { entry ->
-                ChapterPlanRow(
-                    entry = entry,
-                    listeningPosition = null,
-                    canMoveEarlier = false,
-                    canMoveLater = false,
-                    onToggle = { onToggleChapter(entry.chapter.id, true) },
-                    onMoveEarlier = {},
-                    onMoveLater = {},
-                )
-            }
-
-            if (searchActive && includedResults.isEmpty() && skippedResults.isEmpty()) {
+            if (searchActive && visibleChapters.isEmpty()) {
                 item(key = "empty-search") {
                     Text(
                         text = "No chapters match \"$normalizedQuery\".",

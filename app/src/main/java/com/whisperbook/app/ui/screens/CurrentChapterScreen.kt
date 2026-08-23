@@ -26,6 +26,7 @@ import androidx.compose.material.icons.outlined.KeyboardArrowDown
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -60,6 +61,34 @@ private data class PendingSpeakerCorrection(
     val target: CastMemberUi,
 )
 
+internal fun groupedReaderProgress(
+    playbackPassageIds: List<String>,
+    playbackPassageWeights: Map<String, Int>,
+    activePassageId: String,
+    activePassageProgress: Float,
+): Float {
+    val activeIndex = playbackPassageIds.indexOf(activePassageId)
+    if (activeIndex < 0 || playbackPassageIds.isEmpty()) return 0f
+
+    val clampedActiveProgress = when {
+        activePassageProgress.isNaN() || activePassageProgress <= 0f -> 0f
+        activePassageProgress >= 1f -> 1f
+        else -> activePassageProgress
+    }
+    val weights = playbackPassageIds.map { passageId ->
+        playbackPassageWeights[passageId]?.coerceAtLeast(1) ?: 1
+    }
+    val totalWeight = weights.sumOf(Int::toLong)
+    val completedWeight = weights.take(activeIndex).sumOf(Int::toLong) +
+        weights[activeIndex] * clampedActiveProgress.toDouble()
+    return (completedWeight / totalWeight).toFloat().coerceIn(0f, 1f)
+}
+
+internal fun playbackPassageTextWeights(passages: List<PassageUi>): Map<String, Int> =
+    passages.associate { passage ->
+        passage.id to passage.text.codePointCount(0, passage.text.length).coerceAtLeast(1)
+    }
+
 @Composable
 fun CurrentChapterScreen(
     contentPadding: PaddingValues,
@@ -70,6 +99,9 @@ fun CurrentChapterScreen(
 ) {
     val listState = rememberLazyListState()
     val readerPassages = appState.readerPassages
+    val playbackPassageWeights by remember(appState) {
+        derivedStateOf { playbackPassageTextWeights(appState.passages) }
+    }
     val activeIndex = readerPassages
         .indexOfFirst { appState.activePassageId in it.playbackPassageIds }
         .coerceAtLeast(0)
@@ -138,16 +170,17 @@ fun CurrentChapterScreen(
                         onChangeAttributedVoice = appState.cast
                             .takeIf { it.isNotEmpty() && passage.speakerId.isNotBlank() }
                             ?.let { { correctingPassageId = passage.id } },
-                        progress = if (
-                            appState.activePassageId in passage.playbackPassageIds &&
-                            appState.activePassageDurationMs > 0L
-                        ) {
-                            appState.activePassagePositionMs.toFloat()
-                                .div(appState.activePassageDurationMs)
-                                .coerceIn(0f, 1f)
-                        } else {
-                            0f
-                        },
+                        progress = groupedReaderProgress(
+                            playbackPassageIds = passage.playbackPassageIds,
+                            playbackPassageWeights = playbackPassageWeights,
+                            activePassageId = appState.activePassageId,
+                            activePassageProgress = if (appState.activePassageDurationMs > 0L) {
+                                appState.activePassagePositionMs.toFloat()
+                                    .div(appState.activePassageDurationMs)
+                            } else {
+                                0f
+                            },
+                        ),
                         modifier = Modifier.testTag("passage-${index + 1}"),
                     )
                 }

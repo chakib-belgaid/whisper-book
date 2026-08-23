@@ -57,10 +57,50 @@ import androidx.compose.ui.semantics.ProgressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.setProgress
 import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.whisperbook.app.ui.theme.WhisperbookTheme
+import kotlin.math.ceil
+
+internal fun readHighlightEnd(text: String, progress: Float): Int {
+    if (text.isEmpty() || progress.isNaN() || progress <= 0f) return 0
+    if (progress >= 1f) return text.length
+
+    val codePointCount = text.codePointCount(0, text.length)
+    val highlightedCodePoints = ceil(codePointCount * progress.toDouble())
+        .toInt()
+        .coerceIn(0, codePointCount)
+    return text.offsetByCodePoints(0, highlightedCodePoints)
+}
+
+internal fun readAlongText(
+    text: String,
+    progress: Float,
+    accentColor: Color,
+): AnnotatedString = buildAnnotatedString {
+    append(text)
+    val highlightEnd = readHighlightEnd(text, progress)
+    if (highlightEnd > 0) {
+        addStyle(
+            style = SpanStyle(
+                color = accentColor.copy(
+                    red = accentColor.red * .58f,
+                    green = accentColor.green * .58f,
+                    blue = accentColor.blue * .58f,
+                ),
+                background = accentColor.copy(alpha = .22f),
+                fontWeight = FontWeight.SemiBold,
+            ),
+            start = 0,
+            end = highlightEnd,
+        )
+    }
+}
 
 @Composable
 fun SpeakerPassageCard(
@@ -147,8 +187,8 @@ fun SpeakerPassageCard(
                     }
                 }
                 Text(
-                    text = passage,
-                    color = if (isActive) accentColor.copy(red = accentColor.red * .58f, green = accentColor.green * .58f, blue = accentColor.blue * .58f) else colors.ink,
+                    text = if (isActive) readAlongText(passage, progress, accentColor) else AnnotatedString(passage),
+                    color = colors.ink,
                     style = WhisperbookTheme.typography.reader.copy(fontSize = 20.sp, lineHeight = 25.sp),
                 )
                 if (isActive) {

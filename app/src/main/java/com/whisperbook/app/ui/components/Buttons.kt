@@ -22,6 +22,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
@@ -36,9 +37,10 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.disabled
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.whisperbook.app.ui.theme.WhisperbookTheme
 
 enum class PapercraftButtonVariant { Primary, Accent, Parchment }
@@ -54,6 +56,7 @@ fun PapercraftButton(
     loadingDescription: String = "Working",
     leadingIcon: (@Composable RowScope.() -> Unit)? = null,
     trailingIcon: (@Composable RowScope.() -> Unit)? = null,
+    onLabelTextLayout: (TextLayoutResult) -> Unit = {},
 ) {
     val colors = WhisperbookTheme.colors
     val interactionSource = remember { MutableInteractionSource() }
@@ -111,12 +114,14 @@ fun PapercraftButton(
             leadingIcon()
             Spacer(Modifier.width(10.dp))
         }
-        Text(
+        AssetFittedText(
             text = text,
+            color = LocalContentColor.current,
             style = WhisperbookTheme.typography.title,
-            maxLines = 1,
-            softWrap = false,
-            overflow = TextOverflow.Ellipsis,
+            minFontSize = 12.sp,
+            maxFontSize = WhisperbookTheme.typography.label.fontSize,
+            maxLines = 2,
+            onTextLayout = onLabelTextLayout,
         )
         if (!isLoading && trailingIcon != null) {
             Spacer(Modifier.width(10.dp))

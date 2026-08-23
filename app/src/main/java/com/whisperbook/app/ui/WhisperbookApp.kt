@@ -2,12 +2,15 @@ package com.whisperbook.app.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.foundation.layout.size
@@ -16,8 +19,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.LibraryBooks
 import androidx.compose.material.icons.outlined.Headphones
+import androidx.compose.material.icons.outlined.ExpandLess
+import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.Settings
-import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -25,7 +31,10 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -34,8 +43,13 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.ProgressBarRangeInfo
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.progressBarRangeInfo
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
@@ -51,12 +65,15 @@ import com.whisperbook.app.integration.flux.WhisperbookAction
 import com.whisperbook.app.ui.components.StorybookBottomBar
 import com.whisperbook.app.ui.components.StorybookDestination
 import com.whisperbook.app.ui.components.WhisperBackdrop
+import com.whisperbook.app.ui.components.PaperFold
+import com.whisperbook.app.ui.components.paperClickable
 import com.whisperbook.app.ui.navigation.WhisperbookDestination
 import com.whisperbook.app.ui.navigation.WhisperbookNavHost
 import com.whisperbook.app.ui.navigation.navigateToBottomDestination
 import com.whisperbook.app.ui.screens.WhisperbookAppState
 import com.whisperbook.app.ui.screens.WhisperbookUiActions
 import com.whisperbook.app.ui.theme.WhisperbookTheme
+import kotlin.math.roundToInt
 
 @Composable
 fun WhisperbookApp(
@@ -224,46 +241,109 @@ private fun BackgroundWorkStatus(
     progressFraction: Float?,
     modifier: Modifier = Modifier,
 ) {
-    Row(
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    val progress = progressFraction?.coerceIn(0f, 1f)
+    val progressPercent = progress?.let { (it * 100).roundToInt() }
+    val progressLabel = progressPercent?.let { "$it%" } ?: "In progress"
+    val expansionAction = if (expanded) "Collapse preparation status" else "Expand preparation status"
+
+    Column(
         modifier = modifier
             .widthIn(max = 520.dp)
+            .fillMaxWidth()
+            .animateContentSize()
             .clip(RoundedCornerShape(18.dp))
             .background(WhisperbookTheme.colors.paperHighlight)
             .border(1.dp, WhisperbookTheme.colors.ornament, RoundedCornerShape(18.dp))
-            .padding(horizontal = 14.dp, vertical = 10.dp)
-            .semantics { liveRegion = LiveRegionMode.Polite }
-            .testTag("background-operation-status"),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        if (progressFraction == null) {
-            CircularProgressIndicator(
-                color = WhisperbookTheme.colors.action,
-                strokeWidth = 2.dp,
-                modifier = Modifier.size(22.dp),
+            .paperClickable(
+                onClick = { expanded = !expanded },
+                role = Role.Button,
+                fold = PaperFold.Card,
+                onClickLabel = expansionAction,
             )
-        } else {
-            CircularProgressIndicator(
-                progress = { progressFraction.coerceIn(0f, 1f) },
-                color = WhisperbookTheme.colors.action,
-                strokeWidth = 2.dp,
-                modifier = Modifier.size(22.dp),
+            .padding(horizontal = 14.dp, vertical = 10.dp)
+            .semantics {
+                liveRegion = LiveRegionMode.Polite
+                stateDescription = buildString {
+                    append(if (expanded) "Expanded" else "Collapsed")
+                    append(", ")
+                    append(progressPercent?.let { "$it percent complete" } ?: "progress ongoing")
+                }
+            }
+            .testTag("background-operation-status"),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            verticalAlignment = if (expanded) Alignment.Top else Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = message,
+                        color = WhisperbookTheme.colors.ink,
+                        style = WhisperbookTheme.typography.label,
+                        maxLines = if (expanded) Int.MAX_VALUE else 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        text = progressLabel,
+                        color = WhisperbookTheme.colors.action,
+                        style = WhisperbookTheme.typography.label,
+                        modifier = Modifier.testTag("background-operation-progress-label"),
+                    )
+                }
+                Text(
+                    text = detail,
+                    color = WhisperbookTheme.colors.inkMuted,
+                    style = WhisperbookTheme.typography.label,
+                    maxLines = if (expanded) Int.MAX_VALUE else 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+            Icon(
+                imageVector = if (expanded) Icons.Outlined.ExpandLess else Icons.Outlined.ExpandMore,
+                contentDescription = null,
+                tint = WhisperbookTheme.colors.inkMuted,
+                modifier = Modifier.size(20.dp),
             )
         }
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = message,
-                color = WhisperbookTheme.colors.ink,
-                style = WhisperbookTheme.typography.label,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
+        if (progress == null) {
+            LinearProgressIndicator(
+                color = WhisperbookTheme.colors.action,
+                trackColor = WhisperbookTheme.colors.inkMuted.copy(alpha = 0.22f),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(7.dp)
+                    .semantics {
+                        progressBarRangeInfo = ProgressBarRangeInfo.Indeterminate
+                        contentDescription = "Background work in progress"
+                    }
+                    .testTag("background-operation-progress"),
             )
-            Text(
-                text = detail,
-                color = WhisperbookTheme.colors.inkMuted,
-                style = WhisperbookTheme.typography.label,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+        } else {
+            LinearProgressIndicator(
+                progress = { progress },
+                color = WhisperbookTheme.colors.action,
+                trackColor = WhisperbookTheme.colors.inkMuted.copy(alpha = 0.22f),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(7.dp)
+                    .semantics {
+                        progressBarRangeInfo = ProgressBarRangeInfo(
+                            current = progress,
+                            range = 0f..1f,
+                            steps = 0,
+                        )
+                        contentDescription = "$progressPercent percent complete"
+                    }
+                    .testTag("background-operation-progress"),
             )
         }
     }

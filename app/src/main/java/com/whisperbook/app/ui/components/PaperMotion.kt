@@ -142,6 +142,7 @@ fun Modifier.paperClickable(
     enabled: Boolean = true,
     role: Role? = null,
     fold: PaperFold = PaperFold.Control,
+    onClickLabel: String? = null,
 ): Modifier {
     val interactionSource = remember { MutableInteractionSource() }
     return paperFold(interactionSource, enabled, fold)
@@ -150,6 +151,7 @@ fun Modifier.paperClickable(
             indication = null,
             enabled = enabled,
             role = role,
+            onClickLabel = onClickLabel,
             onClick = onClick,
         )
 }
