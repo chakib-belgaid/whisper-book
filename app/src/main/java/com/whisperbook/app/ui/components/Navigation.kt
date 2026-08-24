@@ -8,14 +8,15 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.Icon
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
@@ -27,6 +28,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.whisperbook.app.ui.theme.WhisperbookTheme
@@ -46,29 +48,38 @@ fun StorybookBottomBar(
     modifier: Modifier = Modifier,
 ) {
     val colors = WhisperbookTheme.colors
-    Row(
+    Surface(
         modifier = modifier
             .fillMaxWidth()
-            .height(WhisperbookTheme.components.bottomBarHeight)
-            .background(colors.stage)
-            .border(width = 1.dp, color = colors.outline.copy(alpha = 0.72f))
-            .selectableGroup(),
-        horizontalArrangement = Arrangement.SpaceEvenly,
-        verticalAlignment = Alignment.CenterVertically,
+            .testTag("storybook-bottom-bar"),
+        color = colors.stage,
+        contentColor = colors.paper,
+        tonalElevation = 0.dp,
+        shadowElevation = 0.dp,
     ) {
-        destinations.forEachIndexed { index, destination ->
-            StorybookDestinationItem(
-                destination = destination,
-                selected = destination.route == selectedRoute,
-                onClick = { onDestinationSelected(destination) },
-            )
-            if (index < destinations.lastIndex) {
-                Spacer(
-                    Modifier
-                        .fillMaxHeight(0.64f)
-                        .width(1.dp)
-                        .background(colors.outline.copy(alpha = 0.55f)),
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = WhisperbookTheme.components.bottomBarHeight)
+                .border(width = 1.dp, color = colors.outline.copy(alpha = 0.72f))
+                .selectableGroup(),
+            horizontalArrangement = Arrangement.SpaceEvenly,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            destinations.forEachIndexed { index, destination ->
+                StorybookDestinationItem(
+                    destination = destination,
+                    selected = destination.route == selectedRoute,
+                    onClick = { onDestinationSelected(destination) },
                 )
+                if (index < destinations.lastIndex) {
+                    Spacer(
+                        Modifier
+                            .heightIn(min = 40.dp)
+                            .width(1.dp)
+                            .background(colors.outline.copy(alpha = 0.55f)),
+                    )
+                }
             }
         }
     }
@@ -81,10 +92,11 @@ private fun RowScope.StorybookDestinationItem(
     onClick: () -> Unit,
 ) {
     val colors = WhisperbookTheme.colors
+    val foreground = if (selected) colors.ornament else colors.paper
     Box(
         modifier = Modifier
             .weight(1f)
-            .fillMaxHeight()
+            .defaultMinSize(minHeight = WhisperbookTheme.components.bottomBarHeight)
             .paperSelectable(
                 selected = selected,
                 onClick = onClick,
@@ -94,29 +106,53 @@ private fun RowScope.StorybookDestinationItem(
             .semantics {
                 contentDescription = destination.label
                 stateDescription = if (selected) "Selected" else "Not selected"
-            },
+            }
+            .testTag("bottom-navigation-${destination.route}"),
         contentAlignment = Alignment.Center,
     ) {
-        Column(
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(1.dp),
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 6.dp, vertical = 5.dp)
+                .background(
+                    color = if (selected) colors.stageRaised else colors.stage,
+                    shape = WhisperbookTheme.shapes.selectedNavigation,
+                )
+                .then(
+                    if (selected) {
+                        Modifier.border(
+                            width = 1.dp,
+                            color = colors.outline.copy(alpha = 0.72f),
+                            shape = WhisperbookTheme.shapes.selectedNavigation,
+                        )
+                    } else {
+                        Modifier
+                    },
+                )
+                .padding(horizontal = 4.dp, vertical = 3.dp),
+            contentAlignment = Alignment.Center,
         ) {
-            Icon(
-                imageVector = destination.icon,
-                contentDescription = null,
-                tint = if (selected) colors.ornament else colors.paper,
-                modifier = Modifier.size(25.dp),
-            )
-            Text(
-                text = destination.label,
-                color = if (selected) colors.onStage else colors.paper,
-                style = WhisperbookTheme.typography.title.copy(
-                    fontSize = 16.sp,
-                    lineHeight = 19.sp,
-                ),
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(1.dp),
+            ) {
+                Icon(
+                    imageVector = destination.icon,
+                    contentDescription = null,
+                    tint = foreground,
+                    modifier = Modifier.size(25.dp),
+                )
+                Text(
+                    text = destination.label,
+                    color = foreground,
+                    style = WhisperbookTheme.typography.title.copy(
+                        fontSize = 16.sp,
+                        lineHeight = 19.sp,
+                    ),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
         }
     }
 }

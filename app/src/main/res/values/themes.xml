@@ -1,6 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.Whisperbook" parent="android:style/Theme.Material.Light.NoActionBar">
+    <!--
+        The Compose theme is intentionally dark. Declaring a light platform theme lets
+        Android Force Dark recolor Compose draw layers independently, which can invert
+        the backdrop and bottom navigation on some devices.
+    -->
+    <style name="Theme.Whisperbook.Base" parent="android:style/Theme.Material.NoActionBar">
         <item name="android:fontFamily">serif</item>
         <item name="android:windowActionModeOverlay">true</item>
         <item name="android:colorAccent">@color/parchment_light</item>
@@ -8,4 +13,6 @@
         <item name="android:statusBarColor">@color/midnight_paper</item>
         <item name="android:windowLightStatusBar">false</item>
     </style>
+
+    <style name="Theme.Whisperbook" parent="Theme.Whisperbook.Base" />
 </resources>
