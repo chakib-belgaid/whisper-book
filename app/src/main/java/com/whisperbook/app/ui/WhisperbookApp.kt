@@ -6,8 +6,8 @@ import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -24,7 +24,6 @@ import androidx.compose.material.icons.outlined.ExpandMore
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.LinearProgressIndicator
-import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
@@ -38,7 +37,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.platform.testTag
@@ -62,8 +60,8 @@ import com.whisperbook.app.domain.model.PreparationState
 import com.whisperbook.app.diagnostics.BetaDiagnostics
 import com.whisperbook.app.integration.WhisperbookViewModel
 import com.whisperbook.app.integration.flux.WhisperbookAction
-import com.whisperbook.app.ui.components.StorybookBottomBar
 import com.whisperbook.app.ui.components.StorybookDestination
+import com.whisperbook.app.ui.components.StorybookNavigationSuite
 import com.whisperbook.app.ui.components.WhisperBackdrop
 import com.whisperbook.app.ui.components.PaperFold
 import com.whisperbook.app.ui.components.paperClickable
@@ -127,68 +125,60 @@ fun WhisperbookApp(
         ) {
         val backStackEntry by navController.currentBackStackEntryAsState()
         val currentRoute = backStackEntry?.destination?.route ?: startDestination
-        val showBottomBar = currentRoute in WhisperbookDestination.bottomBarRoutes
+        val showNavigation = currentRoute in WhisperbookDestination.bottomBarRoutes
         LaunchedEffect(currentRoute) {
             BetaDiagnostics.info("screen_view", mapOf("route" to currentRoute))
         }
 
         WhisperBackdrop(modifier = modifier.fillMaxSize()) {
-            Scaffold(
+            StorybookNavigationSuite(
+                destinations = bottomDestinations,
+                selectedRoute = selectedBottomRoute(currentRoute),
+                showNavigation = showNavigation,
+                onDestinationSelected = { destination ->
+                    if (currentRoute == WhisperbookDestination.Welcome.route) {
+                        appState.completeOnboarding()
+                    }
+                    when {
+                        destination.route == WhisperbookDestination.NowPlaying.route &&
+                            appState.currentBookId.isBlank() -> {
+                            navController.navigateToBottomDestination(
+                                WhisperbookDestination.Library.route,
+                            )
+                        }
+                        destination.route == WhisperbookDestination.NowPlaying.route &&
+                            appState.requiresChapterReview -> {
+                            navController.navigate(WhisperbookDestination.ChapterReview.route)
+                        }
+                        destination.route == WhisperbookDestination.NowPlaying.route &&
+                            appState.preparationStatus?.stage in setOf(
+                                PreparationStage.COPY_AND_VALIDATE,
+                                PreparationStage.READING_CHAPTERS,
+                            ) -> {
+                            navController.navigate(WhisperbookDestination.Parsing.route)
+                        }
+                        destination.route == WhisperbookDestination.NowPlaying.route &&
+                            appState.narrationSetupRequired -> {
+                            navController.navigate(WhisperbookDestination.NarrationSetup.route)
+                        }
+                        destination.route == WhisperbookDestination.NowPlaying.route &&
+                            !appState.canListen -> {
+                            navController.navigate(WhisperbookDestination.Processing.route)
+                        }
+                        else -> navController.navigateToBottomDestination(destination.route)
+                    }
+                },
                 modifier = Modifier
                     .fillMaxSize()
                     .safeDrawingPadding()
                     .padding(top = WhisperbookTheme.spacing.sm)
                     .testTag("app-safe-area"),
-                containerColor = Color.Transparent,
-                contentColor = WhisperbookTheme.colors.onStage,
-                contentWindowInsets = WindowInsets(0, 0, 0, 0),
-                bottomBar = {
-                    if (showBottomBar) {
-                        StorybookBottomBar(
-                            destinations = bottomDestinations,
-                            selectedRoute = selectedBottomRoute(currentRoute),
-                            onDestinationSelected = { destination ->
-                                if (currentRoute == WhisperbookDestination.Welcome.route) {
-                                    appState.completeOnboarding()
-                                }
-                                when {
-                                    destination.route == WhisperbookDestination.NowPlaying.route &&
-                                        appState.currentBookId.isBlank() -> {
-                                        navController.navigateToBottomDestination(
-                                            WhisperbookDestination.Library.route,
-                                        )
-                                    }
-                                    destination.route == WhisperbookDestination.NowPlaying.route &&
-                                        appState.requiresChapterReview -> {
-                                        navController.navigate(WhisperbookDestination.ChapterReview.route)
-                                    }
-                                    destination.route == WhisperbookDestination.NowPlaying.route &&
-                                        appState.preparationStatus?.stage in setOf(
-                                            PreparationStage.COPY_AND_VALIDATE,
-                                            PreparationStage.READING_CHAPTERS,
-                                        ) -> {
-                                        navController.navigate(WhisperbookDestination.Parsing.route)
-                                    }
-                                    destination.route == WhisperbookDestination.NowPlaying.route &&
-                                        appState.narrationSetupRequired -> {
-                                        navController.navigate(WhisperbookDestination.NarrationSetup.route)
-                                    }
-                                    destination.route == WhisperbookDestination.NowPlaying.route &&
-                                        !appState.canListen -> {
-                                        navController.navigate(WhisperbookDestination.Processing.route)
-                                    }
-                                    else -> navController.navigateToBottomDestination(destination.route)
-                                }
-                            },
-                        )
-                    }
-                },
-            ) { contentPadding ->
+            ) {
                 Box(Modifier.fillMaxSize()) {
                     WhisperbookNavHost(
                         navController = navController,
                         appState = appState,
-                        contentPadding = contentPadding,
+                        contentPadding = PaddingValues.Zero,
                         startDestination = startDestination,
                     )
                     val preparation = appState.preparationStatus
@@ -224,7 +214,7 @@ fun WhisperbookApp(
                             modifier = Modifier
                                 .align(Alignment.BottomCenter)
                                 .padding(horizontal = 16.dp)
-                                .padding(bottom = contentPadding.calculateBottomPadding() + 10.dp),
+                                .padding(bottom = 10.dp),
                         )
                     }
                 }

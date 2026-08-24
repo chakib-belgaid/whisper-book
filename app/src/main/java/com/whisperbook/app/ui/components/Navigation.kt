@@ -1,29 +1,24 @@
 package com.whisperbook.app.ui.components
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.RowScope
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.defaultMinSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Surface
+import androidx.compose.material3.NavigationBarItemDefaults
+import androidx.compose.material3.NavigationDrawerItemDefaults
+import androidx.compose.material3.NavigationRailItemDefaults
 import androidx.compose.material3.Text
+import androidx.compose.material3.adaptive.currentWindowAdaptiveInfo
+import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteDefaults
+import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffold
+import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffoldDefaults
+import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteScaffoldValue
+import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteType
+import androidx.compose.material3.adaptive.navigationsuite.rememberNavigationSuiteScaffoldState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.Immutable
-import androidx.compose.ui.Alignment
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
-import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.stateDescription
@@ -41,118 +36,105 @@ data class StorybookDestination(
 )
 
 @Composable
-fun StorybookBottomBar(
+fun StorybookNavigationSuite(
     destinations: List<StorybookDestination>,
     selectedRoute: String,
     onDestinationSelected: (StorybookDestination) -> Unit,
     modifier: Modifier = Modifier,
+    showNavigation: Boolean = true,
+    layoutType: NavigationSuiteType = NavigationSuiteScaffoldDefaults.calculateFromAdaptiveInfo(
+        currentWindowAdaptiveInfo(),
+    ),
+    content: @Composable () -> Unit,
 ) {
     val colors = WhisperbookTheme.colors
-    Surface(
-        modifier = modifier
-            .fillMaxWidth()
-            .testTag("storybook-bottom-bar"),
-        color = colors.stage,
-        contentColor = colors.paper,
-        tonalElevation = 0.dp,
-        shadowElevation = 0.dp,
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .heightIn(min = WhisperbookTheme.components.bottomBarHeight)
-                .border(width = 1.dp, color = colors.outline.copy(alpha = 0.72f))
-                .selectableGroup(),
-            horizontalArrangement = Arrangement.SpaceEvenly,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            destinations.forEachIndexed { index, destination ->
-                StorybookDestinationItem(
-                    destination = destination,
-                    selected = destination.route == selectedRoute,
-                    onClick = { onDestinationSelected(destination) },
-                )
-                if (index < destinations.lastIndex) {
-                    Spacer(
-                        Modifier
-                            .heightIn(min = 40.dp)
-                            .width(1.dp)
-                            .background(colors.outline.copy(alpha = 0.55f)),
-                    )
-                }
-            }
-        }
+    val scaffoldState = rememberNavigationSuiteScaffoldState(
+        initialValue = if (showNavigation) {
+            NavigationSuiteScaffoldValue.Visible
+        } else {
+            NavigationSuiteScaffoldValue.Hidden
+        },
+    )
+    LaunchedEffect(showNavigation) {
+        scaffoldState.snapTo(
+            if (showNavigation) {
+                NavigationSuiteScaffoldValue.Visible
+            } else {
+                NavigationSuiteScaffoldValue.Hidden
+            },
+        )
     }
-}
+    val navigationSuiteColors = NavigationSuiteDefaults.colors(
+        navigationBarContainerColor = colors.stage,
+        navigationRailContainerColor = colors.stage,
+        navigationDrawerContainerColor = colors.stage,
+    )
+    val itemColors = NavigationSuiteDefaults.itemColors(
+        navigationBarItemColors = NavigationBarItemDefaults.colors(
+            selectedIconColor = colors.ornament,
+            selectedTextColor = colors.ornament,
+            indicatorColor = colors.stageRaised,
+            unselectedIconColor = colors.paper,
+            unselectedTextColor = colors.paper,
+        ),
+        navigationRailItemColors = NavigationRailItemDefaults.colors(
+            selectedIconColor = colors.ornament,
+            selectedTextColor = colors.ornament,
+            indicatorColor = colors.stageRaised,
+            unselectedIconColor = colors.paper,
+            unselectedTextColor = colors.paper,
+        ),
+        navigationDrawerItemColors = NavigationDrawerItemDefaults.colors(
+            selectedIconColor = colors.ornament,
+            selectedTextColor = colors.ornament,
+            selectedContainerColor = colors.stageRaised,
+            unselectedIconColor = colors.paper,
+            unselectedTextColor = colors.paper,
+        ),
+    )
 
-@Composable
-private fun RowScope.StorybookDestinationItem(
-    destination: StorybookDestination,
-    selected: Boolean,
-    onClick: () -> Unit,
-) {
-    val colors = WhisperbookTheme.colors
-    val foreground = if (selected) colors.ornament else colors.paper
-    Box(
-        modifier = Modifier
-            .weight(1f)
-            .defaultMinSize(minHeight = WhisperbookTheme.components.bottomBarHeight)
-            .paperSelectable(
-                selected = selected,
-                onClick = onClick,
-                role = Role.Tab,
-                fold = PaperFold.Tab,
-            )
-            .semantics {
-                contentDescription = destination.label
-                stateDescription = if (selected) "Selected" else "Not selected"
-            }
-            .testTag("bottom-navigation-${destination.route}"),
-        contentAlignment = Alignment.Center,
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 6.dp, vertical = 5.dp)
-                .background(
-                    color = if (selected) colors.stageRaised else colors.stage,
-                    shape = WhisperbookTheme.shapes.selectedNavigation,
-                )
-                .then(
-                    if (selected) {
-                        Modifier.border(
-                            width = 1.dp,
-                            color = colors.outline.copy(alpha = 0.72f),
-                            shape = WhisperbookTheme.shapes.selectedNavigation,
+    NavigationSuiteScaffold(
+        navigationSuiteItems = {
+            destinations.forEach { destination ->
+                val selected = destination.route == selectedRoute
+                item(
+                    selected = selected,
+                    onClick = { onDestinationSelected(destination) },
+                    icon = {
+                        Icon(
+                            imageVector = destination.icon,
+                            contentDescription = null,
+                            modifier = Modifier.size(25.dp),
                         )
-                    } else {
-                        Modifier
                     },
-                )
-                .padding(horizontal = 4.dp, vertical = 3.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(1.dp),
-            ) {
-                Icon(
-                    imageVector = destination.icon,
-                    contentDescription = null,
-                    tint = foreground,
-                    modifier = Modifier.size(25.dp),
-                )
-                Text(
-                    text = destination.label,
-                    color = foreground,
-                    style = WhisperbookTheme.typography.title.copy(
-                        fontSize = 16.sp,
-                        lineHeight = 19.sp,
-                    ),
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
+                    label = {
+                        Text(
+                            text = destination.label,
+                            style = WhisperbookTheme.typography.title.copy(
+                                fontSize = 16.sp,
+                                lineHeight = 19.sp,
+                            ),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    },
+                    modifier = Modifier
+                        .defaultMinSize(minWidth = 48.dp, minHeight = 48.dp)
+                        .semantics {
+                            contentDescription = destination.label
+                            stateDescription = if (selected) "Selected" else "Not selected"
+                        }
+                        .testTag("bottom-navigation-${destination.route}"),
+                    colors = itemColors,
                 )
             }
-        }
-    }
+        },
+        modifier = modifier.testTag("storybook-navigation-suite"),
+        layoutType = layoutType,
+        navigationSuiteColors = navigationSuiteColors,
+        containerColor = androidx.compose.ui.graphics.Color.Transparent,
+        contentColor = colors.onStage,
+        state = scaffoldState,
+        content = content,
+    )
 }

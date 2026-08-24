@@ -6,8 +6,11 @@ import androidx.compose.material.icons.outlined.Headphones
 import androidx.compose.material.icons.outlined.Home
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
+import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteType
 import androidx.compose.ui.test.assertHeightIsAtLeast
 import androidx.compose.ui.test.assertIsEnabled
+import androidx.compose.ui.test.assertIsNotDisplayed
 import androidx.compose.ui.test.assertIsNotSelected
 import androidx.compose.ui.test.assertIsSelected
 import androidx.compose.ui.test.assertTextContains
@@ -59,19 +62,18 @@ class ComponentSemanticsTest {
     }
 
     @Test
-    fun bottomBar_exposesOneSelectedTabAndAccessibleTargets() {
+    fun adaptiveNavigationSuite_navigationBarPreservesDestinationSemantics() {
         var clickedRoute: String? = null
         composeRule.setContent {
             WhisperbookTheme {
-                StorybookBottomBar(
-                    destinations = listOf(
-                        StorybookDestination("library", "Library", Icons.Outlined.Home),
-                        StorybookDestination("listen", "Listen", Icons.Outlined.Headphones),
-                        StorybookDestination("settings", "Settings", Icons.Outlined.Settings),
-                    ),
+                StorybookNavigationSuite(
+                    destinations = testDestinations,
                     selectedRoute = "listen",
                     onDestinationSelected = { clickedRoute = it.route },
-                )
+                    layoutType = NavigationSuiteType.NavigationBar,
+                ) {
+                    Text("Destination content")
+                }
             }
         }
 
@@ -88,4 +90,52 @@ class ComponentSemanticsTest {
 
         assertEquals("settings", clickedRoute)
     }
+
+    @Test
+    fun adaptiveNavigationSuite_navigationRailUsesTheSameDestinations() {
+        composeRule.setContent {
+            WhisperbookTheme {
+                StorybookNavigationSuite(
+                    destinations = testDestinations,
+                    selectedRoute = "library",
+                    onDestinationSelected = {},
+                    layoutType = NavigationSuiteType.NavigationRail,
+                ) {
+                    Text("Destination content")
+                }
+            }
+        }
+
+        composeRule.onNodeWithContentDescription("Library").assertIsSelected()
+        composeRule.onNodeWithContentDescription("Listen").assertIsNotSelected()
+        composeRule.onNodeWithContentDescription("Settings").assertIsNotSelected()
+        composeRule.onNodeWithText("Destination content").assertTextContains("Destination content")
+    }
+
+    @Test
+    fun adaptiveNavigationSuite_canHideNavigationForDetailFlows() {
+        composeRule.setContent {
+            WhisperbookTheme {
+                StorybookNavigationSuite(
+                    destinations = testDestinations,
+                    selectedRoute = "library",
+                    onDestinationSelected = {},
+                    showNavigation = false,
+                    layoutType = NavigationSuiteType.NavigationBar,
+                ) {
+                    Text("Detail content")
+                }
+            }
+        }
+
+        composeRule.onNodeWithContentDescription("Library").assertIsNotDisplayed()
+        composeRule.onNodeWithText("Detail content").assertTextContains("Detail content")
+    }
+
+    private val testDestinations
+        get() = listOf(
+            StorybookDestination("library", "Library", Icons.Outlined.Home),
+            StorybookDestination("listen", "Listen", Icons.Outlined.Headphones),
+            StorybookDestination("settings", "Settings", Icons.Outlined.Settings),
+        )
 }

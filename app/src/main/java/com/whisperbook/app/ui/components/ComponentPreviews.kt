@@ -12,6 +12,8 @@ import androidx.compose.material.icons.outlined.AutoStories
 import androidx.compose.material.icons.outlined.Headphones
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.Icon
+import androidx.compose.material3.Text
+import androidx.compose.material3.adaptive.navigationsuite.NavigationSuiteType
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.tooling.preview.Preview
@@ -43,19 +45,50 @@ private fun CoreComponentsPreview() {
                     modifier = Modifier.fillMaxWidth(),
                     leadingIcon = { Icon(Icons.Filled.PlayArrow, contentDescription = null) },
                 )
-                StorybookBottomBar(
-                    destinations = listOf(
-                        StorybookDestination("library", "Library", Icons.Outlined.AutoStories),
-                        StorybookDestination("listen", "Listen", Icons.Outlined.Headphones),
-                        StorybookDestination("settings", "Settings", Icons.Outlined.Settings),
-                    ),
-                    selectedRoute = "listen",
-                    onDestinationSelected = {},
-                )
             }
         }
     }
 }
+
+@Preview(name = "Adaptive navigation bar", widthDp = 360, heightDp = 640, showBackground = true)
+@Composable
+private fun AdaptiveNavigationBarPreview() {
+    WhisperbookTheme {
+        StorybookNavigationSuite(
+            destinations = previewDestinations,
+            selectedRoute = "listen",
+            onDestinationSelected = {},
+            layoutType = NavigationSuiteType.NavigationBar,
+        ) {
+            WhisperBackdrop {
+                Text("Compact destination", modifier = Modifier.padding(24.dp))
+            }
+        }
+    }
+}
+
+@Preview(name = "Adaptive navigation rail", widthDp = 840, heightDp = 640, showBackground = true)
+@Composable
+private fun AdaptiveNavigationRailPreview() {
+    WhisperbookTheme {
+        StorybookNavigationSuite(
+            destinations = previewDestinations,
+            selectedRoute = "listen",
+            onDestinationSelected = {},
+            layoutType = NavigationSuiteType.NavigationRail,
+        ) {
+            WhisperBackdrop {
+                Text("Expanded destination", modifier = Modifier.padding(24.dp))
+            }
+        }
+    }
+}
+
+private val previewDestinations = listOf(
+    StorybookDestination("library", "Library", Icons.Outlined.AutoStories),
+    StorybookDestination("listen", "Listen", Icons.Outlined.Headphones),
+    StorybookDestination("settings", "Settings", Icons.Outlined.Settings),
+)
 
 @Preview(name = "Read along", widthDp = 360, heightDp = 640, showBackground = true)
 @Composable
