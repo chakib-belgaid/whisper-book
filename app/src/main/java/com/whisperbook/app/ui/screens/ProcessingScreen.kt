@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -61,6 +62,7 @@ import kotlinx.coroutines.delay
 
 private const val ProcessingReferenceWidthDp = 400f
 private const val ProcessingMaximumScale = 1.8f
+private val ProcessingMaximumContentWidth = ProcessingReferenceWidthDp.dp
 
 /**
  * Keeps the illustrated processing composition legible when Android display sizing exposes a
@@ -139,6 +141,8 @@ fun ProcessingScreen(
         CompositionLocalProvider(LocalDensity provides responsiveDensity) {
             Column(
                 modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .widthIn(max = ProcessingMaximumContentWidth)
                     .fillMaxSize()
                     .padding(contentPadding)
                     .verticalScroll(rememberScrollState())
@@ -223,7 +227,7 @@ fun ProcessingScreen(
                             .testTag("processing-run-state"),
                     )
                 }
-                Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.height(8.dp))
 
                 ParchmentPanel(
                     modifier = Modifier.fillMaxWidth().testTag("processing-chapter-queue"),
@@ -285,11 +289,10 @@ fun ProcessingScreen(
                         },
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 16.dp)
                             .testTag("processing-edit-chapters-action"),
                     )
                 }
-                Spacer(Modifier.height(10.dp))
+                Spacer(Modifier.height(8.dp))
                 val continueInBackground = {
                     if (
                         Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
@@ -318,7 +321,6 @@ fun ProcessingScreen(
                     variant = PapercraftButtonVariant.Accent,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp)
                         .testTag("processing-primary-action"),
                     isLoading = appState.isBusy,
                     loadingDescription = appState.statusMessage ?: "Preparing your audiobook",
@@ -336,7 +338,6 @@ fun ProcessingScreen(
                         variant = PapercraftButtonVariant.Parchment,
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 16.dp)
                             .testTag("processing-background-action"),
                     )
                 }
@@ -345,8 +346,8 @@ fun ProcessingScreen(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 16.dp),
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            .testTag("processing-secondary-actions"),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         if (!appState.isPreparationPaused) {
                             PapercraftButton(

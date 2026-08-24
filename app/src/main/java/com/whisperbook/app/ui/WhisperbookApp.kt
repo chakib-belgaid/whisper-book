@@ -170,11 +170,15 @@ fun WhisperbookApp(
                 },
                 modifier = Modifier
                     .fillMaxSize()
-                    .safeDrawingPadding()
-                    .padding(top = WhisperbookTheme.spacing.sm)
-                    .testTag("app-safe-area"),
+                    .testTag("app-edge-to-edge"),
             ) {
-                Box(Modifier.fillMaxSize()) {
+                Box(
+                    Modifier
+                        .fillMaxSize()
+                        .safeDrawingPadding()
+                        .padding(top = WhisperbookTheme.spacing.sm)
+                        .testTag("app-safe-area"),
+                ) {
                     WhisperbookNavHost(
                         navController = navController,
                         appState = appState,

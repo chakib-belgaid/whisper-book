@@ -69,7 +69,7 @@ fun PapercraftButton(
         PapercraftButtonVariant.Parchment -> colors.ink
         else -> colors.onStage
     }
-    val shape = WhisperbookTheme.shapes.control
+    val shape = WhisperbookTheme.shapes.button
     Button(
         onClick = onClick,
         interactionSource = interactionSource,

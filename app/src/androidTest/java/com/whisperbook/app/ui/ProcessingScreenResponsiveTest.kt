@@ -1,11 +1,13 @@
 package com.whisperbook.app.ui
 
 import android.graphics.Bitmap
+import android.os.ParcelFileDescriptor
+import androidx.activity.ComponentActivity
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.graphics.asAndroidBitmap
 import androidx.compose.ui.test.captureToImage
 import androidx.compose.ui.test.assertTextEquals
-import androidx.compose.ui.test.junit4.v2.createComposeRule
+import androidx.compose.ui.test.junit4.v2.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onRoot
 import androidx.compose.ui.test.performClick
@@ -27,7 +29,7 @@ import org.junit.Test
 
 class ProcessingScreenResponsiveTest {
     @get:Rule
-    val composeRule = createComposeRule()
+    val composeRule = createAndroidComposeRule<ComponentActivity>()
 
     @Test
     fun longTechnicalFilenameStaysInsideTheatreAndPrimaryActionWorks() {
@@ -91,6 +93,45 @@ class ProcessingScreenResponsiveTest {
             backgroundStatusBounds.top >= playerDeckBounds.bottom,
         )
         captureScreenshot("now-playing")
+    }
+
+    @Test
+    fun processingControlsShareCenteredWidth() {
+        val title = "Aligned paper controls"
+        val book = testBook(title)
+        val appState = WhisperbookAppState().apply {
+            synchronize(
+                WhisperbookUiSnapshot(
+                    books = listOf(book),
+                    selectedBook = book,
+                    preparation = book.preparation,
+                ),
+            )
+        }
+
+        composeRule.setContent {
+            WhisperbookApp(
+                appState = appState,
+                navController = rememberNavController(),
+                startDestination = WhisperbookDestination.Processing.route,
+            )
+        }
+
+        val queueBounds = bounds("processing-chapter-queue")
+        val editBounds = bounds("processing-edit-chapters-action")
+        val primaryBounds = bounds("processing-primary-action")
+        val secondaryBounds = bounds("processing-secondary-actions")
+        listOf(editBounds, primaryBounds, secondaryBounds).forEach { actionBounds ->
+            assertTrue(
+                "Preparation controls must share the chapter panel's left edge",
+                kotlin.math.abs(actionBounds.left - queueBounds.left) <= 1f,
+            )
+            assertTrue(
+                "Preparation controls must share the chapter panel's right edge",
+                kotlin.math.abs(actionBounds.right - queueBounds.right) <= 1f,
+            )
+        }
+        captureScreenshot("processing-aligned")
     }
 
     @Test
@@ -187,6 +228,11 @@ class ProcessingScreenResponsiveTest {
                 stream,
             )
         }
+        ParcelFileDescriptor.AutoCloseInputStream(
+            instrumentation.uiAutomation.executeShellCommand(
+                "screencap -p /sdcard/Download/${output.name}",
+            ),
+        ).use { commandOutput -> commandOutput.readBytes() }
     }
 
     private fun testBook(title: String) = Book(

@@ -1,5 +1,6 @@
 package com.whisperbook.app.ui.theme
 
+import androidx.compose.foundation.shape.CutCornerShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.staticCompositionLocalOf
@@ -11,6 +12,7 @@ import androidx.compose.ui.unit.dp
 @Immutable
 data class WhisperbookShapes(
     val small: Shape = RoundedCornerShape(WhisperPrimitives.Radius.Small),
+    val button: Shape = CutCornerShape(WhisperPrimitives.Radius.Small),
     val control: Shape = RoundedCornerShape(WhisperPrimitives.Radius.Medium),
     val card: Shape = RoundedCornerShape(WhisperPrimitives.Radius.Large),
     val panel: Shape = RoundedCornerShape(WhisperPrimitives.Radius.Panel),

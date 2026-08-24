@@ -9,9 +9,10 @@
         <item name="android:fontFamily">serif</item>
         <item name="android:windowActionModeOverlay">true</item>
         <item name="android:colorAccent">@color/parchment_light</item>
-        <item name="android:navigationBarColor">@color/midnight_paper</item>
-        <item name="android:statusBarColor">@color/midnight_paper</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowLightNavigationBar">false</item>
     </style>
 
     <style name="Theme.Whisperbook" parent="Theme.Whisperbook.Base" />
