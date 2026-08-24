@@ -106,7 +106,7 @@ fun CurrentChapterScreen(
         .indexOfFirst { appState.activePassageId in it.playbackPassageIds }
         .coerceAtLeast(0)
     var hasObservedInitialPassage by rememberSaveable { mutableStateOf(false) }
-    var showChapterPicker by rememberSaveable { mutableStateOf(false) }
+    var showPassagePicker by rememberSaveable { mutableStateOf(false) }
     var correctingPassageId by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingSpeakerCorrection by remember { mutableStateOf<PendingSpeakerCorrection?>(null) }
     LaunchedEffect(activeIndex, appState.autoScroll) {
@@ -129,11 +129,12 @@ fun CurrentChapterScreen(
             ReaderChapterPlate(
                 title = appState.currentChapterTitle,
                 chapterNumber = appState.currentChapterNumber,
-                totalChapters = appState.totalChapters,
+                passageNumber = activeReaderPassageNumber(readerPassages, appState.activePassageId),
+                totalPassages = readerPassages.size,
                 autoScroll = appState.autoScroll,
                 cast = appState.cast,
                 onAutoScrollChange = appState::updateAutoScroll,
-                onChooseChapter = { showChapterPicker = true },
+                onChoosePassage = { showPassagePicker = true },
             )
             if (appState.isBusy && !appState.statusMessage.isNullOrBlank()) {
                 Text(
@@ -208,13 +209,14 @@ fun CurrentChapterScreen(
             )
         }
     }
-    if (showChapterPicker) {
-        ChapterPickerSheet(
-            chapters = appState.chapters,
-            onDismiss = { showChapterPicker = false },
-            onChapterSelected = { chapter ->
-                showChapterPicker = false
-                appState.selectChapter(chapter.id)
+    if (showPassagePicker) {
+        PassagePickerSheet(
+            passages = readerPassages,
+            activePassageId = appState.activePassageId,
+            onDismiss = { showPassagePicker = false },
+            onPassageSelected = { passage ->
+                showPassagePicker = false
+                passage.playbackPassageIds.firstOrNull()?.let(appState::selectPassage)
             },
         )
     }
@@ -301,11 +303,12 @@ private fun ReaderHeaderButton(
 private fun ReaderChapterPlate(
     title: String,
     chapterNumber: Int,
-    totalChapters: Int,
+    passageNumber: Int,
+    totalPassages: Int,
     autoScroll: Boolean,
     cast: List<CastMemberUi>,
     onAutoScrollChange: (Boolean) -> Unit,
-    onChooseChapter: () -> Unit,
+    onChoosePassage: () -> Unit,
 ) {
     ParchmentPanel(
         modifier = Modifier.fillMaxWidth(),
@@ -323,10 +326,19 @@ private fun ReaderChapterPlate(
         Row(
             Modifier
                 .fillMaxWidth()
-                .paperClickable(onClick = onChooseChapter, role = Role.Button, fold = PaperFold.Card)
+                .paperClickable(
+                    onClick = onChoosePassage,
+                    role = Role.Button,
+                    enabled = totalPassages > 0,
+                    fold = PaperFold.Card,
+                )
                 .clip(RoundedCornerShape(50))
                 .semantics {
-                    contentDescription = "Choose chapter, currently $chapterNumber of $totalChapters"
+                    contentDescription = if (totalPassages > 0) {
+                        "Choose passage, currently $passageNumber of $totalPassages in chapter $chapterNumber"
+                    } else {
+                        "No passages available in chapter $chapterNumber"
+                    }
                 }
                 .padding(vertical = 2.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -334,7 +346,7 @@ private fun ReaderChapterPlate(
         ) {
             LeafOrnament(Modifier.size(width = 25.dp, height = 11.dp), WhisperbookTheme.colors.outline)
             Text(
-                "$chapterNumber of $totalChapters",
+                if (totalPassages > 0) "Passage $passageNumber of $totalPassages" else "No passages yet",
                 color = WhisperbookTheme.colors.inkMuted,
                 style = WhisperbookTheme.typography.body.copy(fontSize = 12.sp, lineHeight = 14.sp),
                 textAlign = TextAlign.Center,

@@ -5,6 +5,7 @@ import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.junit4.v2.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
+import androidx.compose.ui.test.onNodeWithContentDescription
 import androidx.compose.ui.test.onNodeWithText
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import com.whisperbook.app.domain.model.BuiltInCharacters
@@ -16,6 +17,7 @@ import com.whisperbook.app.integration.WhisperbookUiSnapshot
 import com.whisperbook.app.ui.screens.CurrentChapterScreen
 import com.whisperbook.app.ui.screens.WhisperbookAppState
 import com.whisperbook.app.ui.theme.WhisperbookTheme
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -110,5 +112,53 @@ class LargePassageReaderAndroidTest {
         composeRule.onNodeWithText("Second narrator paragraph.", substring = true).assertExists()
         composeRule.onNodeWithTag("passage-2").assertExists()
         composeRule.onNodeWithTag("passage-3").assertDoesNotExist()
+    }
+
+    @Test
+    fun longPassageKeepsReadButtonAtTheTopOfTheCard() {
+        val chapter = Chapter(
+            id = "chapter-1",
+            bookId = "book-1",
+            ordinal = 0,
+            title = "Chapter 1",
+            passages = listOf(
+                Passage(
+                    id = "long-passage",
+                    chapterId = "chapter-1",
+                    ordinal = 0,
+                    text = "A long section of narration. ".repeat(60),
+                    speakerId = BuiltInCharacters.NARRATOR_ID,
+                    confidence = 1f,
+                    attributionRule = "narration",
+                ),
+            ),
+        )
+        val appState = WhisperbookAppState().apply {
+            synchronize(
+                WhisperbookUiSnapshot(
+                    chapters = listOf(chapter),
+                    selectedChapter = chapter,
+                ),
+            )
+        }
+
+        composeRule.setContent {
+            WhisperbookTheme {
+                CurrentChapterScreen(
+                    contentPadding = PaddingValues(),
+                    appState = appState,
+                    onBack = {},
+                    onVoiceCast = {},
+                )
+            }
+        }
+
+        val cardBounds = composeRule.onNodeWithTag("passage-1").fetchSemanticsNode().boundsInRoot
+        val buttonBounds = composeRule
+            .onNodeWithContentDescription("Play passage read by Narrator", useUnmergedTree = true)
+            .fetchSemanticsNode().boundsInRoot
+
+        assertTrue(buttonBounds.center.y < cardBounds.center.y)
+        assertTrue(buttonBounds.top < cardBounds.top + cardBounds.height / 3f)
     }
 }

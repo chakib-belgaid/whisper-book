@@ -55,12 +55,12 @@ These are API 36 emulator captures of the production Compose surfaces using dete
 | Capability | Implementation |
 | --- | --- |
 | Private import | Android Storage Access Framework, byte-signature validation, SHA-256 duplicate detection, and an app-private source copy |
-| Publication extraction | EPUB metadata/reading-order parsing, PDF text extraction, and bundled ML Kit OCR for image-only pages |
+| Publication extraction | CPU-based EPUB/PDF structure parsing plus bundled ML Kit OCR, whose device runtime manages neural acceleration for image-only pages |
 | Character voices | Explainable dialogue heuristics, first-person narrator detection, confidence-bearing age/gender cues, profile-aware casting across eight embedded Supertonic 3 voices, and per-book or per-chapter overrides |
 | Editable attribution | Every read-along passage exposes its detected speaker; corrections can affect one phrase or matching phrases without changing the original publication |
 | Book language | English is ready by default; French and Arabic can be activated per book from Voice Cast while synthesis remains private and on-device |
 | Durable preparation | A staged WorkManager pipeline with persisted progress, restart recovery, chapter-scoped character discovery, opening-audio priority, and sequential prefetch |
-| Local audio | sherpa-onnx inference, 44.1 kHz WAV output, atomic writes, cache validation, retention, and bounded cleanup |
+| Local audio | ONNX Runtime inference with NNAPI accelerator routing and automatic CPU retry, 44.1 kHz WAV output, atomic writes, cache validation, retention, and bounded cleanup |
 | Playback | Media3 foreground service, chapter queueing, automatic continuation, 15-second seek, speed control, sleep timer, and audio-focus handling |
 | Read-along | Active-passage tracking, speaker labels and portraits, live progress, optional auto-scroll, and playback checkpoints |
 | MP3 export | A cancellable, progress-reporting offline export that completes missing narration, reuses finalized audio, and writes one book-level MP3 through Android's document picker |
@@ -119,7 +119,7 @@ whisper-book/
 - Android SDK 36 and build-tools 36
 - An arm64 Android device or emulator running Android 8.0 / API 26 or newer
 
-The TTS runtime and multilingual model are committed under `app/libs/` and `app/src/main/assets/tts/`; no first-launch model download is required. English is enabled by default. French and Arabic can be activated from each book's **Voice Cast** screen and reuse the same local multilingual model without adding a network permission.
+The TTS runtime is pinned as a Gradle dependency and the multilingual model is committed under `app/src/main/assets/tts/`; both are packaged into the APK, so no first-launch model download is required. English is enabled by default. French and Arabic can be activated from each book's **Voice Cast** screen and reuse the same local multilingual model without adding a network permission.
 
 ```bash
 ./gradlew :app:assembleDebug
@@ -173,6 +173,8 @@ Without these variables, Gradle intentionally creates an unsigned release artifa
 
 - EPUB and PDF are supported; corrupt, encrypted, password-protected, and DRM-protected publications are rejected.
 - Image-only PDF pages use bundled on-device OCR. Pages with no recognizable text remain an import error; there is no cloud fallback.
+- EPUB and PDF structure parsing stays on CPU because archive, XML, and layout algorithms are not neural graphs. ML Kit owns any hardware-delegate choice for OCR; Whisperbook does not claim a specific GPU/NPU for that runtime-managed path.
+- On Android 10/API 29 and newer, TTS requests NNAPI with native NCHW layout and the NNAPI reference CPU disabled. Unsupported operators stay on ONNX Runtime CPU; failed sessions retry on CPU, and clearly sub-realtime partial offload moves later synthesis to CPU for that process. Older Android versions use CPU directly.
 - The current native runtime is packaged for `arm64-v8a` only.
 - Large books are prepared progressively; they are not fully synthesized before playback starts.
 - Age, gender, and first-person identity detection is a conservative English-language heuristic. Ambiguous or conflicting evidence stays unknown and uses the normal automatic/default voice; users can always override the cast.

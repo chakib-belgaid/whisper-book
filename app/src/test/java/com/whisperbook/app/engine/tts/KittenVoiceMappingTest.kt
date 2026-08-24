@@ -49,7 +49,7 @@ class KittenVoiceMappingTest {
                 .mapTo(linkedSetOf()) { it.id },
         )
         assertEquals(
-            "supertonic-3-int8-2026-05-11+sherpa-onnx-1.13.4",
+            "supertonic-3-int8-2026-05-11+onnxruntime-1.28.0-nnapi",
             SherpaKittenTtsEngine.MODEL_VERSION,
         )
         assertEquals(44_100, SherpaKittenTtsEngine.EXPECTED_SAMPLE_RATE)

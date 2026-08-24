@@ -120,6 +120,12 @@ android {
         )
     }
 
+    androidResources {
+        // ONNX Runtime memory-maps the bundled Supertonic graphs directly from the APK. Keeping
+        // them uncompressed avoids a second 138 MB private-file copy and reduces peak memory.
+        noCompress += "onnx"
+    }
+
     testOptions {
         unitTests.isIncludeAndroidResources = true
     }
@@ -196,7 +202,7 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-collections-immutable:0.4.0")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json")
 
-    implementation(files("libs/sherpa-onnx-1.13.4.aar"))
+    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.28.0")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")

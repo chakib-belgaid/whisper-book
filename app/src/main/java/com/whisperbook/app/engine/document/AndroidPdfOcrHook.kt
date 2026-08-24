@@ -8,6 +8,7 @@ import com.google.android.gms.tasks.Task
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+import com.whisperbook.app.diagnostics.BetaDiagnostics
 import java.io.File
 import java.io.IOException
 import kotlin.coroutines.resume
@@ -77,6 +78,7 @@ class AndroidPdfOcrHook private constructor(
         file: File,
         onProgress: suspend (completedUnits: Int, totalUnits: Int) -> Unit,
     ): List<String> = withContext(Dispatchers.Default) {
+        val ocrStartedAtMs = ocrMonotonicNowMs()
         val source = openSource(file)
         source.use {
             if (source.pageCount <= 0) throw EmptyPdfException("The PDF contains no pages.")
@@ -99,6 +101,17 @@ class AndroidPdfOcrHook private constructor(
                 OcrPageTextAssembler.assemblePages(results)
                     .takeIf { pages -> pages.any(String::isNotBlank) }
                     ?: throw EmptyPdfException("No text was recognized on any PDF page.")
+            }.also { pages ->
+                BetaDiagnostics.performance(
+                    "pdf_ocr_completed",
+                    mapOf(
+                        "pages" to pages.size,
+                        "elapsed_ms" to ocrMonotonicNowMs() - ocrStartedAtMs,
+                        "compute_path" to ParsingComputePath.ML_KIT_OCR_RUNTIME_MANAGED.diagnosticName,
+                        "accelerator_control" to
+                            ParsingComputePath.ML_KIT_OCR_RUNTIME_MANAGED.acceleratorControl,
+                    ),
+                )
             }
         }
     }
@@ -276,6 +289,8 @@ private class AndroidRenderedOcrPage(
 private object MlKitPageRecognizerFactory : OcrPageRecognizerFactory {
     override fun create(): OcrPageRecognizer = MlKitPageRecognizer()
 }
+
+private fun ocrMonotonicNowMs(): Long = System.nanoTime() / 1_000_000L
 
 private class MlKitPageRecognizer : OcrPageRecognizer {
     private val recognizer = TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS)

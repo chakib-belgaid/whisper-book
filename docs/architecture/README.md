@@ -73,11 +73,11 @@ Editable diagrams.net source: [offline-pipeline.drawio](diagrams/offline-pipelin
 
 1. `SafBookImporter` reads the user-selected URI, validates the actual file signature, hashes the content, and creates an app-private copy.
 2. `RoomLibraryRepository` persists the book record and prevents duplicate sources from becoming separate library entries.
-3. `OfflinePublicationExtractor` parses EPUB reading order or extracts PDF pages. `AndroidPdfOcrHook` recognizes pages without a usable text layer.
+3. `OfflinePublicationExtractor` parses EPUB/PDF structure on CPU. `AndroidPdfOcrHook` recognizes pages without a usable text layer through ML Kit, whose runtime owns hardware-delegate selection.
 4. The preparation worker normalizes passages and detects chapter boundaries, then attributes, casts, and synthesizes one chapter at a time. Chapter 1 reaches audio before later chapters are scanned for characters.
 5. Each committed chapter updates an atomic `characters.json` mirror with stable IDs, aliases, profiles, fingerprints, and idempotent per-chapter counts. Room remains the source of truth for playback and user voice choices.
-6. Supertonic synthesis generates PCM on one low-priority inference lane. `AppPrivateAudioSegmentStore` validates and atomically commits WAV files.
-7. Opening microsegments become playable first. Remaining passages are generated sequentially rather than competing for CPU in parallel.
+6. Supertonic synthesis generates PCM on one low-priority inference lane. API 29+ requests ONNX Runtime's NNAPI provider first; unsupported partitions and failed accelerated sessions fall back to the ONNX Runtime CPU provider. A representative NNAPI utterance above the guarded real-time-factor limit moves later work to CPU for that process, because partial offload can be slower than optimized CPU. Older releases select CPU immediately.
+7. `AppPrivateAudioSegmentStore` validates and atomically commits WAV files. Opening microsegments become playable first; remaining passages are generated sequentially rather than competing for compute in parallel.
 
 ### Playback and read-along
 
@@ -108,7 +108,8 @@ See [PRIVACY.md](../../PRIVACY.md) for the user-facing privacy contract.
 
 ## Concurrency and failure handling
 
-- CPU-heavy speech inference is intentionally serialized to protect Compose and audio I/O responsiveness.
+- Speech inference is intentionally serialized to protect Compose and audio I/O responsiveness, including when an unsupported NNAPI partition or session falls back to CPU.
+- Diagnostics report `nnapi`, `cpu`, `structural_cpu`, or `mlkit_ocr` without claiming which vendor GPU, DSP, or NPU an Android driver selected.
 - WorkManager provides durable background execution, retry behavior, and foreground-service integration for preparation.
 - Preparation stage progress is persisted, so work can resume after process recreation instead of starting from zero.
 - WAV output uses temporary files plus validation and atomic promotion to avoid exposing partial audio.

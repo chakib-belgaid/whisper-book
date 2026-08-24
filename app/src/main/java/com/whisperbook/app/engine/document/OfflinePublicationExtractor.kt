@@ -9,6 +9,7 @@ import com.whisperbook.app.domain.ExtractedPublication
 import com.whisperbook.app.domain.ImportedBook
 import com.whisperbook.app.domain.PublicationExtractor
 import com.whisperbook.app.domain.model.BookFormat
+import com.whisperbook.app.diagnostics.BetaDiagnostics
 import java.io.File
 import java.io.IOException
 import java.net.URI
@@ -63,16 +64,34 @@ class OfflinePublicationExtractor(
         onProgress: suspend (completedUnits: Int, totalUnits: Int) -> Unit,
     ): Result<ExtractedPublication> =
         withContext(Dispatchers.IO) {
+            val extractionStartedAtMs = monotonicNowMs()
             try {
                 Result.success(
                     when (book.format) {
-                        BookFormat.EPUB -> EpubPublicationParser(chapterDetector).extract(book, onProgress)
+                        BookFormat.EPUB -> EpubPublicationParser(chapterDetector)
+                            .extract(book, onProgress)
+                            .also { publication ->
+                                recordParsingCompleted(
+                                    format = BookFormat.EPUB,
+                                    computePath = ParsingComputePath.STRUCTURAL_CPU,
+                                    elapsedMs = monotonicNowMs() - extractionStartedAtMs,
+                                    chapters = publication.chapters.size,
+                                )
+                            }
                         BookFormat.PDF -> extractPdf(book, onProgress)
                     },
                 )
             } catch (cancellation: CancellationException) {
                 throw cancellation
             } catch (throwable: Throwable) {
+                BetaDiagnostics.error(
+                    event = "book_parsing_failed",
+                    failure = throwable,
+                    details = mapOf(
+                        "format" to book.format.name.lowercase(),
+                        "elapsed_ms" to monotonicNowMs() - extractionStartedAtMs,
+                    ),
+                )
                 Result.failure(throwable)
             }
         }
@@ -81,6 +100,7 @@ class OfflinePublicationExtractor(
         book: ImportedBook,
         onProgress: suspend (completedUnits: Int, totalUnits: Int) -> Unit,
     ): ExtractedPublication {
+        val extractionStartedAtMs = monotonicNowMs()
         PDFBoxResourceLoader.init(applicationContext)
         val pdfData = try {
             PDDocument.load(book.privateFile).use { document ->
@@ -110,7 +130,8 @@ class OfflinePublicationExtractor(
 
         val pageCount = pdfData.pageCount
         val progressTotal = pdfProgressTotal(pageCount)
-        val extractedPages = if (pdfData.pages.none(String::isNotBlank)) {
+        val usedOcr = pdfData.pages.none(String::isNotBlank)
+        val extractedPages = if (usedOcr) {
             pdfOcrHook.extractPages(book.privateFile) { completed, total ->
                 onProgress(
                     pdfOcrProgress(pageCount, completed, total),
@@ -130,12 +151,56 @@ class OfflinePublicationExtractor(
             title = pdfData.title ?: book.title,
             author = pdfData.author ?: book.author,
             chapters = chapters.map { ExtractedChapter(it.title, it.paragraphs) },
+        ).also { publication ->
+            recordParsingCompleted(
+                format = BookFormat.PDF,
+                computePath = if (usedOcr) {
+                    ParsingComputePath.ML_KIT_OCR_RUNTIME_MANAGED
+                } else {
+                    ParsingComputePath.STRUCTURAL_CPU
+                },
+                elapsedMs = monotonicNowMs() - extractionStartedAtMs,
+                chapters = publication.chapters.size,
+                pages = pageCount,
+            )
+        }
+    }
+
+    private fun recordParsingCompleted(
+        format: BookFormat,
+        computePath: ParsingComputePath,
+        elapsedMs: Long,
+        chapters: Int,
+        pages: Int? = null,
+    ) {
+        BetaDiagnostics.performance(
+            "book_parsing_completed",
+            buildMap {
+                put("format", format.name.lowercase())
+                put("compute_path", computePath.diagnosticName)
+                put("accelerator_control", computePath.acceleratorControl)
+                put("elapsed_ms", elapsedMs)
+                put("chapters", chapters)
+                pages?.let { put("pages", it) }
+            },
         )
     }
 
     private companion object {
         const val PDF_TEXT_BATCH_SIZE = 8
     }
+}
+
+/**
+ * Parsing is mostly archive/XML/PDF layout work, which has no useful GPU/NPU execution provider.
+ * ML Kit owns delegate selection for its neural OCR model and does not expose it to callers.
+ */
+internal enum class ParsingComputePath(
+    val diagnosticName: String,
+    val acceleratorControl: String,
+) {
+    STRUCTURAL_CPU("structural_cpu", "not_applicable"),
+    ML_KIT_OCR_RUNTIME_MANAGED("mlkit_ocr", "runtime_managed"),
 }
 
 private data class PdfTextPass(
@@ -159,6 +224,8 @@ internal fun pdfOcrProgress(pageCount: Int, completedPages: Int, totalPages: Int
 }
 
 private const val PDF_PROGRESS_PHASES = 2L
+
+private fun monotonicNowMs(): Long = System.nanoTime() / 1_000_000L
 
 internal class EpubPublicationParser(
     private val chapterDetector: ChapterDetector,

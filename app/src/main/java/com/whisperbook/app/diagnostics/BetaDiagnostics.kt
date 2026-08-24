@@ -36,6 +36,7 @@ object BetaDiagnostics {
     private var synthesisElapsedMs = 0L
     private var synthesisAudioMs = 0L
     private var worstSynthesisRtfMilli = 0L
+    private val synthesisBackends = linkedMapOf<String, Int>()
 
     @Volatile
     private var uiPerformanceSnapshotter: (() -> Unit)? = null
@@ -80,12 +81,19 @@ object BetaDiagnostics {
     }
 
     @Synchronized
-    fun recordSynthesis(chars: Int, elapsedMs: Long, audioMs: Long, realTimeFactorMilli: Long) {
+    fun recordSynthesis(
+        chars: Int,
+        elapsedMs: Long,
+        audioMs: Long,
+        realTimeFactorMilli: Long,
+        backend: String = "unknown",
+    ) {
         synthesisCount += 1
         synthesisChars += chars.coerceAtLeast(0)
         synthesisElapsedMs += elapsedMs.coerceAtLeast(0L)
         synthesisAudioMs += audioMs.coerceAtLeast(0L)
         worstSynthesisRtfMilli = maxOf(worstSynthesisRtfMilli, realTimeFactorMilli)
+        synthesisBackends[backend] = synthesisBackends.getOrDefault(backend, 0) + 1
         if (synthesisCount >= SYNTHESIS_BATCH_SIZE) flushSynthesisSummary()
     }
 
@@ -100,6 +108,7 @@ object BetaDiagnostics {
                 "elapsed_ms" to synthesisElapsedMs,
                 "audio_ms" to synthesisAudioMs,
                 "worst_rtf_milli" to worstSynthesisRtfMilli,
+                "backends" to synthesisBackends.toSortedMap(),
             ),
         )
         synthesisCount = 0
@@ -107,6 +116,7 @@ object BetaDiagnostics {
         synthesisElapsedMs = 0L
         synthesisAudioMs = 0L
         worstSynthesisRtfMilli = 0L
+        synthesisBackends.clear()
     }
 
     fun recordFirstFrame() {

@@ -1,4 +1,3 @@
--keep class com.k2fsa.sherpa.onnx.** { *; }
 -keepclasseswithmembernames class * {
     native <methods>;
 }

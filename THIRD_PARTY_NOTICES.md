@@ -13,7 +13,8 @@ components commercially exclusive to Whisperbook or its copyright holder.
 
 | Component | License or terms | Commercial distribution notes |
 | --- | --- | --- |
-| sherpa-onnx 1.13.4 Android runtime | [Apache License 2.0](docs/licenses/sherpa-onnx-1.13.4-LICENSE) | Commercial use is permitted subject to the license, attribution, notice, modification, and patent terms. |
+| ONNX Runtime Android 1.28.0 | [MIT License](docs/licenses/onnxruntime-1.28.0-LICENSE) | Commercial use is permitted; retain the copyright and license notice. |
+| sherpa-onnx Supertonic binary-format reference | [Apache License 2.0](docs/licenses/sherpa-onnx-1.13.4-LICENSE) | The old Android AAR is no longer packaged; retained format-reader attribution remains subject to the license and notice terms. |
 | Supertonic 3 model files | [MIT License](app/src/main/assets/tts/sherpa-onnx-supertonic-3-tts-int8-2026-05-11/LICENSE) | Commercial use is permitted; retain the copyright and license notice. See the [artifact record](docs/licenses/TTS_ARTIFACTS.md). |
 | FFmpegKit Audio 8.1.7 and its native audio libraries | GNU LGPL v3.0 and component-specific licenses embedded by the AAR under `res/raw/` | Commercial use is possible, but the final distribution must satisfy the LGPL and each bundled codec's terms. See the [FFmpegKit record](docs/licenses/FFMPEGKIT.md). |
 | smart-exception-java 0.2.1 | BSD 3-Clause | Commercial use is permitted; retain the copyright, conditions, and disclaimer. |

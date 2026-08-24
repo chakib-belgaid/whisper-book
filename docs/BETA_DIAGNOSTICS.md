@@ -12,7 +12,7 @@ The report records:
 
 - uncaught crashes, without exception messages that could contain imported file details;
 - foreground slow/frozen-frame summaries and memory use;
-- book operation, preparation-stage, narration, first-audio, and playback timings;
+- book operation, parsing compute path, preparation-stage, narration backend, first-audio, and playback timings;
 - technical playback and preparation errors.
 
 It does not record book text, book titles, file names or paths, imported URIs, audio, or voice

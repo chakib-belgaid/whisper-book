@@ -89,7 +89,7 @@ fun NowPlayingScreen(
         return
     }
 
-    var showChapterPicker by rememberSaveable { mutableStateOf(false) }
+    var showPassagePicker by rememberSaveable { mutableStateOf(false) }
 
     BoxWithConstraints(
         modifier = modifier.fillMaxSize().padding(contentPadding).testTag("now-playing-screen"),
@@ -115,19 +115,20 @@ fun NowPlayingScreen(
                 currentPassage = appState.currentPassage.takeUnless { passageInTheatre },
                 onVoiceCast = onVoiceCast,
                 onCurrentChapter = onCurrentChapter,
-                onChooseChapter = { showChapterPicker = true },
+                onChoosePassage = { showPassagePicker = true },
                 modifier = Modifier.heightIn(max = 360.dp),
             )
         }
     }
 
-    if (showChapterPicker) {
-        ChapterPickerSheet(
-            chapters = appState.chapters,
-            onDismiss = { showChapterPicker = false },
-            onChapterSelected = { chapter ->
-                showChapterPicker = false
-                appState.selectChapter(chapter.id)
+    if (showPassagePicker) {
+        PassagePickerSheet(
+            passages = appState.readerPassages,
+            activePassageId = appState.activePassageId,
+            onDismiss = { showPassagePicker = false },
+            onPassageSelected = { passage ->
+                showPassagePicker = false
+                passage.playbackPassageIds.firstOrNull()?.let(appState::selectPassage)
                 onCurrentChapter()
             },
         )
@@ -273,9 +274,11 @@ private fun PlayerControlDeck(
     currentPassage: PassageUi?,
     onVoiceCast: () -> Unit,
     onCurrentChapter: () -> Unit,
-    onChooseChapter: () -> Unit,
+    onChoosePassage: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val passageNumber = activeReaderPassageNumber(appState.readerPassages, appState.activePassageId)
+    val totalPassages = appState.readerPassages.size
     ParchmentPanel(
         modifier = modifier.fillMaxWidth().testTag("player-control-deck"),
         shape = RoundedCornerShape(topStart = 3.dp, topEnd = 3.dp),
@@ -384,18 +387,29 @@ private fun PlayerControlDeck(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(40.dp)
-                .paperClickable(onClick = onChooseChapter, role = Role.Button, fold = PaperFold.Card)
+                .paperClickable(
+                    onClick = onChoosePassage,
+                    role = Role.Button,
+                    enabled = totalPassages > 0,
+                    fold = PaperFold.Card,
+                )
                 .clip(RoundedCornerShape(9.dp))
                 .border(1.dp, WhisperbookTheme.colors.outline.copy(alpha = .65f), RoundedCornerShape(9.dp))
-                .semantics { contentDescription = "Choose chapter, currently ${appState.currentChapterNumber} of ${appState.totalChapters}" },
+                .semantics {
+                    contentDescription = if (totalPassages > 0) {
+                        "Choose passage, currently $passageNumber of $totalPassages"
+                    } else {
+                        "No passages available"
+                    }
+                },
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.Center,
         ) {
             Icon(Icons.Outlined.AutoStories, contentDescription = null, tint = WhisperbookTheme.colors.ink, modifier = Modifier.size(21.dp))
             Spacer(Modifier.width(7.dp))
-            Text("Chapters", color = WhisperbookTheme.colors.ink, style = WhisperbookTheme.typography.body.copy(fontSize = 14.sp, lineHeight = 17.sp))
+            Text("Passages", color = WhisperbookTheme.colors.ink, style = WhisperbookTheme.typography.body.copy(fontSize = 14.sp, lineHeight = 17.sp))
             Spacer(Modifier.width(24.dp))
-            Text("${appState.currentChapterNumber} of ${appState.totalChapters}", color = WhisperbookTheme.colors.ink, style = WhisperbookTheme.typography.body.copy(fontSize = 14.sp, lineHeight = 17.sp))
+            Text("$passageNumber of $totalPassages", color = WhisperbookTheme.colors.ink, style = WhisperbookTheme.typography.body.copy(fontSize = 14.sp, lineHeight = 17.sp))
             Icon(Icons.Outlined.KeyboardArrowDown, contentDescription = null, tint = WhisperbookTheme.colors.inkMuted, modifier = Modifier.size(18.dp))
         }
     }

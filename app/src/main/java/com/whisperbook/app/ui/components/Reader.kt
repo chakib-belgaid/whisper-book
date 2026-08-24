@@ -210,8 +210,8 @@ fun SpeakerPassageCard(
         }
         Box(
             modifier = Modifier
-                .align(Alignment.CenterStart)
-                .offset(x = 1.dp)
+                .align(Alignment.TopStart)
+                .offset(x = 1.dp, y = 8.dp)
                 .size(45.dp)
                 .clip(WhisperbookTheme.shapes.control)
                 .background(colors.paper)

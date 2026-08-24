@@ -389,15 +389,17 @@ class WhisperbookNavigationTest {
     }
 
     @Test
-    fun chapterPicker_opensLaterChapterFromNowPlaying() {
-        setApp(WhisperbookDestination.NowPlaying.route)
+    fun passagePicker_opensSelectedPassageFromNowPlaying() {
+        val appState = WhisperbookAppState()
+        setApp(WhisperbookDestination.NowPlaying.route, appState)
 
-        composeRule.onNodeWithContentDescription("Choose chapter, currently 7 of 18").performClick()
-        composeRule.onNodeWithText("Choose a chapter").assertIsDisplayed()
-        composeRule.onNodeWithContentDescription("Chapter 8, A Lantern in the Rain").performClick()
+        composeRule.onNodeWithContentDescription("Choose passage, currently 2 of 4").performClick()
+        composeRule.onNodeWithText("Choose a passage").assertIsDisplayed()
+        composeRule.onNodeWithTag("passage-picker-item-3").performClick()
 
-        composeRule.onNodeWithText("Chapter 8").assertIsDisplayed()
-        composeRule.onNodeWithText("A Lantern in the Rain").assertIsDisplayed()
+        composeRule.onNodeWithTag("current-chapter-screen").assertIsDisplayed()
+        composeRule.onNodeWithText("The woods remember every traveler.").assertIsDisplayed()
+        composeRule.runOnIdle { assertEquals("p3", appState.activePassageId) }
     }
 
     @Test

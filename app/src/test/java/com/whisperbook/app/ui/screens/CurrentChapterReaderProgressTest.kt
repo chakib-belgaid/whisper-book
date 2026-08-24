@@ -5,6 +5,19 @@ import org.junit.Test
 
 class CurrentChapterReaderProgressTest {
     @Test
+    fun `reader passage number follows grouped playback ids`() {
+        val passages = listOf(
+            passage("first", "First").copy(playbackPassageIds = listOf("first-a", "first-b")),
+            passage("second", "Second").copy(playbackPassageIds = listOf("second-a")),
+        )
+
+        assertEquals(1, activeReaderPassageNumber(passages, "first-b"))
+        assertEquals(2, activeReaderPassageNumber(passages, "second-a"))
+        assertEquals(1, activeReaderPassageNumber(passages, "missing"))
+        assertEquals(0, activeReaderPassageNumber(emptyList(), "missing"))
+    }
+
+    @Test
     fun `active segment progress is cumulative across a grouped reader passage`() {
         val passages = listOf(
             passage("first", "12345"),

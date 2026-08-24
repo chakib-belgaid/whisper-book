@@ -51,7 +51,7 @@
   <rect x="744" y="486" width="202" height="112" rx="16" fill="#F9E2DB" stroke="#C8674B" stroke-width="2"/>
   <text x="766" y="520" class="h">Speech</text>
   <text x="766" y="545" class="b">Supertonic 3 INT8</text>
-  <text x="766" y="568" class="b">sherpa-onnx · WAV</text>
+  <text x="766" y="568" class="b">ORT NNAPI/CPU · WAV</text>
   <rect x="968" y="486" width="160" height="112" rx="16" fill="#DCE8ED" stroke="#245D88" stroke-width="2"/>
   <text x="990" y="520" class="h">Playback</text>
   <text x="990" y="545" class="b">Media3 service</text>
