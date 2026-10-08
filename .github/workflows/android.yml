@@ -17,7 +17,27 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v4
       - uses: gradle/actions/setup-gradle@v4
       - name: Unit tests, lint, and release build
-        run: ./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleRelease --stacktrace
+        run: |
+          set -o pipefail
+          ./gradlew :app:testDebugUnitTest :app:lintDebug :app:assembleRelease --stacktrace 2>&1 | tee build.log
+      - name: Surface failures as annotations
+        if: failure()
+        run: |
+          grep -E "^e: |What went wrong" -A2 build.log | head -40 | while IFS= read -r line; do echo "::error::$line"; done || true
+          python3 - <<'PY'
+          import glob, xml.etree.ElementTree as ET
+          for path in glob.glob("app/build/**/test-results/**/*.xml", recursive=True):
+              for case in ET.parse(path).getroot().iter("testcase"):
+                  for failure in case.findall("failure"):
+                      message = (failure.get("message") or "").replace("\n", " ")[:400]
+                      print(f"::error title={case.get('classname')}::{case.get('name')}: {message}")
+          for path in glob.glob("app/build/**/lint-results-*.xml", recursive=True):
+              for issue in ET.parse(path).getroot().iter("issue"):
+                  if issue.get("severity") in ("Error", "Fatal"):
+                      loc = issue.find("location")
+                      where = f"{loc.get('file')}:{loc.get('line')}" if loc is not None else ""
+                      print(f"::error title=lint {issue.get('id')}::{where} {issue.get('message')}"[:600])
+          PY
