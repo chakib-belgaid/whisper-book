@@ -555,6 +555,33 @@ class WhisperbookViewModelTest {
     }
 
     @Test
+    fun unsupportedVoiceCannotBeAttributedToTheSelectedBookLanguage() = runTest(dispatcher) {
+        val services = FakeServices(
+            availableVoices = listOf(
+                VoiceDescriptor("english", "English voice", 0, supportedLanguageCodes = setOf("en")),
+                VoiceDescriptor("french", "French voice", 1, supportedLanguageCodes = setOf("fr")),
+            ),
+        ).apply {
+            assignments.value = mapOf(
+                "narrator" to CharacterVoiceAssignment("narrator", "english", ttsModelVersion, 1f),
+            )
+        }
+        val viewModel = WhisperbookViewModel(services)
+        viewModel.uiState.test {
+            awaitItem()
+            advanceUntilIdle()
+
+            viewModel.assignVoice("narrator", "french", VoiceRegenerationScope.WHOLE_BOOK)
+            advanceUntilIdle()
+
+            assertEquals("That voice does not support English", viewModel.uiState.value.errorMessage)
+            assertTrue(services.events.none { it.startsWith("voice-regeneration:") })
+            assertEquals("english", services.assignments.value["narrator"]?.voiceId)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
     fun changingVoiceFromThisChapterUsesTheCurrentSelection() = runTest(dispatcher) {
         val services = FakeServices().apply {
             chapters.value = mapOf(
@@ -1229,7 +1256,12 @@ class WhisperbookViewModelTest {
     )
 }
 
-private class FakeServices : WhisperbookServices {
+private class FakeServices(
+    override val availableVoices: List<VoiceDescriptor> = listOf(
+        VoiceDescriptor("bella", "Bella", 0),
+        VoiceDescriptor("jasper", "Jasper", 1),
+    ),
+) : WhisperbookServices {
     val events = mutableListOf<String>()
     val books = MutableStateFlow(listOf(book("book-a")))
     val chapters = MutableStateFlow(
@@ -1266,10 +1298,6 @@ private class FakeServices : WhisperbookServices {
     var chapterHeaderObservationCount = 0
     val selectedChapterObservationRequests = mutableListOf<String>()
 
-    override val availableVoices = listOf(
-        VoiceDescriptor("bella", "Bella", 0),
-        VoiceDescriptor("jasper", "Jasper", 1),
-    )
     override val ttsModelVersion = "test-model"
 
     override val bookMp3Exporter = object : BookMp3Exporter {

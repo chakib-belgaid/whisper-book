@@ -143,6 +143,7 @@ class LocalPlaybackQueueSource(
             chapterId = chapterHeader.id,
             speakerIds = sourcePassages.map(SourcePassage::speakerId).distinct(),
             characters = characters,
+            languageCode = book.narrationLanguageCode,
         )
         val resolvedPassages = sourcePassages.flatMap { passage ->
             val resolvedVoice = resolvedVoices.getValue(passage.speakerId)
@@ -250,8 +251,10 @@ class LocalPlaybackQueueSource(
         chapterId: String,
         speakerIds: List<String>,
         characters: Map<String, StoryCharacterEntity>,
+        languageCode: String,
     ): Map<String, ResolvedVoice> {
-        check(voices.isNotEmpty()) { "No embedded voices are available" }
+        val compatibleVoices = voices.filter { it.supportsLanguage(languageCode) }
+        check(compatibleVoices.isNotEmpty()) { "No embedded voices support this book's language" }
         check(characters.values.all { it.bookId == bookId }) {
             "This chapter references a character outside its book"
         }
@@ -263,8 +266,8 @@ class LocalPlaybackQueueSource(
         }
         return speakerIds.associateWith { speakerId ->
             val assignment = chapterAssignments.getValue(speakerId)
-            val voice = voices.firstOrNull { it.id == assignment.voiceId }
-                ?: error("An assigned local voice is unavailable")
+            val voice = compatibleVoices.firstOrNull { it.id == assignment.voiceId }
+                ?: error("An assigned local voice is unavailable for this book's language")
             ResolvedVoice(voice, assignment)
         }
     }

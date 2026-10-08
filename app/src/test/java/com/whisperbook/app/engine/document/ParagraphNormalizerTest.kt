@@ -28,4 +28,24 @@ class ParagraphNormalizerTest {
             ParagraphNormalizer.normalize(text),
         )
     }
+
+    @Test
+    fun `a French closing guillemet without sentence punctuation remains a soft wrap`() {
+        val text = "Il parle longuement de son passé « algérien »\nAlgérien de naissance, il y retourne souvent."
+
+        assertEquals(
+            listOf("Il parle longuement de son passé « algérien » Algérien de naissance, il y retourne souvent."),
+            ParagraphNormalizer.normalize(text),
+        )
+    }
+
+    @Test
+    fun `sentence punctuation inside French guillemets keeps a real boundary`() {
+        val text = "Elle demanda soudain : « Qui est là ? »\nLa porte s'ouvrit lentement."
+
+        assertEquals(
+            listOf("Elle demanda soudain : « Qui est là ? »", "La porte s'ouvrit lentement."),
+            ParagraphNormalizer.normalize(text),
+        )
+    }
 }

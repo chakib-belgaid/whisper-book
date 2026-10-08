@@ -616,9 +616,14 @@ internal class PreparationStageRunner(
         val engine = dependencies.ttsEngineFactory.create()
         try {
             val settings = dependencies.settingsFlow.first()
-            val voices = engine.voices()
+            val languageCode = requireBook(bookId).narrationLanguageCode
+            val voices = engine.voices().filter { it.supportsLanguage(languageCode) }
             if (voices.isEmpty()) {
-                throw PreparationPipelineException("voices-unavailable", "No local story voices are available", false)
+                throw PreparationPipelineException(
+                    "voices-unavailable-for-language",
+                    "No local story voices support this book's language",
+                    false,
+                )
             }
             checkpoint(
                 bookId,
@@ -636,6 +641,7 @@ internal class PreparationStageRunner(
                         bookId = bookId,
                         chapter = chapter,
                         expectedProfileRevision = requireBook(bookId).narrationProfileRevision,
+                        voices = voices,
                     )
                 }
             }
@@ -733,9 +739,13 @@ internal class PreparationStageRunner(
         val engine = dependencies.ttsEngineFactory.create()
         try {
             LocalAudioGenerationCoordinator.runBackground { engine.warmUp().getOrThrow() }
-            val voices = engine.voices()
+            val voices = engine.voices().filter { it.supportsLanguage(languageCode) }
             if (voices.isEmpty()) {
-                throw PreparationPipelineException("voices-unavailable", "No local story voices are available", false)
+                throw PreparationPipelineException(
+                    "voices-unavailable-for-language",
+                    "No local story voices support this book's language",
+                    false,
+                )
             }
             val settings = dependencies.settingsFlow.first()
             val preparer = SequentialChapterAudioPreparer(
@@ -789,7 +799,7 @@ internal class PreparationStageRunner(
                     isFinalChapter = chapterHeader.id == latestChapters.last().id,
                 )
                 assignMissingVoices(bookId, voices, settings)
-                materializeChapterVoiceSet(bookId, chapter, expectedProfileRevision)
+                materializeChapterVoiceSet(bookId, chapter, expectedProfileRevision, voices)
                 val chapterBatch = ChapterAudioBatch(
                     chapterId = chapter.chapter.id,
                     chapterOrdinal = chapter.chapter.ordinal,
@@ -1157,9 +1167,16 @@ internal class PreparationStageRunner(
         val voice = voices.firstOrNull { it.id == assignment.voiceId }
             ?: throw PreparationPipelineException(
                 "assigned-voice-unavailable",
-                "An assigned local voice is unavailable",
+                "An assigned local voice is unavailable for this book's language",
                 false,
             )
+        if (!voice.supportsLanguage(languageCode)) {
+            throw PreparationPipelineException(
+                "assigned-voice-language-unsupported",
+                "An assigned local voice does not support this book's language",
+                false,
+            )
+        }
         return NarrationSynthesisPlanner.plan(
             passageId = passage.id,
             text = passage.text,
@@ -1181,6 +1198,7 @@ internal class PreparationStageRunner(
         bookId: String,
         chapter: ChapterAggregate,
         expectedProfileRevision: Long,
+        voices: List<VoiceDescriptor>,
     ) = database.withTransaction {
         // The active worker may have passed its loop-level check just before a narrator change.
         // Keep this check and the insert in one Room transaction: either the old row commits first
@@ -1205,7 +1223,14 @@ internal class PreparationStageRunner(
         val existing = database.chapterVoiceAssignmentDao()
             .getForChapter(bookId, chapter.chapter.id)
             .associateBy { it.characterId }
-        val missing = speakerIds.filterNot(existing::containsKey).map { characterId ->
+        val compatibleVoiceIds = voices.mapTo(hashSetOf(), VoiceDescriptor::id)
+        val needsCompatibleAssignment = speakerIds.filter { characterId ->
+            val assignment = existing[characterId]
+            assignment == null ||
+                assignment.voiceId !in compatibleVoiceIds ||
+                assignment.modelVersion != dependencies.modelVersion
+        }
+        val replacements = needsCompatibleAssignment.map { characterId ->
             templates[characterId]?.toDomain()?.toChapterEntity(bookId, chapter.chapter.id)
                 ?: throw PreparationPipelineException(
                     "voice-template-missing",
@@ -1213,8 +1238,8 @@ internal class PreparationStageRunner(
                     false,
                 )
         }
-        if (missing.isNotEmpty()) {
-            database.chapterVoiceAssignmentDao().upsertAll(missing)
+        if (replacements.isNotEmpty()) {
+            database.chapterVoiceAssignmentDao().upsertAll(replacements)
         }
         val completed = database.chapterVoiceAssignmentDao()
             .getForChapter(bookId, chapter.chapter.id)

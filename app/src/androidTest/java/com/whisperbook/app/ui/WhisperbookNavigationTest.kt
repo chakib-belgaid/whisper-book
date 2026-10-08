@@ -13,19 +13,26 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.rememberNavController
+import androidx.test.platform.app.InstrumentationRegistry
+import com.whisperbook.app.engine.document.PublicationMarkdownFiles
 import com.whisperbook.app.ui.navigation.WhisperbookDestination
 import com.whisperbook.app.domain.model.Book
 import com.whisperbook.app.domain.model.BookFormat
 import com.whisperbook.app.domain.model.Chapter
+import com.whisperbook.app.domain.model.CharacterColorRole
+import com.whisperbook.app.domain.model.CharacterVoiceAssignment
+import com.whisperbook.app.domain.model.Passage
 import com.whisperbook.app.domain.model.PreparationStage
 import com.whisperbook.app.domain.model.PreparationState
 import com.whisperbook.app.domain.model.SpeakerCorrectionScope
+import com.whisperbook.app.domain.model.StoryCharacter
 import com.whisperbook.app.domain.model.VoiceRegenerationScope
 import com.whisperbook.app.domain.model.VoiceDescriptor
 import com.whisperbook.app.integration.WhisperbookUiSnapshot
 import com.whisperbook.app.integration.flux.WhisperbookAction
 import com.whisperbook.app.ui.screens.WhisperbookAppState
 import com.whisperbook.app.ui.screens.WhisperbookUiActions
+import java.io.File
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Rule
@@ -380,6 +387,57 @@ class WhisperbookNavigationTest {
     }
 
     @Test
+    fun voiceCast_showsOnlyVoicesSupportedByTheBooksLanguage() {
+        val book = navigationBook("french-book", "Histoire", currentChapter = 1, chapterCount = 1)
+            .copy(narrationLanguageCode = "fr")
+        val narrator = StoryCharacter(
+            id = "narrator",
+            bookId = book.id,
+            displayName = "Narrator",
+            aliases = emptySet(),
+            colorRole = CharacterColorRole.NARRATOR,
+            dialogueLineCount = 1,
+        )
+        val chapter = Chapter(
+            id = requireNotNull(book.currentChapterId),
+            bookId = book.id,
+            ordinal = 0,
+            title = "Ouverture",
+            passages = listOf(
+                Passage("passage-1", requireNotNull(book.currentChapterId), 0, "Bonjour.", narrator.id, 1f, "test"),
+            ),
+        )
+        val appState = WhisperbookAppState(NavigationBookActions(onSelectBook = {})).apply {
+            synchronize(
+                WhisperbookUiSnapshot(
+                    books = listOf(book),
+                    selectedBook = book,
+                    chapters = listOf(chapter),
+                    selectedChapter = chapter,
+                    characters = listOf(narrator),
+                    voices = listOf(
+                        VoiceDescriptor("english", "English voice", 0, supportedLanguageCodes = setOf("en")),
+                        VoiceDescriptor("french", "French voice", 1, supportedLanguageCodes = setOf("fr")),
+                    ),
+                    voiceAssignments = mapOf(
+                        narrator.id to CharacterVoiceAssignment(narrator.id, "french", "test-model"),
+                    ),
+                    preparation = PreparationState.Ready,
+                ),
+            )
+        }
+        setApp(appState = appState)
+        composeRule.runOnIdle {
+            navController.navigate(WhisperbookDestination.VoiceCast.route(book.id))
+        }
+
+        composeRule.onNodeWithContentDescription("Change voice for Narrator").performClick()
+
+        composeRule.onNodeWithTag("voice-option-french").assertIsDisplayed()
+        composeRule.onNodeWithTag("voice-option-english").assertDoesNotExist()
+    }
+
+    @Test
     fun settingsKeepsBookVoiceAndLanguageChoicesOutOfGlobalDefaults() {
         setApp(WhisperbookDestination.Settings.route)
 
@@ -418,6 +476,9 @@ class WhisperbookNavigationTest {
         setApp(WhisperbookDestination.BookDetails.route())
 
         composeRule.onNodeWithText("Export MP3").assertIsDisplayed()
+        composeRule.onNodeWithText("View Markdown").assertIsDisplayed().performClick()
+        composeRule.onNodeWithTag("markdown-viewer").assertIsDisplayed()
+        composeRule.onNodeWithContentDescription("Back").performClick()
 
         composeRule.onNodeWithContentDescription("Remove The Moonlit Wood from library").performClick()
         composeRule.onNodeWithText("Remove this book?").assertIsDisplayed()
@@ -427,6 +488,45 @@ class WhisperbookNavigationTest {
         composeRule.onNodeWithContentDescription("Remove The Moonlit Wood from library").performClick()
         composeRule.onNodeWithText("Remove book").performClick()
         composeRule.onNodeWithText("Your Library").assertIsDisplayed()
+    }
+
+    @Test
+    fun bookDetails_viewMarkdownShowsTheGeneratedFile() {
+        val context = InstrumentationRegistry.getInstrumentation().targetContext
+        val source = File(context.cacheDir, "markdown-navigation-${System.nanoTime()}.epub").apply {
+            writeText("fixture")
+        }
+        val markdown = PublicationMarkdownFiles.write(
+            source,
+            "# Device Story\n\n## Chapter 1\n\nThe lantern glowed.\n",
+        )
+        val book = navigationBook("markdown-book", "Device Story", currentChapter = 1, chapterCount = 1)
+            .copy(privateSourcePath = source.absolutePath)
+        val chapters = navigationChapters(book.id, 1)
+        val appState = WhisperbookAppState(
+            NavigationBookActions(onSelectBook = {}),
+        ).apply {
+            synchronize(
+                WhisperbookUiSnapshot(
+                    books = listOf(book),
+                    selectedBook = book,
+                    chapters = chapters,
+                    selectedChapter = chapters.single(),
+                    preparation = PreparationState.Ready,
+                ),
+            )
+        }
+        try {
+            setApp(WhisperbookDestination.BookDetails.route(book.id), appState)
+
+            composeRule.onNodeWithText("View Markdown").performClick()
+            composeRule.onNodeWithTag("markdown-content").assertIsDisplayed()
+            composeRule.onNodeWithText("# Device Story", substring = true).assertIsDisplayed()
+            composeRule.onNodeWithText("The lantern glowed.", substring = true).assertIsDisplayed()
+        } finally {
+            markdown.delete()
+            source.delete()
+        }
     }
 
     @Test

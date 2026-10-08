@@ -33,6 +33,8 @@ data class ExtractedPublication(
     val title: String,
     val author: String?,
     val chapters: List<ExtractedChapter>,
+    /** Canonical, cleaned document produced before passages are persisted. */
+    val markdown: String = "",
 )
 
 data class ExtractedChapter(val title: String, val paragraphs: List<String>)

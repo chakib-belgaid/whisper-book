@@ -15,6 +15,7 @@ import com.whisperbook.app.domain.ImportedBook
 import com.whisperbook.app.domain.model.BookFormat
 import com.whisperbook.app.domain.model.PreparationStage
 import com.whisperbook.app.engine.metadata.AppPrivateCharacterMetadataCatalog
+import com.whisperbook.app.engine.document.PublicationMarkdownFiles
 import com.whisperbook.app.engine.metadata.ChapterCharacterMetadata
 import com.whisperbook.app.engine.metadata.CharacterMetadataChapterUpdate
 import com.whisperbook.app.engine.metadata.CharacterMetadataFingerprint
@@ -325,6 +326,7 @@ class RoomLibraryRepositoryAndroidTest {
         val database = Room.inMemoryDatabaseBuilder(context, WhisperBookDatabase::class.java).build()
         val originalFile = File(context.cacheDir, "original-story.pdf").apply { writeText("original") }
         val privateFile = File(context.cacheDir, "private-story.pdf").apply { writeText("private") }
+        val markdownFile = PublicationMarkdownFiles.write(privateFile, "# Removable book\n")
         val metadataRoot = File(context.cacheDir, "character-metadata-${System.nanoTime()}")
         val metadataCatalog = AppPrivateCharacterMetadataCatalog(metadataRoot)
         val importer = object : BookImporter {
@@ -368,11 +370,13 @@ class RoomLibraryRepositoryAndroidTest {
 
             assertEquals(0, database.bookDao().count())
             assertFalse(privateFile.exists())
+            assertFalse(markdownFile.exists())
             assertTrue(originalFile.exists())
             assertFalse(metadataFile.exists())
         } finally {
             originalFile.delete()
             privateFile.delete()
+            markdownFile.delete()
             metadataRoot.deleteRecursively()
             database.close()
         }

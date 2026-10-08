@@ -520,8 +520,9 @@ class WhisperbookViewModel(
         if (book.narrationSetupConfirmed) return@launchOperation null
         val language = NarrationLanguage.fromCode(languageCode)
             ?: error("Choose a supported narration language")
-        val voice = services.availableVoices.firstOrNull { it.id == narratorVoiceId }
-            ?: error("Choose an available narrator")
+        val voice = services.availableVoices.firstOrNull {
+            it.id == narratorVoiceId && it.supportsLanguage(language.code)
+        } ?: error("Choose a narrator that supports ${language.displayName}")
         if (language.code !in uiState.value.settings.installedLanguagePackCodes) {
             services.settingsRepository.update { current ->
                 current.copy(installedLanguagePackCodes = current.installedLanguagePackCodes + language.code)
@@ -775,7 +776,9 @@ class WhisperbookViewModel(
             val snapshot = uiState.value
             val character = snapshot.characters.firstOrNull { it.id == characterId }
                 ?: error("That character is no longer available")
-            val voices = services.availableVoices
+            val languageCode = snapshot.selectedBook?.narrationLanguageCode
+                ?: NarrationLanguage.ENGLISH.code
+            val voices = services.availableVoices.filter { it.supportsLanguage(languageCode) }
             val assignedVoiceId = snapshot.voiceAssignments[characterId]?.voiceId
             val fallbackIndex = snapshot.characters.indexOf(character).coerceAtLeast(0)
             val voice = voices.firstOrNull { it.id == assignedVoiceId }
@@ -785,13 +788,11 @@ class WhisperbookViewModel(
             services.voicePreviewPlayer.play(
                 text = voicePreviewText(
                     character.displayName,
-                    snapshot.selectedBook?.narrationLanguageCode
-                        ?: NarrationLanguage.ENGLISH.code,
+                    languageCode,
                 ),
                 voice = voice,
                 speed = snapshot.settings.speakingSpeed,
-                languageCode = snapshot.selectedBook?.narrationLanguageCode
-                    ?: NarrationLanguage.ENGLISH.code,
+                languageCode = languageCode,
             ).getOrThrow()
             "Played ${voice.displayName} for ${character.displayName}."
         }.also { voicePreviewJob = it }
@@ -810,9 +811,10 @@ class WhisperbookViewModel(
         stopVoicePreview()
         return launchOperation("Preparing voice preview", "voice_preview") {
             val snapshot = uiState.value
-            val voice = services.availableVoices.firstOrNull { it.id == voiceId }
-                ?: error("That embedded voice is no longer available")
             val language = NarrationLanguage.fromCode(languageCode) ?: NarrationLanguage.ENGLISH
+            val voice = services.availableVoices.firstOrNull {
+                it.id == voiceId && it.supportsLanguage(language.code)
+            } ?: error("That voice does not support ${language.displayName}")
             if (snapshot.playback?.isPlaying == true) services.playbackGateway.pause()
             services.voicePreviewPlayer.play(
                 text = voicePreviewText(characterName, language.code),
@@ -955,12 +957,15 @@ class WhisperbookViewModel(
         stopVoicePreview()
         return launchOperation("Updating the cast", "voice_assignment") {
             val snapshot = uiState.value
-            val voice = services.availableVoices.firstOrNull { it.id == voiceId }
-                ?: error("That embedded voice is unavailable")
+            val book = snapshot.selectedBook ?: error("Choose a book before changing its cast")
+            val language = NarrationLanguage.fromCode(book.narrationLanguageCode)
+                ?: error("Choose a supported narration language")
+            val voice = services.availableVoices.firstOrNull {
+                it.id == voiceId && it.supportsLanguage(language.code)
+            } ?: error("That voice does not support ${language.displayName}")
             val previous = snapshot.voiceAssignments[characterId]
                 ?: error("The current voice assignment is unavailable")
             if (previous.voiceId == voice.id) return@launchOperation null
-            val book = snapshot.selectedBook ?: error("Choose a book before changing its cast")
             val currentChapter = snapshot.selectedChapter ?: snapshot.chapters.firstOrNull()
                 ?: error("This book has no prepared chapters")
             val requestChapter = when (regenerationScope) {
@@ -1010,11 +1015,14 @@ class WhisperbookViewModel(
     }
 
     fun cycleVoice(characterId: String) {
-        val voices = services.availableVoices
+        val languageCode = uiState.value.selectedBook?.narrationLanguageCode
+            ?: NarrationLanguage.ENGLISH.code
+        val voices = services.availableVoices.filter { it.supportsLanguage(languageCode) }
         if (voices.isEmpty()) return
         val currentId = uiState.value.voiceAssignments[characterId]?.voiceId
-        val index = voices.indexOfFirst { it.id == currentId }.coerceAtLeast(0)
-        assignVoice(characterId, voices[(index + 1) % voices.size].id)
+        val index = voices.indexOfFirst { it.id == currentId }
+        val nextIndex = if (index >= 0) (index + 1) % voices.size else 0
+        assignVoice(characterId, voices[nextIndex].id)
     }
 
     fun completeOnboarding() = updateSettings { it.copy(onboardingComplete = true) }

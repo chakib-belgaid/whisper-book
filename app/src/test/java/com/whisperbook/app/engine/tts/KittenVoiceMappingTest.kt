@@ -1,6 +1,7 @@
 package com.whisperbook.app.engine.tts
 
 import com.whisperbook.app.domain.model.CharacterGender
+import com.whisperbook.app.domain.model.NarrationLanguage
 import com.whisperbook.app.domain.model.VocalAge
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -24,6 +25,11 @@ class KittenVoiceMappingTest {
             Triple(it.id, it.displayName, it.speakerIndex)
         })
         assertTrue(SherpaKittenTtsEngine.KITTEN_VOICES.all { it.embedded && it.localeTag == "en-US" })
+        assertTrue(
+            SherpaKittenTtsEngine.KITTEN_VOICES.all {
+                it.supportedLanguageCodes == NarrationLanguage.supportedCodes
+            },
+        )
         assertEquals(
             setOf("bella", "luna", "rosie", "kiki"),
             SherpaKittenTtsEngine.KITTEN_VOICES

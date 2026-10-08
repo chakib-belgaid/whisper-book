@@ -84,6 +84,11 @@ class PlatformTtsEngine(context: Context) : LocalTtsEngine {
             if (voice.isNetworkConnectionRequired) {
                 throw TtsEngineException("The selected Android voice requires a network connection")
             }
+            if (!voice.locale.language.equals(request.languageCode.substringBefore('-'), ignoreCase = true)) {
+                throw TtsEngineException(
+                    "The selected Android voice does not support language '${request.languageCode}'",
+                )
+            }
             if (!outputDirectory.exists() && !outputDirectory.mkdirs()) {
                 throw TtsEngineException("Cannot create the private Android speech output directory")
             }
@@ -160,6 +165,11 @@ class PlatformTtsEngine(context: Context) : LocalTtsEngine {
                     SherpaKittenTtsEngine.MAX_SPEED,
             )
         }
+        if (!request.voice.supportsLanguage(request.languageCode)) {
+            throw TtsEngineException(
+                "Voice '${request.voice.displayName}' does not support language '${request.languageCode}'",
+            )
+        }
     }
 
     private fun failUtterance(utteranceId: String, errorCode: Int) {
@@ -176,6 +186,7 @@ class PlatformTtsEngine(context: Context) : LocalTtsEngine {
         speakerIndex = index,
         localeTag = locale.toLanguageTag(),
         embedded = true,
+        supportedLanguageCodes = setOf(locale.language.lowercase()),
     )
 
     private companion object {

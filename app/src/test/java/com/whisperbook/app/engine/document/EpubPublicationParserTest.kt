@@ -53,6 +53,41 @@ class EpubPublicationParserTest {
     }
 
     @Test
+    fun `converts split French punctuation into one clean Markdown paragraph`() = runTest {
+        val file = File.createTempFile("punctuation-publication", ".epub")
+        try {
+            ZipOutputStream(file.outputStream()).use { zip ->
+                zip.entry("mimetype", "application/epub+zip")
+                zip.entry(
+                    "META-INF/container.xml",
+                    """<container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OEBPS/content.opf"/></rootfiles></container>""",
+                )
+                zip.entry(
+                    "OEBPS/content.opf",
+                    """<package xmlns="http://www.idpf.org/2007/opf"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Mémoire</dc:title></metadata><manifest><item id="c1" href="chapter.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="c1"/></spine></package>""",
+                )
+                zip.entry(
+                    "OEBPS/chapter.xhtml",
+                    """<html xmlns="http://www.w3.org/1999/xhtml"><body><h1>Chapitre 1</h1><p>Il parle de son passé « algérien »</p><p>Algérien de naissance, il y retourne souvent.</p></body></html>""",
+                )
+            }
+
+            val result = EpubPublicationParser(ChapterDetector()).extract(
+                ImportedBook("fallback", null, BookFormat.EPUB, file, "hash"),
+            )
+
+            assertEquals(
+                listOf("Il parle de son passé « algérien » Algérien de naissance, il y retourne souvent."),
+                result.chapters.single().paragraphs,
+            )
+            assertTrue(result.markdown.contains("## Chapitre 1"))
+            assertTrue(result.markdown.contains("passé « algérien » Algérien"))
+        } finally {
+            file.delete()
+        }
+    }
+
+    @Test
     fun `reports monotonic progress for every item in a long spine`() = runTest {
         val spineSize = 96
         val file = longSpineEpub(spineSize)

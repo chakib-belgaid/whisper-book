@@ -46,6 +46,51 @@ class LocalPlaybackQueueSourceAndroidTest {
     private val context: Context = ApplicationProvider.getApplicationContext()
 
     @Test
+    fun incompatibleChapterVoiceIsRejectedBeforeSynthesis() = runBlocking {
+        val database = Room.inMemoryDatabaseBuilder(context, WhisperBookDatabase::class.java).build()
+        val audioRoot = File(context.cacheDir, "incompatible-voice-audio-${System.nanoTime()}")
+        val tts = RecordingTtsEngine()
+        try {
+            database.bookDao().insert(bookEntity(BOOK_A, CHAPTER_A1, "en"))
+            database.chapterDao().insertAll(listOf(ChapterEntity(CHAPTER_A1, BOOK_A, 0, "Opening")))
+            insertChapterPlan(database, listOf(PlannedChapter(CHAPTER_A1, BOOK_A, true, 0)))
+            database.storyCharacterDao().insertAll(listOf(narrator(BOOK_A, NARRATOR_A)))
+            database.voiceAssignmentDao().upsert(
+                VoiceAssignmentEntity(NARRATOR_A, "english", TEST_MODEL_VERSION, 1f),
+            )
+            database.passageDao().insertAll(
+                listOf(passage(PASSAGE_A1, CHAPTER_A1, NARRATOR_A, "An English paragraph")),
+            )
+            database.chapterVoiceAssignmentDao().upsertAll(
+                listOf(chapterVoice(BOOK_A, CHAPTER_A1, NARRATOR_A, "french")),
+            )
+            val source = LocalPlaybackQueueSource(
+                database = database,
+                audioStore = AppPrivateAudioSegmentStore(audioRoot),
+                ttsEngineFactory = { tts },
+                voices = listOf(
+                    VoiceDescriptor("english", "English voice", 0, supportedLanguageCodes = setOf("en")),
+                    VoiceDescriptor("french", "French voice", 1, supportedLanguageCodes = setOf("fr")),
+                ),
+                modelVersion = TEST_MODEL_VERSION,
+                expectedSampleRate = TEST_SAMPLE_RATE,
+            )
+
+            val result = source.load(BOOK_A, CHAPTER_A1)
+
+            assertTrue(result.isFailure)
+            assertTrue(
+                result.exceptionOrNull()?.message.orEmpty()
+                    .contains("unavailable for this book's language"),
+            )
+            assertTrue(tts.requests.isEmpty())
+        } finally {
+            database.close()
+            audioRoot.deleteRecursively()
+        }
+    }
+
+    @Test
     fun chapterSnapshotsKeepBookLanguagesAndCastsIsolatedAcrossRestart() = runBlocking {
         val database = Room.inMemoryDatabaseBuilder(context, WhisperBookDatabase::class.java).build()
         val audioRoot = File(context.cacheDir, "queue-source-audio-${System.nanoTime()}")

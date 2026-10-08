@@ -41,7 +41,7 @@ fun NarrationSetupScreen(
     modifier: Modifier = Modifier,
 ) {
     var choosingNarrator by rememberSaveable { mutableStateOf(false) }
-    val selectedVoice = appState.voiceOptions.firstOrNull {
+    val selectedVoice = appState.narrationSetupVoiceOptions.firstOrNull {
         it.id == appState.narrationSetupNarratorVoiceId
     }
     val bookReady = appState.currentBookTitle.isNotBlank() && selectedVoice != null
@@ -177,7 +177,7 @@ fun NarrationSetupScreen(
     if (choosingNarrator) {
         VoicePickerSheet(
             characterName = "Narrator",
-            voices = appState.voiceOptions,
+            voices = appState.narrationSetupVoiceOptions,
             selectedVoiceId = appState.narrationSetupNarratorVoiceId,
             onDismiss = { choosingNarrator = false },
             onPreviewVoice = { voice -> appState.previewNarrationSetupVoice(voice.id) },

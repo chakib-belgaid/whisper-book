@@ -10,6 +10,7 @@ import com.whisperbook.app.domain.model.Chapter
 import com.whisperbook.app.domain.model.ChapterPlanEntry
 import com.whisperbook.app.domain.model.CharacterColorRole
 import com.whisperbook.app.domain.model.CharacterVoiceAssignment
+import com.whisperbook.app.domain.model.NarrationLanguage
 import com.whisperbook.app.domain.model.Passage
 import com.whisperbook.app.domain.model.PlaybackCursor
 import com.whisperbook.app.domain.model.PreparationRunState
@@ -26,6 +27,61 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class WhisperbookAppStateTest {
+    @Test
+    fun `language changes expose and select only compatible voices`() {
+        val book = Book(
+            id = "book-1",
+            title = "Bilingual Book",
+            author = "A. Reader",
+            format = BookFormat.EPUB,
+            sourceUri = null,
+            privateSourcePath = null,
+            coverPath = null,
+            preparation = PreparationState(
+                stage = PreparationStage.AWAITING_NARRATION_SETUP,
+                chapterPlanConfirmed = true,
+            ),
+            currentChapterId = null,
+            currentPassageId = null,
+            progressFraction = 0f,
+            lastOpenedAtEpochMs = 1L,
+            narrationLanguageCode = NarrationLanguage.ENGLISH.code,
+            preferredNarratorVoiceId = "english",
+            narrationSetupConfirmed = false,
+        )
+        val state = WhisperbookAppState()
+        state.synchronize(
+            WhisperbookUiSnapshot(
+                books = listOf(book),
+                selectedBook = book,
+                voices = listOf(
+                    VoiceDescriptor(
+                        "english",
+                        "English voice",
+                        0,
+                        supportedLanguageCodes = setOf("en"),
+                    ),
+                    VoiceDescriptor(
+                        "french",
+                        "French voice",
+                        1,
+                        supportedLanguageCodes = setOf("fr"),
+                    ),
+                ),
+                preparation = book.preparation,
+            ),
+        )
+
+        assertEquals(listOf("english"), state.narrationSetupVoiceOptions.map(VoiceOptionUi::id))
+        state.chooseNarrationSetupLanguage("fr")
+        assertEquals(listOf("french"), state.narrationSetupVoiceOptions.map(VoiceOptionUi::id))
+        assertEquals("french", state.narrationSetupNarratorVoiceId)
+
+        state.chooseNarrationSetupNarrator("english")
+        assertEquals("french", state.narrationSetupNarratorVoiceId)
+        assertEquals(listOf("english"), state.bookVoiceOptions.map(VoiceOptionUi::id))
+    }
+
     @Test
     fun `library keeps the imported books own chapter count during background preparation`() {
         val preparation = PreparationState(

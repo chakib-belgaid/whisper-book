@@ -17,6 +17,7 @@ import com.whisperbook.app.domain.model.CharacterVoiceAssignment
 import com.whisperbook.app.domain.model.NarrationLanguage
 import com.whisperbook.app.domain.model.PreparationStage
 import com.whisperbook.app.domain.model.StoryCharacter
+import com.whisperbook.app.engine.document.PublicationMarkdownFiles
 import com.whisperbook.app.engine.metadata.CharacterMetadataCatalog
 import java.io.File
 import java.util.UUID
@@ -296,7 +297,10 @@ class RoomLibraryRepository(
             DeletedBookArtifacts(privateSourcePath, unreferencedAudioPaths)
         } ?: return
         withContext(Dispatchers.IO) {
-            artifacts.privateSourcePath?.let(::File)?.delete()
+            artifacts.privateSourcePath?.let(::File)?.let { privateSource ->
+                PublicationMarkdownFiles.forSource(privateSource).delete()
+                privateSource.delete()
+            }
             artifacts.audioPaths.map(::File).forEach(File::delete)
             characterMetadataCatalog?.delete(bookId)
         }

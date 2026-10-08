@@ -73,6 +73,21 @@ interface BookDao {
         UPDATE books
         SET narration_language_code = :languageCode,
             preferred_narrator_voice_id = :narratorVoiceId,
+            narration_profile_revision = narration_profile_revision + 1
+        WHERE id = :bookId
+        """,
+    )
+    suspend fun updateNarrationLanguageAndNarrator(
+        bookId: String,
+        languageCode: String,
+        narratorVoiceId: String,
+    ): Int
+
+    @Query(
+        """
+        UPDATE books
+        SET narration_language_code = :languageCode,
+            preferred_narrator_voice_id = :narratorVoiceId,
             narration_setup_confirmed = 1,
             narration_profile_seeded = 1
         WHERE id = :bookId AND narration_setup_confirmed = 0

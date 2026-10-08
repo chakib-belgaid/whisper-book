@@ -8,6 +8,7 @@ class WhisperbookDestinationTest {
     @Test
     fun parameterizedRoutes_areDeterministic() {
         assertEquals("book/moonlit", WhisperbookDestination.BookDetails.route())
+        assertEquals("book/moonlit/markdown", WhisperbookDestination.Markdown.route())
         assertEquals("book/moonlit/cast", WhisperbookDestination.VoiceCast.route())
         assertEquals("book/moonlit/chapter/chapter-7", WhisperbookDestination.CurrentChapter.route())
     }
@@ -17,6 +18,7 @@ class WhisperbookDestinationTest {
         assertTrue(WhisperbookDestination.Parsing.route !in WhisperbookDestination.bottomBarRoutes)
         assertTrue(WhisperbookDestination.ChapterReview.route !in WhisperbookDestination.bottomBarRoutes)
         assertTrue(WhisperbookDestination.Processing.route !in WhisperbookDestination.bottomBarRoutes)
+        assertTrue(WhisperbookDestination.Markdown.route !in WhisperbookDestination.bottomBarRoutes)
         assertTrue(WhisperbookDestination.VoiceCast.route !in WhisperbookDestination.bottomBarRoutes)
     }
 }

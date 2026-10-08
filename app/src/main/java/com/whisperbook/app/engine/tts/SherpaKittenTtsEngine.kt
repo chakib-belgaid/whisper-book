@@ -89,6 +89,11 @@ class SherpaKittenTtsEngine internal constructor(
                     ?: throw TtsEngineException(
                         "Voice '${request.voice.id}' is not available in the embedded Supertonic model",
                     )
+                if (!speaker.supportsLanguage(request.languageCode)) {
+                    throw TtsEngineException(
+                        "Voice '${speaker.displayName}' does not support language '${request.languageCode}'",
+                    )
+                }
                 val generated = try {
                     val synthesisStartedAtMs = monotonicNowMs()
                     synthesizeWithCpuFallback(tts, request, speaker).also { samples ->
@@ -276,6 +281,11 @@ class SherpaKittenTtsEngine internal constructor(
         }
         if (request.languageCode !in NarrationLanguage.supportedCodes) {
             throw TtsEngineException("Language '${request.languageCode}' is not installed in Whisperbook")
+        }
+        if (!request.voice.supportsLanguage(request.languageCode)) {
+            throw TtsEngineException(
+                "Voice '${request.voice.displayName}' does not support language '${request.languageCode}'",
+            )
         }
     }
 

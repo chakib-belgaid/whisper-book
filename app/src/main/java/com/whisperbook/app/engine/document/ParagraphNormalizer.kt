@@ -57,11 +57,23 @@ object ParagraphNormalizer {
         if (ChapterDetector.looksLikeHeading(previous) || ChapterDetector.looksLikeHeading(next)) {
             return true
         }
-        if (previous.length >= 24 && previous.lastOrNull() in sentenceEndings && next.firstOrNull()?.isUpperCase() == true) {
+        if (previous.length >= 24 && endsWithSentencePunctuation(previous) && next.firstOrNull()?.isUpperCase() == true) {
             return true
         }
         return false
     }
 
-    private val sentenceEndings = setOf('.', '!', '?', '”', '»')
+    /**
+     * Closing quotation marks do not end a sentence by themselves. For example, the line break in
+     * `son passé « algérien »\nAlgérien de naissance` is a layout wrap, while the punctuation in
+     * `« Qui est là ? »\nElle se retourna.` is a real sentence boundary.
+     */
+    internal fun endsWithSentencePunctuation(text: String): Boolean = text
+        .trimEnd()
+        .dropLastWhile { it in trailingClosers }
+        .trimEnd()
+        .lastOrNull() in sentenceEndings
+
+    private val sentenceEndings = setOf('.', '!', '?', '…', '؟', '。', '！', '？')
+    private val trailingClosers = setOf('"', '\'', '’', '”', '»', ')', ']', '}')
 }

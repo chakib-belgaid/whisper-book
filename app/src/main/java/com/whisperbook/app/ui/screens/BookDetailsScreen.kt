@@ -17,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.outlined.AutoStories
 import androidx.compose.material.icons.outlined.DeleteOutline
+import androidx.compose.material.icons.outlined.Description
 import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Groups
 import androidx.compose.material3.Icon
@@ -47,6 +48,7 @@ fun BookDetailsScreen(
     onBack: () -> Unit,
     onListen: () -> Unit,
     onVoiceCast: () -> Unit,
+    onViewMarkdown: () -> Unit,
     onRemove: () -> Unit,
     onEditChapters: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
@@ -138,6 +140,14 @@ fun BookDetailsScreen(
                 variant = com.whisperbook.app.ui.components.PapercraftButtonVariant.Parchment,
                 modifier = Modifier.fillMaxWidth(),
                 leadingIcon = { Icon(Icons.Outlined.Download, contentDescription = null) },
+            )
+            PapercraftButton(
+                text = "View Markdown",
+                onClick = onViewMarkdown,
+                enabled = appState.totalChapters > 0,
+                variant = com.whisperbook.app.ui.components.PapercraftButtonVariant.Parchment,
+                modifier = Modifier.fillMaxWidth(),
+                leadingIcon = { Icon(Icons.Outlined.Description, contentDescription = null) },
             )
             Text(
                 text = appState.bookExportMessage

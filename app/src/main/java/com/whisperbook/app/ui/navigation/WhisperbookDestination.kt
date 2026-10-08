@@ -12,6 +12,9 @@ sealed class WhisperbookDestination(val route: String) {
     data object BookDetails : WhisperbookDestination("book/{bookId}") {
         fun route(bookId: String = SAMPLE_BOOK_ID) = "book/$bookId"
     }
+    data object Markdown : WhisperbookDestination("book/{bookId}/markdown") {
+        fun route(bookId: String = SAMPLE_BOOK_ID) = "book/$bookId/markdown"
+    }
     data object VoiceCast : WhisperbookDestination("book/{bookId}/cast") {
         fun route(bookId: String = SAMPLE_BOOK_ID) = "book/$bookId/cast"
     }

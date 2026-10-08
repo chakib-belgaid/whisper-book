@@ -4,7 +4,6 @@ import android.content.Context
 import com.tom_roush.pdfbox.android.PDFBoxResourceLoader
 import com.tom_roush.pdfbox.pdmodel.PDDocument
 import com.tom_roush.pdfbox.pdmodel.encryption.InvalidPasswordException
-import com.whisperbook.app.domain.ExtractedChapter
 import com.whisperbook.app.domain.ExtractedPublication
 import com.whisperbook.app.domain.ImportedBook
 import com.whisperbook.app.domain.PublicationExtractor
@@ -66,21 +65,21 @@ class OfflinePublicationExtractor(
         withContext(Dispatchers.IO) {
             val extractionStartedAtMs = monotonicNowMs()
             try {
-                Result.success(
-                    when (book.format) {
-                        BookFormat.EPUB -> EpubPublicationParser(chapterDetector)
-                            .extract(book, onProgress)
-                            .also { publication ->
-                                recordParsingCompleted(
-                                    format = BookFormat.EPUB,
-                                    computePath = ParsingComputePath.STRUCTURAL_CPU,
-                                    elapsedMs = monotonicNowMs() - extractionStartedAtMs,
-                                    chapters = publication.chapters.size,
-                                )
-                            }
-                        BookFormat.PDF -> extractPdf(book, onProgress)
-                    },
-                )
+                val publication = when (book.format) {
+                    BookFormat.EPUB -> EpubPublicationParser(chapterDetector)
+                        .extract(book, onProgress)
+                        .also { extracted ->
+                            recordParsingCompleted(
+                                format = BookFormat.EPUB,
+                                computePath = ParsingComputePath.STRUCTURAL_CPU,
+                                elapsedMs = monotonicNowMs() - extractionStartedAtMs,
+                                chapters = extracted.chapters.size,
+                            )
+                        }
+                    BookFormat.PDF -> extractPdf(book, onProgress)
+                }
+                PublicationMarkdownFiles.write(book.privateFile, publication.markdown)
+                Result.success(publication)
             } catch (cancellation: CancellationException) {
                 throw cancellation
             } catch (throwable: Throwable) {
@@ -147,10 +146,10 @@ class OfflinePublicationExtractor(
         val extractedText = PdfPageStructureCleaner.clean(extractedPages)
         val chapters = chapterDetector.detect(ParagraphNormalizer.normalize(extractedText))
         check(chapters.isNotEmpty()) { "No readable text was found in the PDF" }
-        return ExtractedPublication(
+        return PublicationMarkdownPhase.transform(
             title = pdfData.title ?: book.title,
             author = pdfData.author ?: book.author,
-            chapters = chapters.map { ExtractedChapter(it.title, it.paragraphs) },
+            chapters = chapters,
         ).also { publication ->
             recordParsingCompleted(
                 format = BookFormat.PDF,
@@ -297,10 +296,10 @@ internal class EpubPublicationParser(
         val chapters = chapterDetector.detectSections(sections)
         coroutineContext.ensureActive()
         check(chapters.isNotEmpty()) { "No readable chapters were found in the EPUB" }
-        ExtractedPublication(
+        PublicationMarkdownPhase.transform(
             title = packageDocument.metadata("title") ?: book.title,
             author = packageDocument.metadata("creator") ?: book.author,
-            chapters = chapters.map { ExtractedChapter(it.title, it.paragraphs) },
+            chapters = chapters,
         )
     }
 

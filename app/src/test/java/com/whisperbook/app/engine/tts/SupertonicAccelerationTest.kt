@@ -76,6 +76,28 @@ class SupertonicAccelerationTest {
     }
 
     @Test
+    fun `voice must support the requested language before runtime initialization`() = runTest {
+        val attempts = mutableListOf<NeuralExecutionBackend>()
+        val engine = engine(androidSdk = 28) { backend ->
+            attempts += backend
+            FakeRuntime(backend)
+        }
+        val frenchOnlyVoice = SherpaKittenTtsEngine.KITTEN_VOICES.first().copy(
+            supportedLanguageCodes = setOf("fr"),
+        )
+
+        try {
+            val failure = engine.synthesize(request().copy(voice = frenchOnlyVoice)).exceptionOrNull()
+
+            assertTrue(failure is TtsEngineException)
+            assertTrue(failure?.message.orEmpty().contains("does not support language 'en'"))
+            assertTrue(attempts.isEmpty())
+        } finally {
+            engine.close()
+        }
+    }
+
+    @Test
     fun `slow representative accelerator sample selects cpu for later work`() {
         assertTrue(shouldFallbackFromSlowAccelerator(audioMs = 2_412, realTimeFactorMilli = 2_394))
         assertTrue(!shouldFallbackFromSlowAccelerator(audioMs = 900, realTimeFactorMilli = 9_000))

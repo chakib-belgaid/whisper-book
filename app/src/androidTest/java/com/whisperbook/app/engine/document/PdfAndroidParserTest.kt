@@ -34,6 +34,9 @@ class PdfAndroidParserTest {
         assertTrue(publication.chapters.isNotEmpty())
         assertTrue(text.contains("moonlit bridge", ignoreCase = true))
         assertTrue(text.contains("Elara", ignoreCase = true))
+        assertTrue(publication.markdown.startsWith("# Offline PDF Story"))
+        assertTrue(publication.markdown.contains("## CHAPTER ONE"))
+        assertEquals(publication.markdown, PublicationMarkdownFiles.forSource(file).readText(Charsets.UTF_8))
     }
 
     @Test

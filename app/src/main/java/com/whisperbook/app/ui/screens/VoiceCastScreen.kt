@@ -198,7 +198,7 @@ fun VoiceCastScreen(
         appState.cast.firstOrNull { it.id == characterId }?.let { member ->
             VoicePickerSheet(
                 characterName = member.character,
-                voices = appState.voiceOptions,
+                voices = appState.bookVoiceOptions,
                 selectedVoiceId = member.voiceId,
                 onDismiss = { choosingVoiceFor = null },
                 onPreviewVoice = { voice ->

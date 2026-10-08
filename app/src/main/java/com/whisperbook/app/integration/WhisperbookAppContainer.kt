@@ -32,6 +32,7 @@ import com.whisperbook.app.engine.preparation.LocalTtsEngineFactory
 import com.whisperbook.app.engine.preparation.PreparationDependencies
 import com.whisperbook.app.engine.preparation.PreparationRuntime
 import com.whisperbook.app.engine.preparation.ProductionPreparationCoordinator
+import com.whisperbook.app.engine.tts.CharacterVoiceCaster
 import com.whisperbook.app.engine.tts.ProcessScopedLocalTtsEngine
 import com.whisperbook.app.engine.tts.SherpaKittenTtsEngine
 import com.whisperbook.app.playback.ControllerBackedPlaybackGateway
@@ -190,6 +191,13 @@ class WhisperbookAppContainer(context: Context) : WhisperbookServices, Closeable
         narrationProfilesReady.await()
         require(request.assignment.characterId == request.characterId)
         require(request.fromChapterOrdinal >= 0)
+        val book = database.bookDao().getById(request.bookId)
+            ?: error("This book is no longer in the library")
+        val requestedVoice = availableVoices.firstOrNull { it.id == request.assignment.voiceId }
+            ?: error("The selected local voice is unavailable")
+        require(requestedVoice.supportsLanguage(book.narrationLanguageCode)) {
+            "The selected voice does not support this book's language"
+        }
         val chapters = database.chapterDao().getHeadersForBook(request.bookId)
         val selectedPlan = database.chapterPlanDao().getSelectedChapterHeaders(request.bookId)
             .takeUnless { it.isEmpty() && database.chapterPlanDao().countForBook(request.bookId) == 0 }
@@ -298,11 +306,66 @@ class WhisperbookAppContainer(context: Context) : WhisperbookServices, Closeable
             require(languageCode in NarrationLanguage.supportedCodes) { "Unsupported narration language" }
             val book = database.bookDao().getById(bookId) ?: error("This book is no longer in the library")
             if (book.narrationLanguageCode == languageCode) return@withContext
+            val compatibleVoices = availableVoices.filter { it.supportsLanguage(languageCode) }
+            require(compatibleVoices.isNotEmpty()) { "No local voices support this narration language" }
+            val compatibleVoiceIds = compatibleVoices.mapTo(hashSetOf()) { it.id }
+            val preferredNarrator = book.preferredNarratorVoiceId
+                ?.let { preferredId -> compatibleVoices.firstOrNull { it.id == preferredId } }
+                ?: compatibleVoices.first()
+            val characters = database.storyCharacterDao().getEntitiesForBook(bookId)
+            val existingTemplates = database.voiceAssignmentDao().getForBook(bookId)
+                .associateBy { it.characterId }
+            val usedVoiceIds = existingTemplates.values.mapNotNullTo(linkedSetOf()) { assignment ->
+                assignment.voiceId.takeIf { it in compatibleVoiceIds }
+            }
+            val repairedTemplates = linkedMapOf<String, CharacterVoiceAssignment>()
+            characters.sortedBy { it.id }.forEach { character ->
+                val existing = existingTemplates[character.id] ?: return@forEach
+                val repaired = if (existing.voiceId in compatibleVoiceIds) {
+                    existing.toDomain().copy(modelVersion = ttsModelVersion)
+                } else {
+                    val voice = CharacterVoiceCaster.select(
+                        character = character.toDomain(),
+                        voices = compatibleVoices,
+                        preferredNarrator = preferredNarrator,
+                        alreadyUsedVoiceIds = usedVoiceIds,
+                    )
+                    usedVoiceIds += voice.id
+                    CharacterVoiceAssignment(
+                        characterId = character.id,
+                        voiceId = voice.id,
+                        modelVersion = ttsModelVersion,
+                        speed = existing.speed,
+                    )
+                }
+                repairedTemplates[character.id] = repaired
+            }
+            val repairedChapterAssignments = characters.flatMap { character ->
+                val template = repairedTemplates[character.id] ?: return@flatMap emptyList()
+                database.chapterVoiceAssignmentDao().getForCharacter(bookId, character.id)
+                    .filter { row ->
+                        row.voiceId !in compatibleVoiceIds || row.modelVersion != ttsModelVersion
+                    }
+                    .map { row -> template.toChapterEntity(bookId, row.chapterId) }
+            }
             val chapterIds = database.chapterDao().getHeadersForBook(bookId).mapTo(linkedSetOf()) { it.id }
             val playbackReload = playbackGateway.invalidateNarrationProfile(bookId, chapterIds)
             database.withTransaction {
-                check(database.bookDao().updateNarrationLanguage(bookId, languageCode) == 1) {
+                check(
+                    database.bookDao().updateNarrationLanguageAndNarrator(
+                        bookId = bookId,
+                        languageCode = languageCode,
+                        narratorVoiceId = preferredNarrator.id,
+                    ) == 1,
+                ) {
                     "This book is no longer in the library"
+                }
+                val templateRepairs = repairedTemplates.values
+                    .filter { repaired -> existingTemplates[repaired.characterId]?.toDomain() != repaired }
+                    .map(CharacterVoiceAssignment::toEntity)
+                if (templateRepairs.isNotEmpty()) database.voiceAssignmentDao().upsertAll(templateRepairs)
+                if (repairedChapterAssignments.isNotEmpty()) {
+                    database.chapterVoiceAssignmentDao().upsertAll(repairedChapterAssignments)
                 }
                 database.audioSegmentDao().deleteForBook(bookId)
             }

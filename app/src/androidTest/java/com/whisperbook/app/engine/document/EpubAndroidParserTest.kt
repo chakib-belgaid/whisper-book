@@ -35,20 +35,26 @@ class EpubAndroidParserTest {
                 )
             }
 
-            val result = OfflinePublicationExtractor(context).extract(
-                ImportedBook(
-                    title = "Fallback",
-                    author = null,
-                    format = BookFormat.EPUB,
-                    privateFile = epub,
-                    sha256 = "fixture",
-                ),
-            ).getOrThrow()
+            val imported = ImportedBook(
+                title = "Fallback",
+                author = null,
+                format = BookFormat.EPUB,
+                privateFile = epub,
+                sha256 = "fixture",
+            )
+            val result = OfflinePublicationExtractor(context).extract(imported).getOrThrow()
 
             assertEquals("Device Story", result.title)
             assertTrue(result.chapters.isNotEmpty())
             assertTrue(result.chapters.flatMap { it.paragraphs }.any { "lantern" in it })
+            assertEquals(result.markdown, PublicationMarkdownFiles.forSource(epub).readText(Charsets.UTF_8))
+
+            PublicationMarkdownFiles.forSource(epub).delete()
+            val rebuilt = PublicationMarkdownLoader(context).load(imported).getOrThrow()
+            assertTrue(rebuilt.isFile)
+            assertTrue(rebuilt.readText(Charsets.UTF_8).contains("## Chapter One"))
         } finally {
+            PublicationMarkdownFiles.forSource(epub).delete()
             epub.delete()
         }
     }

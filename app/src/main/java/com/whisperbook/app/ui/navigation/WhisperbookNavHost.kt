@@ -14,6 +14,7 @@ import com.whisperbook.app.ui.screens.ChapterReviewScreen
 import com.whisperbook.app.ui.screens.CurrentChapterScreen
 import com.whisperbook.app.ui.screens.ImportBookScreen
 import com.whisperbook.app.ui.screens.LibraryScreen
+import com.whisperbook.app.ui.screens.MarkdownViewerScreen
 import com.whisperbook.app.ui.screens.NowPlayingScreen
 import com.whisperbook.app.ui.screens.NarrationSetupScreen
 import com.whisperbook.app.ui.screens.ParsingChapterHeader
@@ -271,10 +272,20 @@ fun WhisperbookNavHost(
                         navController.navigate(WhisperbookDestination.ChapterReview.route)
                     },
                     onVoiceCast = { navController.navigate(WhisperbookDestination.VoiceCast.route()) },
+                    onViewMarkdown = { navController.navigate(WhisperbookDestination.Markdown.route()) },
                     onRemove = {
                         appState.deleteSelectedBook()
                         navController.navigateToBottomDestination(WhisperbookDestination.Library.route)
                     },
+                )
+            }
+        }
+        composable(WhisperbookDestination.Markdown.route) {
+            OrigamiPage {
+                MarkdownViewerScreen(
+                    contentPadding = contentPadding,
+                    appState = appState,
+                    onBack = ::backOrLibrary,
                 )
             }
         }

@@ -109,7 +109,16 @@ data class VoiceDescriptor(
     val embedded: Boolean = true,
     val gender: CharacterGender = CharacterGender.UNKNOWN,
     val vocalAge: VocalAge = VocalAge.UNKNOWN,
-)
+    /** Language codes this speaker preset can synthesize with its local model. */
+    val supportedLanguageCodes: Set<String> = NarrationLanguage.supportedCodes,
+) {
+    fun supportsLanguage(languageCode: String): Boolean {
+        val requestedLanguage = languageCode.substringBefore('-').substringBefore('_').lowercase()
+        return supportedLanguageCodes.any { supported ->
+            supported.substringBefore('-').substringBefore('_').lowercase() == requestedLanguage
+        }
+    }
+}
 
 @Immutable
 data class CharacterVoiceAssignment(
