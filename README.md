@@ -72,7 +72,7 @@ These are API 36 emulator captures of the production Compose surfaces using dete
   <img src="./docs/architecture/diagrams/offline-pipeline.svg" width="100%" alt="Seven-stage offline pipeline from local book selection to checkpointed audiobook playback">
 </p>
 
-The opening chapter is attributed, cast, and streamed first, so listening can start without scanning every chapter for characters. Later chapters are analyzed and generated sequentially. A versioned `characters.json` mirror in app-private storage records each completed chapter's character contribution for restart-safe, idempotent progress; Room remains authoritative for characters and voice choices. MP3 export reuses these finalized chapter segments and generates only missing narration before encoding. The editable diagrams.net source is [offline-pipeline.drawio](docs/architecture/diagrams/offline-pipeline.drawio).
+Before any speech is synthesized, every selected chapter is attributed in listening order and preparation stops at a story review: a character bible plus each chapter's passages with speaker labels, where wrong attributions can be corrected. Choosing **Generate voices** casts the voices and streams the opening chapter first; later chapters are generated sequentially. A versioned `characters.json` mirror in app-private storage records each completed chapter's character contribution for restart-safe, idempotent progress; Room remains authoritative for characters and voice choices. MP3 export reuses these finalized chapter segments and generates only missing narration before encoding. The editable diagrams.net source is [offline-pipeline.drawio](docs/architecture/diagrams/offline-pipeline.drawio).
 
 ## Architecture
 

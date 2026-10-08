@@ -19,7 +19,8 @@ The selected direction is the blue **Woodland Paper Theatre** system. The visual
 | 01 | Welcome | Explain the private, offline promise and start first import | Library, Import book |
 | 02 | Library | Browse books, resume listening, or add a file | Import book, Book details, Now playing, Settings |
 | 03 | Import book | Select a PDF or EPUB and confirm local processing | Processing, Library |
-| 04 | Processing | Show extraction, character detection, and voice-assignment progress | Book details, Library |
+| 04 | Processing | Show extraction, character detection, and voice-assignment progress | Story preview, Book details, Library |
+| 04b | Story preview | Review the character bible and each chapter's speaker-labelled passages, correct attributions, then generate voices | Processing, Library |
 | 05 | Now playing | Listen, seek, change chapter, set sleep controls, or open synchronized reading | Book details, Voice cast, Current chapter, Library, Settings |
 | 06 | Book details | Show progress and chapters; start or resume playback | Now playing, Voice cast, Library |
 | 07 | Voice cast | Preview and override automatic character-to-voice assignments | Book details, Now playing |
@@ -29,7 +30,9 @@ The selected direction is the blue **Woodland Paper Theatre** system. The visual
 ## State and implementation notes
 
 - Import and processing should survive app backgrounding and expose resumable state.
-- Processing stages: chapter extraction, dialogue/character detection, voice assignment, and audio preparation.
+- Processing stages: chapter extraction, dialogue/character detection, story review, voice assignment, and audio preparation.
+- Journey: Import → Parsing → Chapter review → Narration setup → Processing (reading the story) → Story preview → Generate voices → Processing → Now playing.
+- The story preview reuses the read-along passage cards without playback controls; it has no approved screen asset yet.
 - The voice-cast screen must expose automatic assignments without implying perfect detection; every assignment is editable.
 - The player streams chapter audio from locally generated/cached segments and preloads the next segment.
 - The current-chapter screen follows the same segment timeline as audio playback and scrolls the active passage into view.
