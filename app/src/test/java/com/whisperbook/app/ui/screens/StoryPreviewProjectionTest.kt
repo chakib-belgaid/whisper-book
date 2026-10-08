@@ -109,6 +109,10 @@ class StoryPreviewProjectionTest {
         assertTrue(state.storyReviewRequired)
         assertTrue(state.requiresStoryReview(awaiting.id))
         assertTrue(state.books.single().needsStoryReview)
+        assertEquals(
+            "Review the characters before voices are generated",
+            state.books.single().libraryProgressLabel(),
+        )
         assertFalse(state.canListen)
         assertEquals(listOf("chapter-3", "chapter-1"), state.storyChapters.map(StoryChapterUi::id))
         assertEquals(listOf(1, 2), state.storyChapters.map(StoryChapterUi::listeningPosition))
@@ -162,7 +166,9 @@ class StoryPreviewProjectionTest {
     @Test
     fun `finding characters is not yet a story review`() {
         val state = WhisperbookAppState()
-        val reading = book(stage = PreparationStage.FINDING_CHARACTERS, storyReviewConfirmed = false)
+        val reading = book(stage = PreparationStage.FINDING_CHARACTERS, storyReviewConfirmed = false).let {
+            it.copy(preparation = it.preparation.copy(completedUnits = 1, totalUnits = 3))
+        }
 
         state.synchronize(
             WhisperbookUiSnapshot(
@@ -175,6 +181,7 @@ class StoryPreviewProjectionTest {
         assertFalse(state.storyReviewRequired)
         assertFalse(state.books.single().needsStoryReview)
         assertTrue(state.isBookPreparing)
+        assertEquals("Reading the story · 1 of 3 chapters", state.books.single().libraryProgressLabel())
     }
 
     private val correctedPassageIds = setOf("c1-p2", "c1-p3")

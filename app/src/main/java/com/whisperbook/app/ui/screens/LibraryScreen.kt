@@ -251,6 +251,9 @@ internal fun LibraryBookUi.libraryProgressLabel(): String = when {
         "Reading ${preparation.completedUnits.coerceIn(0, preparation.totalUnits)} of ${preparation.totalUnits}"
     preparation.stage == com.whisperbook.app.domain.model.PreparationStage.READING_CHAPTERS ->
         "Reading chapters on this device"
+    preparation.stage == com.whisperbook.app.domain.model.PreparationStage.FINDING_CHARACTERS &&
+        preparation.totalUnits > 0 ->
+        "Reading the story · ${preparation.completedUnits.coerceIn(0, preparation.totalUnits)} of ${preparation.totalUnits} chapters"
     preparation.stage == com.whisperbook.app.domain.model.PreparationStage.PREPARING_AUDIO &&
         preparation.totalUnits > 0 ->
         "${preparation.completedUnits.coerceIn(0, preparation.totalUnits)} of ${preparation.totalUnits} chapters prepared"
