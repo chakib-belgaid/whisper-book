@@ -21,6 +21,7 @@ import com.whisperbook.app.ui.screens.ParsingChapterHeader
 import com.whisperbook.app.ui.screens.ParsingScreen
 import com.whisperbook.app.ui.screens.ProcessingScreen
 import com.whisperbook.app.ui.screens.SettingsScreen
+import com.whisperbook.app.ui.screens.StoryPreviewScreen
 import com.whisperbook.app.ui.screens.VoiceCastScreen
 import com.whisperbook.app.ui.screens.WelcomeScreen
 import com.whisperbook.app.ui.screens.WhisperbookAppState
@@ -48,6 +49,7 @@ fun WhisperbookNavHost(
                 WhisperbookDestination.Parsing.route
             book.needsChapterReview -> WhisperbookDestination.ChapterReview.route
             book.needsNarrationSetup -> WhisperbookDestination.NarrationSetup.route
+            book.needsStoryReview -> WhisperbookDestination.StoryPreview.route
             preferPlayback && book.canListen -> WhisperbookDestination.NowPlaying.route
             !book.canListen && book.preparation.stage != PreparationStage.READY ->
                 WhisperbookDestination.Processing.route
@@ -198,7 +200,44 @@ fun WhisperbookNavHost(
                 )
             }
         }
+        composable(WhisperbookDestination.StoryPreview.route) {
+            OrigamiPage {
+                StoryPreviewScreen(
+                    contentPadding = contentPadding,
+                    bookTitle = appState.currentBookTitle,
+                    characters = appState.storyCharacters,
+                    chapters = appState.storyChapters,
+                    cast = appState.storyCast,
+                    isBusy = appState.isBusy,
+                    busyMessage = appState.statusMessage,
+                    onCorrectSpeaker = appState::correctPassageSpeakers,
+                    onGenerateVoices = {
+                        appState.confirmStoryReview {
+                            if (
+                                navController.currentDestination?.route ==
+                                WhisperbookDestination.StoryPreview.route
+                            ) {
+                                navController.navigate(WhisperbookDestination.Processing.route) {
+                                    popUpTo(WhisperbookDestination.StoryPreview.route) { inclusive = true }
+                                }
+                            }
+                        }
+                    },
+                    onBack = ::backOrLibrary,
+                )
+            }
+        }
         composable(WhisperbookDestination.Processing.route) {
+            LaunchedEffect(appState.storyReviewRequired, appState.currentBookId) {
+                if (
+                    appState.storyReviewRequired &&
+                    navController.currentDestination?.route == WhisperbookDestination.Processing.route
+                ) {
+                    navController.navigate(WhisperbookDestination.StoryPreview.route) {
+                        popUpTo(WhisperbookDestination.Processing.route) { inclusive = true }
+                    }
+                }
+            }
             LaunchedEffect(appState.canListen, appState.currentBookId) {
                 if (
                     appState.canListen &&
@@ -260,6 +299,7 @@ fun WhisperbookNavHost(
                             when {
                                 appState.requiresChapterReview -> WhisperbookDestination.ChapterReview.route
                                 appState.narrationSetupRequired -> WhisperbookDestination.NarrationSetup.route
+                                appState.storyReviewRequired -> WhisperbookDestination.StoryPreview.route
                                 appState.preparationStatus?.stage == PreparationStage.COPY_AND_VALIDATE ||
                                     appState.preparationStatus?.stage == PreparationStage.READING_CHAPTERS ->
                                     WhisperbookDestination.Parsing.route

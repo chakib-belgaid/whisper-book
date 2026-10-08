@@ -162,6 +162,10 @@ fun WhisperbookApp(
                             navController.navigate(WhisperbookDestination.NarrationSetup.route)
                         }
                         destination.route == WhisperbookDestination.NowPlaying.route &&
+                            appState.storyReviewRequired -> {
+                            navController.navigate(WhisperbookDestination.StoryPreview.route)
+                        }
+                        destination.route == WhisperbookDestination.NowPlaying.route &&
                             !appState.canListen -> {
                             navController.navigate(WhisperbookDestination.Processing.route)
                         }
