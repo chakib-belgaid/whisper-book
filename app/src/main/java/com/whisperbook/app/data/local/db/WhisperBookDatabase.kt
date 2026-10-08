@@ -21,7 +21,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         PreparationJobEntity::class,
         PlaybackCheckpointEntity::class,
     ],
-    version = 7,
+    version = 8,
     exportSchema = true,
 )
 abstract class WhisperBookDatabase : RoomDatabase() {
@@ -52,6 +52,7 @@ abstract class WhisperBookDatabase : RoomDatabase() {
                     MIGRATION_4_5,
                     MIGRATION_5_6,
                     MIGRATION_6_7,
+                    MIGRATION_7_8,
                 )
                 .build()
 
@@ -269,6 +270,17 @@ abstract class WhisperBookDatabase : RoomDatabase() {
                 )
                 database.execSQL(
                     "UPDATE `preparation_jobs` SET `chapter_plan_confirmed` = 1",
+                )
+            }
+        }
+
+        val MIGRATION_7_8: Migration = object : Migration(7, 8) {
+            override fun migrate(database: SupportSQLiteDatabase) {
+                // Books imported before the story review existed are already past attribution or
+                // mid-synthesis. Keep them confirmed; only new imports stop for the review.
+                database.execSQL(
+                    "ALTER TABLE `books` ADD COLUMN `story_review_confirmed` " +
+                        "INTEGER NOT NULL DEFAULT 1",
                 )
             }
         }

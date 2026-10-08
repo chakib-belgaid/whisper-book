@@ -395,7 +395,7 @@ class WhisperbookAppContainer(context: Context) : WhisperbookServices, Closeable
                 distinctPassageIds.none(String::isBlank) &&
                 speakerId.isNotBlank(),
         )
-        database.bookDao().getById(bookId) ?: error("This book is no longer in the library")
+        val book = database.bookDao().getById(bookId) ?: error("This book is no longer in the library")
         val targetCharacter = database.storyCharacterDao().getEntitiesForBook(bookId)
             .firstOrNull { it.id == speakerId }
             ?: error("The selected voice does not belong to this book")
@@ -420,6 +420,21 @@ class WhisperbookAppContainer(context: Context) : WhisperbookServices, Closeable
             }
         }
         if (affectedPassages.isEmpty()) return@withContext 0
+        val affectedPassageIds = affectedPassages.mapTo(linkedSetOf()) { it.id }
+
+        if (!book.storyReviewConfirmed) {
+            // Before the story review no voice is cast and no audio exists, so a correction is a
+            // pure attribution edit. Casting and synthesis read it once the review is confirmed.
+            database.withTransaction {
+                val updated = database.passageDao().updateSpeakerAttributionBatched(
+                    passageIds = affectedPassageIds,
+                    speakerId = targetCharacter.id,
+                    attributionRule = scope.manualAttributionRule(),
+                )
+                check(updated == affectedPassageIds.size) { "A phrase disappeared during the correction" }
+            }
+            return@withContext affectedPassageIds.size
+        }
 
         val chapterHeaders = database.chapterDao().getHeadersForBook(bookId)
         val affectedChapterIds = affectedPassages.mapTo(linkedSetOf()) { it.chapterId }
@@ -429,7 +444,6 @@ class WhisperbookAppContainer(context: Context) : WhisperbookServices, Closeable
         }
         val targetVoice = database.voiceAssignmentDao().getForCharacter(targetCharacter.id)?.toDomain()
             ?: error("The selected character's voice is not ready yet")
-        val affectedPassageIds = affectedPassages.mapTo(linkedSetOf()) { it.id }
 
         // Keep the current queue's files alive during the profile reload. No previous assignment
         // is attached, so this safety retention is not exposed as a reversible cast change.
@@ -446,10 +460,7 @@ class WhisperbookAppContainer(context: Context) : WhisperbookServices, Closeable
             val updated = database.passageDao().updateSpeakerAttributionBatched(
                 passageIds = affectedPassageIds,
                 speakerId = targetCharacter.id,
-                attributionRule = when (scope) {
-                    SpeakerCorrectionScope.THIS_PASSAGE -> "manual-speaker:this-passage"
-                    SpeakerCorrectionScope.MATCHING_PHRASES -> "manual-speaker:matching-phrases"
-                },
+                attributionRule = scope.manualAttributionRule(),
             )
             check(updated == affectedPassageIds.size) { "A phrase disappeared during the correction" }
             database.audioSegmentDao().deleteForPassageIdsBatched(affectedPassageIds)
@@ -574,6 +585,11 @@ class WhisperbookAppContainer(context: Context) : WhisperbookServices, Closeable
         sharedTtsEngine.shutdown()
         database.close()
     }
+}
+
+private fun SpeakerCorrectionScope.manualAttributionRule(): String = when (this) {
+    SpeakerCorrectionScope.THIS_PASSAGE -> "manual-speaker:this-passage"
+    SpeakerCorrectionScope.MATCHING_PHRASES -> "manual-speaker:matching-phrases"
 }
 
 private fun File.recursiveByteCount(): Long = when {

@@ -25,6 +25,8 @@ data class Book(
     val narrationProfileSeeded: Boolean = true,
     val preferredNarratorVoiceId: String? = null,
     val narrationSetupConfirmed: Boolean = true,
+    /** False only between whole-book attribution and the listener's story review. */
+    val storyReviewConfirmed: Boolean = true,
 )
 
 enum class BookFormat { PDF, EPUB }
@@ -149,6 +151,7 @@ enum class PreparationStage {
     AWAITING_CHAPTER_SELECTION,
     AWAITING_NARRATION_SETUP,
     FINDING_CHARACTERS,
+    AWAITING_STORY_REVIEW,
     ASSIGNING_VOICES,
     PREPARING_AUDIO,
     READY,

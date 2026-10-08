@@ -21,6 +21,8 @@ data class WhisperbookUiSnapshot(
     /** Selected chapters in their custom listening order. */
     val chapters: List<Chapter> = emptyList(),
     val selectedChapter: Chapter? = null,
+    /** Selected chapters with passages, populated only while the book awaits its story review. */
+    val storyChapters: List<Chapter> = emptyList(),
     val characters: List<StoryCharacter> = emptyList(),
     val voiceAssignments: Map<String, CharacterVoiceAssignment> = emptyMap(),
     val voices: List<VoiceDescriptor> = emptyList(),

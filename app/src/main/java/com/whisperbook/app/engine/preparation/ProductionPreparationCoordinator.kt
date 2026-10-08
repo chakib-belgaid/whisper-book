@@ -27,6 +27,7 @@ class ProductionPreparationCoordinator internal constructor(
     private val scheduler: PreparationWorkScheduler,
     private val preparationJobs: PreparationJobDao,
     private val narrationSetupConfirmed: suspend (String) -> Boolean = { true },
+    private val storyReviewConfirmed: suspend (String) -> Boolean = { true },
 ) : PreparationCoordinator {
     constructor(
         context: Context,
@@ -37,6 +38,9 @@ class ProductionPreparationCoordinator internal constructor(
         preparationJobs = dependencies.database.preparationJobDao(),
         narrationSetupConfirmed = { bookId ->
             dependencies.database.bookDao().getById(bookId)?.narrationSetupConfirmed == true
+        },
+        storyReviewConfirmed = { bookId ->
+            dependencies.database.bookDao().getById(bookId)?.storyReviewConfirmed == true
         },
     ) {
         PreparationRuntime.install(dependencies)
@@ -173,8 +177,13 @@ class ProductionPreparationCoordinator internal constructor(
             }
 
             PreparationStage.FINDING_CHARACTERS -> PreparationWorkPlan.narrationStages
+            PreparationStage.AWAITING_STORY_REVIEW -> {
+                if (storyReviewConfirmed(bookId)) PreparationWorkPlan.synthesisStages else emptyList()
+            }
             PreparationStage.ASSIGNING_VOICES -> PreparationWorkPlan.narrationStages.drop(1)
             PreparationStage.PREPARING_AUDIO -> PreparationWorkPlan.narrationStages.takeLast(1)
+            // Attribution is idempotent. After a confirmed review the restarted FINDING_CHARACTERS
+            // worker hands straight over to casting; before it, the chain stops at the review.
             PreparationStage.FAILED -> when {
                 !state.chapterPlanConfirmed -> PreparationWorkPlan.parsingStages
                 !narrationSetupConfirmed(bookId) -> emptyList()
@@ -279,6 +288,8 @@ internal object PreparationWorkPlan {
         PreparationStage.ASSIGNING_VOICES,
         PreparationStage.PREPARING_AUDIO,
     )
+    /** Narration stages that cast voices or synthesize audio; both wait for the story review. */
+    val synthesisStages = narrationStages.drop(1)
     val stages = parsingStages + narrationStages
     val existingWorkPolicy: ExistingWorkPolicy = ExistingWorkPolicy.KEEP
     val regenerationWorkPolicy: ExistingWorkPolicy = ExistingWorkPolicy.REPLACE

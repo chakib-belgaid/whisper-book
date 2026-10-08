@@ -63,4 +63,27 @@ class PreparationNotificationTextTest {
 
         assertEquals("Local generation was interrupted — retrying automatically", text)
     }
+
+    @Test
+    fun `story attribution notification reports the chapter being read`() {
+        val text = preparationNotificationText(
+            PreparationState(
+                stage = PreparationStage.FINDING_CHARACTERS,
+                completedUnits = 2,
+                totalUnits = 24,
+                message = "Reading chapter 3 of 24",
+            ),
+        )
+
+        assertEquals("Reading chapter 3 of 24", text)
+    }
+
+    @Test
+    fun `story review notification asks for the review`() {
+        val text = preparationNotificationText(
+            PreparationState(stage = PreparationStage.AWAITING_STORY_REVIEW),
+        )
+
+        assertEquals("Review the characters before generating voices", text)
+    }
 }

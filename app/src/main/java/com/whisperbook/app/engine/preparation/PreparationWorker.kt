@@ -302,6 +302,13 @@ internal class PreparationStageRunner(
         if (stage in PreparationWorkPlan.narrationStages && !canPrepareNarration(bookId, attemptCount)) {
             return
         }
+        if (stage in PreparationWorkPlan.synthesisStages && !requireBook(bookId).storyReviewConfirmed) {
+            // The rest of the narration chain, a stale retry, or a replacement regeneration must
+            // never cast or synthesize before the listener has reviewed the story. Finishing
+            // attribution is idempotent and always ends at the review gate while it is pending.
+            attributeSpeakers(bookId, attemptCount)
+            return
+        }
         when (stage) {
             PreparationStage.COPY_AND_VALIDATE -> validatePrivateCopy(bookId, attemptCount)
             PreparationStage.READING_CHAPTERS -> extractChapters(bookId, attemptCount)
@@ -310,6 +317,7 @@ internal class PreparationStageRunner(
             PreparationStage.PREPARING_AUDIO -> prepareAudio(bookId, attemptCount, fromChapterOrdinal)
             PreparationStage.AWAITING_CHAPTER_SELECTION,
             PreparationStage.AWAITING_NARRATION_SETUP,
+            PreparationStage.AWAITING_STORY_REVIEW,
             PreparationStage.READY,
             PreparationStage.FAILED,
             -> throw PreparationPipelineException(
@@ -579,30 +587,46 @@ internal class PreparationStageRunner(
             throw PreparationPipelineException("chapters-missing", "Select at least one chapter before attribution", false)
         }
 
-        checkpoint(
-            bookId,
-            PreparationState(
-                PreparationStage.FINDING_CHARACTERS,
-                completedUnits = 0,
-                totalUnits = chapters.size,
-                message = "Finding voices in the opening chapter",
-            ),
-            attemptCount,
-        )
-        ensureChapterAttributed(
-            bookId = bookId,
-            chapterId = chapters.first().id,
-            isFinalChapter = chapters.size == 1,
-        )
+        // Attribute the whole selected plan before any voice is cast so the listener can review
+        // every character first. Already attributed chapters are skipped, which makes a retried
+        // or restarted worker resume at the first chapter it has not read yet.
+        chapters.forEachIndexed { index, chapter ->
+            checkpoint(
+                bookId,
+                PreparationState(
+                    PreparationStage.FINDING_CHARACTERS,
+                    completedUnits = index,
+                    totalUnits = chapters.size,
+                    progressFraction = index.toFloat() / chapters.size,
+                    message = "Reading chapter ${index + 1} of ${chapters.size}",
+                    activeChapterId = chapter.id,
+                ),
+                attemptCount,
+            )
+            ensureChapterAttributed(
+                bookId = bookId,
+                chapterId = chapter.id,
+                isFinalChapter = index == chapters.lastIndex,
+            )
+        }
         val characterCount = database.storyCharacterDao().getEntitiesForBook(bookId).size
+        val reviewConfirmed = requireBook(bookId).storyReviewConfirmed
         checkpoint(
             bookId,
             PreparationState(
-                stage = PreparationStage.ASSIGNING_VOICES,
-                completedUnits = 1,
+                stage = if (reviewConfirmed) {
+                    PreparationStage.ASSIGNING_VOICES
+                } else {
+                    PreparationStage.AWAITING_STORY_REVIEW
+                },
+                completedUnits = chapters.size,
                 totalUnits = chapters.size,
-                progressFraction = 1f / chapters.size,
-                message = "Found $characterCount voices in the opening chapter",
+                progressFraction = 1f,
+                message = if (reviewConfirmed) {
+                    "Found $characterCount voices in the story"
+                } else {
+                    STORY_REVIEW_MESSAGE
+                },
             ),
             attemptCount,
         )
@@ -1377,6 +1401,7 @@ internal class PreparationStageRunner(
     }
 
     private companion object {
+        const val STORY_REVIEW_MESSAGE = "Review the characters before generating voices"
         const val CHARACTER_ANALYSIS_VERSION = "heuristic-attribution-chapter-v1"
         const val UNATTRIBUTED_RULE = "preparation-unattributed"
 
@@ -1481,7 +1506,8 @@ private fun PreparationStage.notificationMessage(): String = when (this) {
     PreparationStage.READING_CHAPTERS -> "Reading chapters on this device"
     PreparationStage.AWAITING_CHAPTER_SELECTION -> "Choose the chapters you want to hear"
     PreparationStage.AWAITING_NARRATION_SETUP -> "Choose a language and narrator"
-    PreparationStage.FINDING_CHARACTERS -> "Finding the voices in this story"
+    PreparationStage.FINDING_CHARACTERS -> "Reading the story"
+    PreparationStage.AWAITING_STORY_REVIEW -> "Review the characters before generating voices"
     PreparationStage.ASSIGNING_VOICES -> "Casting local voices"
     PreparationStage.PREPARING_AUDIO -> "Preparing the opening passages"
     PreparationStage.READY -> "Ready to listen"

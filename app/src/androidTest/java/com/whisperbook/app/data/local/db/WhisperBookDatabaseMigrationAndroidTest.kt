@@ -362,6 +362,63 @@ class WhisperBookDatabaseMigrationAndroidTest {
         }
     }
 
+    @Test
+    fun migration7To8KeepsExistingBooksPastTheStoryReview() {
+        migrationHelper.createDatabase(DATABASE_NAME, 7).apply {
+            execSQL(
+                """
+                INSERT INTO books (
+                    id, title, author, format, source_uri, private_source_path, source_sha256,
+                    cover_path, current_chapter_id, current_passage_id, progress_fraction,
+                    last_opened_at_epoch_ms, narration_language_code,
+                    narration_profile_revision, narration_profile_seeded,
+                    preferred_narrator_voice_id, narration_setup_confirmed
+                ) VALUES
+                    ('listening-book', 'Listening Story', NULL, 'EPUB', NULL, NULL, NULL,
+                        NULL, NULL, NULL, 0.5, 1, 'en', 1, 1, 'bella', 1),
+                    ('setup-book', 'Setup Story', NULL, 'EPUB', NULL, NULL, NULL,
+                        NULL, NULL, NULL, 0, 2, 'en', 0, 1, 'bella', 0)
+                """.trimIndent(),
+            )
+            execSQL(
+                """
+                INSERT INTO preparation_jobs (
+                    book_id, stage, completed_units, total_units, progress_fraction,
+                    message, retryable, run_state, attempt_count, updated_at_epoch_ms,
+                    chapter_plan_confirmed, plan_revision, active_chapter_id
+                ) VALUES (
+                    'listening-book', 'PREPARING_AUDIO', 1, 3, 0.33,
+                    'Preparing chapter 2 of 3', 0, 'RUNNING', 0, 1, 1, 0, NULL
+                )
+                """.trimIndent(),
+            )
+            close()
+        }
+
+        migrationHelper.runMigrationsAndValidate(
+            DATABASE_NAME,
+            8,
+            true,
+            WhisperBookDatabase.MIGRATION_7_8,
+        ).use { database ->
+            database.query(
+                "SELECT id, story_review_confirmed FROM books ORDER BY id",
+            ).use { cursor ->
+                val rows = buildList {
+                    while (cursor.moveToNext()) add("${cursor.getString(0)}:${cursor.getInt(1)}")
+                }
+                // Mid-preparation and not-yet-set-up books are never newly gated by an update.
+                assertEquals(listOf("listening-book:1", "setup-book:1"), rows)
+            }
+            database.query(
+                "SELECT stage FROM preparation_jobs WHERE book_id = 'listening-book'",
+            ).use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("PREPARING_AUDIO", cursor.getString(0))
+            }
+        }
+    }
+
     private companion object {
         const val DATABASE_NAME = "profile-migration-test"
     }

@@ -20,5 +20,11 @@ class WhisperbookDestinationTest {
         assertTrue(WhisperbookDestination.Processing.route !in WhisperbookDestination.bottomBarRoutes)
         assertTrue(WhisperbookDestination.Markdown.route !in WhisperbookDestination.bottomBarRoutes)
         assertTrue(WhisperbookDestination.VoiceCast.route !in WhisperbookDestination.bottomBarRoutes)
+        assertTrue(WhisperbookDestination.StoryPreview.route !in WhisperbookDestination.bottomBarRoutes)
+    }
+
+    @Test
+    fun storyPreviewIsAnUnparameterizedFocusedRoute() {
+        assertEquals("story-preview", WhisperbookDestination.StoryPreview.route)
     }
 }

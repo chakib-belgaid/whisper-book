@@ -164,7 +164,7 @@ fun NarrationSetupScreen(
             modifier = Modifier.fillMaxWidth(),
         )
         PapercraftButton(
-            text = if (appState.narrationSetupRequired) "Start voice generation" else "Open book",
+            text = if (appState.narrationSetupRequired) "Read the story" else "Open book",
             onClick = if (appState.narrationSetupRequired) onStartGeneration else onOpenBook,
             enabled = bookReady && !appState.isBusy,
             isLoading = appState.isBusy,
