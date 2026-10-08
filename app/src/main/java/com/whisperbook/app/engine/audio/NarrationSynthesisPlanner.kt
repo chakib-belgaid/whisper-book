@@ -1,6 +1,7 @@
 package com.whisperbook.app.engine.audio
 
 import com.whisperbook.app.domain.NarrationTextChunker
+import com.whisperbook.app.domain.SpokenTextCleaner
 import com.whisperbook.app.domain.SynthesisRequest
 import com.whisperbook.app.domain.model.VoiceDescriptor
 
@@ -21,8 +22,9 @@ object NarrationSynthesisPlanner {
         languageCode: String = "en",
         maxChars: Int = NarrationTextChunker.MAX_CHARS,
     ): List<NarrationSynthesisUnit> = NarrationTextChunker.chunks(passageId, text, maxChars).map { chunk ->
+        // The chunk text stays untouched for read-along; only the spoken copy is cleaned.
         val provisional = SynthesisRequest(
-            text = chunk.text,
+            text = SpokenTextCleaner.clean(chunk.text),
             voice = voice,
             speed = speed,
             cacheKey = "pending",

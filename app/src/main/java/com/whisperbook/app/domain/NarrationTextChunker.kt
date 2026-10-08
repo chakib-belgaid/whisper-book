@@ -5,8 +5,9 @@ package com.whisperbook.app.domain
  *
  * [PassageTextChunker.MAX_CHARS] remains the storage/reader safety bound. Narration uses a much
  * smaller cap so the first playable WAV is available quickly and an on-demand request never waits
- * behind a long background inference. The underlying splitter prefers sentence endings after half
- * the cap, so normal chunks are roughly 80-160 characters without cutting prose mid-sentence.
+ * behind a long background inference. [NarrationPhraseSplitter] prefers sentence endings, then
+ * clause punctuation, then whitespace, and knows common English and French abbreviations, so
+ * Supertonic receives natural phrases instead of text cut at an arbitrary space.
  * Staying below 300 also keeps each app segment within Supertonic's default internal text limit.
  */
 object NarrationTextChunker {
@@ -23,11 +24,14 @@ object NarrationTextChunker {
         require(maxChars in MIN_CONFIGURABLE_CHARS..MAX_CONFIGURABLE_CHARS) {
             "maxChars must be between $MIN_CONFIGURABLE_CHARS and $MAX_CONFIGURABLE_CHARS"
         }
-        return PassageTextChunker.chunks(
-            passageId = passageId,
-            text = text,
-            maxChars = maxChars,
-        )
+        require(passageId.isNotBlank()) { "passageId must not be blank" }
+        val phrases = NarrationPhraseSplitter.split(text, maxChars)
+        return phrases.mapIndexed { index, phrase ->
+            PassageTextChunk(
+                id = if (phrases.size == 1) passageId else "$passageId::chunk:${index + 1}",
+                text = phrase,
+            )
+        }
     }
 
     fun normalizeMaxChars(value: Int): Int = value
