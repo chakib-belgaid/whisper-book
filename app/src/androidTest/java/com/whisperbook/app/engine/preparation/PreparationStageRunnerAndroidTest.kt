@@ -31,11 +31,13 @@ import com.whisperbook.app.domain.model.CharacterColorRole
 import com.whisperbook.app.domain.model.CharacterGender
 import com.whisperbook.app.domain.model.Passage
 import com.whisperbook.app.domain.model.PreparationStage
+import com.whisperbook.app.domain.model.PreparationState
 import com.whisperbook.app.domain.model.StoryCharacter
 import com.whisperbook.app.domain.model.VoiceDescriptor
 import com.whisperbook.app.engine.audio.AppPrivateAudioSegmentStore
 import com.whisperbook.app.engine.metadata.AppPrivateCharacterMetadataCatalog
 import java.io.File
+import java.io.IOException
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flowOf
@@ -175,7 +177,7 @@ class PreparationStageRunnerAndroidTest {
     }
 
     @Test
-    fun findingCharactersAttributesOnlyOpeningChapterAndPreservesLaterState() = runBlocking {
+    fun findingCharactersAttributesEveryChapterAndPreservesManualVoiceState() = runBlocking {
         val database = Room.inMemoryDatabaseBuilder(context, WhisperBookDatabase::class.java).build()
         val metadataRoot = File(context.cacheDir, "preparation-metadata-${System.nanoTime()}")
         val metadataCatalog = AppPrivateCharacterMetadataCatalog(metadataRoot)
@@ -199,7 +201,7 @@ class PreparationStageRunnerAndroidTest {
             id = "$CHAPTER_TWO_ID-passage-1",
             chapterId = CHAPTER_TWO_ID,
             ordinal = 0,
-            text = "The later chapter must remain provisional.",
+            text = "Alice reached the later chapter.",
             speakerId = existingCharacter.id,
             confidence = 0f,
             attributionRule = UNATTRIBUTED_RULE,
@@ -249,8 +251,8 @@ class PreparationStageRunnerAndroidTest {
 
             runner.run(BOOK_ID, PreparationStage.FINDING_CHARACTERS, attemptCount = 0)
 
-            assertEquals(1, attributor.calls.size)
-            with(attributor.calls.single()) {
+            assertEquals(listOf(CHAPTER_ONE_ID, CHAPTER_TWO_ID), attributor.calls.map { it.chapterId })
+            with(attributor.calls.first()) {
                 assertEquals(CHAPTER_ONE_ID, chapterId)
                 assertEquals(0, chapterOrdinal)
                 assertEquals("Opening", chapter.title)
@@ -263,10 +265,10 @@ class PreparationStageRunnerAndroidTest {
             assertEquals("direct-speech", openingPassages.single().attributionRule)
             assertEquals(existingCharacter.id, openingPassages.single().speakerId)
 
-            assertEquals(
-                listOf(laterProvisionalPassage),
-                database.passageDao().getForChapter(CHAPTER_TWO_ID),
-            )
+            // Later chapters are attributed up front now, so the story review covers the book.
+            val laterPassages = database.passageDao().getForChapter(CHAPTER_TWO_ID)
+            assertEquals(listOf("direct-speech"), laterPassages.map { it.attributionRule })
+            assertEquals(listOf(laterProvisionalPassage.text), laterPassages.map { it.text })
             assertEquals(existingVoice, database.voiceAssignmentDao().getForCharacter(existingCharacter.id))
             assertEquals(
                 existingChapterVoice,
@@ -287,16 +289,19 @@ class PreparationStageRunnerAndroidTest {
 
             val checkpoint = database.preparationJobDao().getForBook(BOOK_ID)
             assertEquals(PreparationStage.ASSIGNING_VOICES.name, checkpoint?.stage)
-            assertEquals(1, checkpoint?.completedUnits)
+            assertEquals(2, checkpoint?.completedUnits)
             assertEquals(2, checkpoint?.totalUnits)
             val metadata = metadataCatalog.read(BOOK_ID)
             assertNotNull(metadata)
-            assertEquals(listOf(CHAPTER_ONE_ID), metadata?.chapters?.map { it.chapterId })
+            assertEquals(
+                listOf(CHAPTER_ONE_ID, CHAPTER_TWO_ID),
+                metadata?.chapters?.map { it.chapterId },
+            )
             assertEquals(
                 setOf(existingCharacter.id, "$BOOK_ID-character-narrator"),
                 metadata?.cumulativeCharacters?.mapTo(linkedSetOf()) { it.id },
             )
-            assertEquals(false, metadata?.complete)
+            assertEquals(true, metadata?.complete)
         } finally {
             metadataRoot.deleteRecursively()
             database.close()
@@ -436,8 +441,12 @@ class PreparationStageRunnerAndroidTest {
                 ),
             )
 
+            // Chapter two joins the plan after the review, so PREPARING_AUDIO attributes it lazily.
+            database.chapterPlanDao().initializeAllSelected(BOOK_ID, updatedAtEpochMs = 2L)
+            database.chapterPlanDao().setSelected(BOOK_ID, CHAPTER_TWO_ID, selected = false, updatedAtEpochMs = 3L)
             runner.run(BOOK_ID, PreparationStage.FINDING_CHARACTERS, attemptCount = 0)
             runner.run(BOOK_ID, PreparationStage.ASSIGNING_VOICES, attemptCount = 0)
+            database.chapterPlanDao().setSelected(BOOK_ID, CHAPTER_TWO_ID, selected = true, updatedAtEpochMs = 4L)
             changeRevisionDuringLaterAttribution = true
 
             val failure = runCatching {
@@ -601,6 +610,142 @@ class PreparationStageRunnerAndroidTest {
             database.close()
             testRoot.deleteRecursively()
         }
+    }
+
+    @Test
+    fun findingCharactersReadsEveryChapterThenStopsAtTheStoryReview() = runBlocking {
+        val database = Room.inMemoryDatabaseBuilder(context, WhisperBookDatabase::class.java).build()
+        val attributor = StreamingChapterAttributor()
+        val checkpoints = mutableListOf<PreparationState>()
+        try {
+            insertConfirmedBook(database, testBook().copy(storyReviewConfirmed = false))
+            insertProvisionalChapters(database, chapterCount = 3)
+            val runner = PreparationStageRunner(
+                dependencies = PreparationDependencies(
+                    database = database,
+                    publicationExtractor = NeverUsedPublicationExtractor,
+                    speakerAttributor = attributor,
+                    ttsEngineFactory = LocalTtsEngineFactory { NeverUsedTtsEngine },
+                    audioSegmentStore = AppPrivateAudioSegmentStore(context),
+                ),
+                onStateCheckpoint = { checkpoints += it },
+            )
+
+            runner.run(BOOK_ID, PreparationStage.FINDING_CHARACTERS, attemptCount = 0)
+
+            assertEquals(listOf(0, 1, 2), attributor.calls.map { it.chapterOrdinal })
+            val reading = checkpoints.filter { it.stage == PreparationStage.FINDING_CHARACTERS }
+            assertEquals(listOf(0, 1, 2), reading.map { it.completedUnits })
+            assertTrue(reading.all { it.totalUnits == 3 })
+            assertEquals(
+                listOf("Reading chapter 1 of 3", "Reading chapter 2 of 3", "Reading chapter 3 of 3"),
+                reading.map { it.message },
+            )
+            val gate = requireNotNull(database.preparationJobDao().getForBook(BOOK_ID))
+            assertEquals(PreparationStage.AWAITING_STORY_REVIEW.name, gate.stage)
+            assertEquals(3, gate.completedUnits)
+            assertEquals(3, gate.totalUnits)
+            assertEquals("Review the characters before generating voices", gate.message)
+
+            // The rest of the WorkManager chain, or a stale retry, is a successful no-op at the gate.
+            runner.run(BOOK_ID, PreparationStage.ASSIGNING_VOICES, attemptCount = 0)
+            runner.run(BOOK_ID, PreparationStage.PREPARING_AUDIO, attemptCount = 0)
+            runner.run(BOOK_ID, PreparationStage.PREPARING_AUDIO, attemptCount = 1, fromChapterOrdinal = 2)
+
+            assertEquals(3, attributor.calls.size)
+            assertTrue(database.voiceAssignmentDao().getForBook(BOOK_ID).isEmpty())
+            assertEquals(
+                PreparationStage.AWAITING_STORY_REVIEW.name,
+                database.preparationJobDao().getForBook(BOOK_ID)?.stage,
+            )
+        } finally {
+            database.close()
+        }
+    }
+
+    @Test
+    fun interruptedStoryReadingResumesWithoutRereadingAndReviewOpensVoices() = runBlocking {
+        val database = Room.inMemoryDatabaseBuilder(context, WhisperBookDatabase::class.java).build()
+        val testRoot = File(context.cacheDir, "story-review-${System.nanoTime()}")
+        check(testRoot.mkdirs())
+        var failSecondChapter = true
+        val attributor = StreamingChapterAttributor { chapterOrdinal ->
+            if (failSecondChapter && chapterOrdinal == 1) {
+                failSecondChapter = false
+                throw IOException("Interrupted")
+            }
+        }
+        val tts = RecordingTtsEngine()
+        val runner = PreparationStageRunner(
+            dependencies = PreparationDependencies(
+                database = database,
+                publicationExtractor = NeverUsedPublicationExtractor,
+                speakerAttributor = attributor,
+                ttsEngineFactory = LocalTtsEngineFactory { tts },
+                audioSegmentStore = AppPrivateAudioSegmentStore(File(testRoot, "audio")),
+                modelVersion = TEST_MODEL_VERSION,
+                expectedSampleRate = TEST_SAMPLE_RATE,
+                narratorVoiceId = "bella",
+            ),
+        )
+        try {
+            insertConfirmedBook(database, testBook().copy(storyReviewConfirmed = false))
+            insertProvisionalChapters(database, chapterCount = 3)
+            database.chapterPlanDao().initializeAllSelected(BOOK_ID, updatedAtEpochMs = 2L)
+            database.chapterPlanDao().setSelected(BOOK_ID, CHAPTER_THREE_ID, selected = false, updatedAtEpochMs = 3L)
+
+            val interruption = runCatching {
+                runner.run(BOOK_ID, PreparationStage.FINDING_CHARACTERS, attemptCount = 0)
+            }.exceptionOrNull()
+            assertTrue(interruption is IOException)
+
+            runner.run(BOOK_ID, PreparationStage.FINDING_CHARACTERS, attemptCount = 1)
+
+            // The first chapter is already attributed, so the retry continues with the second.
+            assertEquals(listOf(0, 1), attributor.calls.map { it.chapterOrdinal })
+            assertEquals(
+                PreparationStage.AWAITING_STORY_REVIEW.name,
+                database.preparationJobDao().getForBook(BOOK_ID)?.stage,
+            )
+
+            assertEquals(1, database.bookDao().confirmStoryReview(BOOK_ID))
+            assertEquals(0, database.bookDao().confirmStoryReview(BOOK_ID))
+            // A chapter added after the review is attributed during audio preparation and does
+            // not reopen the gate.
+            database.chapterPlanDao().setSelected(BOOK_ID, CHAPTER_THREE_ID, selected = true, updatedAtEpochMs = 4L)
+            runner.run(BOOK_ID, PreparationStage.ASSIGNING_VOICES, attemptCount = 0)
+            assertEquals(
+                PreparationStage.PREPARING_AUDIO.name,
+                database.preparationJobDao().getForBook(BOOK_ID)?.stage,
+            )
+            runner.run(BOOK_ID, PreparationStage.PREPARING_AUDIO, attemptCount = 0)
+
+            assertEquals(listOf(0, 1, 2), attributor.calls.map { it.chapterOrdinal })
+            assertEquals(1, tts.synthesisRequests.size)
+            assertEquals(PreparationStage.READY.name, database.preparationJobDao().getForBook(BOOK_ID)?.stage)
+        } finally {
+            database.close()
+            testRoot.deleteRecursively()
+        }
+    }
+
+    private suspend fun insertProvisionalChapters(
+        database: WhisperBookDatabase,
+        chapterCount: Int,
+    ) {
+        val chapters = List(chapterCount) { index ->
+            ChapterEntity("$BOOK_ID-chapter-${index + 1}", BOOK_ID, index, "Chapter ${index + 1}")
+        }
+        database.chapterDao().insertAll(chapters)
+        database.passageDao().insertAll(
+            chapters.map { chapter ->
+                provisionalPassage(
+                    id = "${chapter.id}-passage-1",
+                    chapterId = chapter.id,
+                    text = if (chapter.ordinal == 0) "Morning arrived." else "Bob said hello.",
+                )
+            },
+        )
     }
 
     private fun testBook() = BookEntity(
@@ -849,6 +994,7 @@ class PreparationStageRunnerAndroidTest {
         const val BOOK_ID = "large-book"
         const val CHAPTER_ONE_ID = "$BOOK_ID-chapter-1"
         const val CHAPTER_TWO_ID = "$BOOK_ID-chapter-2"
+        const val CHAPTER_THREE_ID = "$BOOK_ID-chapter-3"
         const val UNATTRIBUTED_RULE = "preparation-unattributed"
         const val TEST_MODEL_VERSION = "test-model"
         const val TEST_SAMPLE_RATE = 24_000

@@ -140,6 +140,79 @@ class WhisperbookNavigationTest {
     }
 
     @Test
+    fun processingOpensStoryPreviewAtTheReviewGateAndGenerateReturnsToProcessing() {
+        var reviewConfirmations = 0
+        val reading = navigationBook("story-book", "Story Book", currentChapter = 1, chapterCount = 1).copy(
+            preparation = PreparationState(
+                stage = PreparationStage.FINDING_CHARACTERS,
+                completedUnits = 0,
+                totalUnits = 1,
+                message = "Reading chapter 1 of 1",
+                chapterPlanConfirmed = true,
+            ),
+            storyReviewConfirmed = false,
+        )
+        val chapter = Chapter(
+            id = "story-book-chapter-1",
+            bookId = "story-book",
+            ordinal = 0,
+            title = "Opening",
+            passages = listOf(
+                Passage("story-passage-1", "story-book-chapter-1", 0, "Morning came.", "narrator", 1f, "narration"),
+            ),
+        )
+        val narrator = StoryCharacter("narrator", "story-book", "Narrator", emptySet(), CharacterColorRole.NARRATOR, 0)
+        val appState = WhisperbookAppState(
+            NavigationBookActions(
+                onSelectBook = {},
+                onConfirmStoryReview = { reviewConfirmations += 1 },
+            ),
+        )
+        fun show(book: Book, storyChapters: List<Chapter> = emptyList()) = appState.synchronize(
+            WhisperbookUiSnapshot(
+                books = listOf(book),
+                selectedBook = book,
+                chapters = listOf(chapter.copy(passages = emptyList())),
+                characters = listOf(narrator),
+                preparation = book.preparation,
+                storyChapters = storyChapters,
+            ),
+        )
+        show(reading)
+        setApp(WhisperbookDestination.Processing.route, appState)
+        composeRule.onNodeWithText("Preparing your audiobook").assertIsDisplayed()
+
+        val awaitingReview = reading.copy(
+            preparation = reading.preparation.copy(
+                stage = PreparationStage.AWAITING_STORY_REVIEW,
+                completedUnits = 1,
+                message = "Review the characters before generating voices",
+            ),
+        )
+        composeRule.runOnIdle { show(awaitingReview, listOf(chapter)) }
+
+        composeRule.onNodeWithTag("story-preview-screen").assertIsDisplayed()
+        composeRule.onNodeWithTag("story-character-narrator").assertIsDisplayed()
+        composeRule.onNodeWithTag("generate-voices").performClick()
+        composeRule.runOnIdle {
+            assertEquals(1, reviewConfirmations)
+            assertEquals(WhisperbookDestination.StoryPreview.route, navController.currentDestination?.route)
+        }
+
+        val reviewed = awaitingReview.copy(
+            preparation = awaitingReview.preparation.copy(stage = PreparationStage.ASSIGNING_VOICES),
+            storyReviewConfirmed = true,
+        )
+        composeRule.runOnIdle { show(reviewed) }
+
+        composeRule.onNodeWithText("Preparing your audiobook").assertIsDisplayed()
+        composeRule.runOnIdle {
+            assertEquals(WhisperbookDestination.Processing.route, navController.currentDestination?.route)
+            assertFalse(navController.popBackStack(WhisperbookDestination.StoryPreview.route, inclusive = false))
+        }
+    }
+
+    @Test
     fun unconfirmedCurrentBookCanReopenSetupWithoutLookingLikePreparation() {
         val book = navigationBook("new-book", "New Story", currentChapter = 1, chapterCount = 1).copy(
             preparation = PreparationState(PreparationStage.COPY_AND_VALIDATE, message = "Waiting to prepare"),
@@ -608,12 +681,14 @@ class WhisperbookNavigationTest {
 private class NavigationBookActions(
     private val onImportBook: (Uri) -> Unit = {},
     private val onConfirmNarrationSetup: (String, String) -> Unit = { _, _ -> },
+    private val onConfirmStoryReview: () -> Unit = {},
     private val onSelectBook: (String) -> Unit,
 ) : WhisperbookUiActions {
     override fun dispatch(action: WhisperbookAction) = Unit
     override fun importBook(uri: Uri) = onImportBook(uri)
     override fun confirmNarrationSetup(languageCode: String, narratorVoiceId: String) =
         onConfirmNarrationSetup(languageCode, narratorVoiceId)
+    override fun confirmStoryReview() = onConfirmStoryReview()
     override fun retryPreparation() = Unit
     override fun pausePreparation() = Unit
     override fun resumePreparation() = Unit

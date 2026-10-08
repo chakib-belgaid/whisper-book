@@ -78,6 +78,37 @@ class ProcessingScreenLayoutTest {
     }
 
     @Test
+    fun storyReadingNamesTheChapterBeingAttributed() {
+        val queue = buildProcessingQueue(
+            selectedChapterPlan = (1..3).map { chapterNumber ->
+                planEntry(chapterNumber, selected = true, customPosition = chapterNumber - 1)
+            },
+            fallbackChapters = emptyList(),
+            explicitStates = emptyMap(),
+            preparationStage = PreparationStage.FINDING_CHARACTERS,
+            activeChapterId = "chapter-2",
+        )
+
+        assertEquals(ProcessingChapterState.Preparing, queue[1].state)
+        assertEquals(
+            "Reading the story. Current chapter: Chapter 2",
+            preparationActivityLabel(
+                stage = PreparationStage.FINDING_CHARACTERS,
+                message = null,
+                activeChapterTitle = queue[1].title,
+            ),
+        )
+        assertEquals(
+            "Waiting for your story review",
+            preparationActivityLabel(
+                stage = PreparationStage.AWAITING_STORY_REVIEW,
+                message = null,
+                activeChapterTitle = null,
+            ),
+        )
+    }
+
+    @Test
     fun longQueuesShowABoundedPreview() {
         val queue = buildProcessingQueue(
             selectedChapterPlan = (1..2_450).map { chapterNumber ->

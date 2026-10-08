@@ -34,6 +34,7 @@ class ProductionPreparationCoordinatorTest {
         assertFalse(PreparationStage.FAILED in PreparationWorkPlan.stages)
         assertFalse(PreparationStage.AWAITING_CHAPTER_SELECTION in PreparationWorkPlan.stages)
         assertFalse(PreparationStage.AWAITING_NARRATION_SETUP in PreparationWorkPlan.stages)
+        assertFalse(PreparationStage.AWAITING_STORY_REVIEW in PreparationWorkPlan.stages)
     }
 
     @Test
@@ -97,6 +98,59 @@ class ProductionPreparationCoordinatorTest {
 
         narrationConfirmed = true
         coordinator.enqueue("book-42")
+        assertEquals(listOf(PreparationWorkPlan.narrationStages), scheduler.enqueuedStages)
+    }
+
+    @Test
+    fun `story review gate waits for confirmation then schedules only voices and audio`() = runTest {
+        val scheduler = RecordingScheduler()
+        val jobs = FakePreparationJobDao()
+        jobs.upsert(
+            preparationJob().copy(
+                stage = PreparationStage.AWAITING_STORY_REVIEW.name,
+                chapterPlanConfirmed = true,
+            ),
+        )
+        var reviewConfirmed = false
+        val coordinator = ProductionPreparationCoordinator(
+            scheduler = scheduler,
+            preparationJobs = jobs,
+            narrationSetupConfirmed = { true },
+            storyReviewConfirmed = { reviewConfirmed },
+        )
+
+        coordinator.enqueue("book-42")
+        assertTrue(scheduler.enqueuedStages.isEmpty())
+
+        reviewConfirmed = true
+        coordinator.enqueue("book-42")
+        assertEquals(
+            listOf(listOf(PreparationStage.ASSIGNING_VOICES, PreparationStage.PREPARING_AUDIO)),
+            scheduler.enqueuedStages,
+        )
+    }
+
+    @Test
+    fun `failure after story review restarts narration without reopening the review`() = runTest {
+        val scheduler = RecordingScheduler()
+        val jobs = FakePreparationJobDao()
+        jobs.upsert(
+            preparationJob().copy(
+                stage = PreparationStage.FAILED.name,
+                chapterPlanConfirmed = true,
+            ),
+        )
+        val coordinator = ProductionPreparationCoordinator(
+            scheduler = scheduler,
+            preparationJobs = jobs,
+            narrationSetupConfirmed = { true },
+            storyReviewConfirmed = { true },
+        )
+
+        coordinator.enqueue("book-42")
+
+        // Attribution is idempotent: the restarted FINDING_CHARACTERS worker skips attributed
+        // chapters and, because the review is confirmed, hands straight over to voice casting.
         assertEquals(listOf(PreparationWorkPlan.narrationStages), scheduler.enqueuedStages)
     }
 

@@ -161,6 +161,27 @@ class WhisperbookViewModel(
             selected?.takeIf { chapter -> chapter.id == header.id } ?: header
         }
     }
+    /**
+     * Every selected chapter with its passages, in listening order. The full book is observed only
+     * while the selected book waits at the story review; otherwise readers load one chapter.
+     */
+    private val storyChapters: Flow<List<Chapter>> = selectedBook
+        .map { book -> book?.id?.takeIf { book.awaitsStoryReview() } }
+        .distinctUntilChanged()
+        .flatMapLatest { bookId ->
+            if (bookId == null) {
+                flowOf(emptyList())
+            } else {
+                combine(
+                    services.libraryRepository.observeChapters(bookId),
+                    selectedChapterHeaders,
+                ) { all, selected ->
+                    val chaptersById = all.associateBy(Chapter::id)
+                    selected.mapNotNull { header -> chaptersById[header.id] }
+                }
+            }
+        }
+        .distinctUntilChanged()
     private val characters: Flow<List<StoryCharacter>> = selectedBookId.flatMapLatest { bookId ->
         if (bookId == null) flowOf(emptyList()) else services.libraryRepository.observeCharacters(bookId)
     }
@@ -239,7 +260,8 @@ class WhisperbookViewModel(
         sessionState,
         storageBytes,
         storeState,
-    ) { library, session, bytes, fluxState ->
+        storyChapters,
+    ) { library, session, bytes, fluxState, story ->
         val selectedBookId = library.selectedBook?.id
         val selectedPlayback = session.playback?.takeIf { it.bookId == selectedBookId }
         val selectedAudioProgress = session.pendingOperation.audioProgress
@@ -254,6 +276,7 @@ class WhisperbookViewModel(
             chapterPlan = library.chapterPlan,
             chapters = library.chapters,
             selectedChapter = library.selectedChapter,
+            storyChapters = story,
             characters = library.characters,
             voiceAssignments = session.voiceAssignments,
             voices = services.availableVoices,
@@ -304,7 +327,7 @@ class WhisperbookViewModel(
                     booksPendingDeletion.retainAll(currentBookIds)
                     reduce(WhisperbookMutation.SchedulingErrorsRetained(currentBookIds))
                     currentBooks.asSequence()
-                        .filter { book -> book.preparation.stage.isChapterPlanGate() }
+                        .filter { book -> book.preparation.stage.isUserConfirmationGate() }
                         .mapTo(hashSetOf(), Book::id)
                         .let(reconciledPreparationBookIds::removeAll)
                 }
@@ -370,6 +393,7 @@ class WhisperbookViewModel(
             WhisperbookAction.ConfirmChapterPlan -> confirmChapterPlan()
             is WhisperbookAction.ConfirmNarrationSetup ->
                 confirmNarrationSetup(action.languageCode, action.narratorVoiceId)
+            WhisperbookAction.ConfirmStoryReview -> confirmStoryReview()
             WhisperbookAction.RetryPreparation -> retryPreparation()
             WhisperbookAction.PausePreparation -> pausePreparation()
             WhisperbookAction.ResumePreparation -> resumePreparation()
@@ -533,6 +557,19 @@ class WhisperbookViewModel(
         "Generating ${language.displayName} narration with ${voice.displayName} on this device."
     }
 
+    fun confirmStoryReview() = launchOperation("Saving the story review", "story_review_confirm") {
+        val bookId = currentStoreState.selectedBookId ?: error("Open a book before reviewing its story")
+        val book = books.value.firstOrNull { it.id == bookId }
+            ?: error("Open a book before reviewing its story")
+        if (book.storyReviewConfirmed) return@launchOperation null
+        if (book.preparation.stage != PreparationStage.AWAITING_STORY_REVIEW) {
+            error("The story is still being read. Review it once every chapter is ready.")
+        }
+        services.libraryRepository.confirmStoryReview(book.id)
+        ensurePreparationScheduled(book.id, force = true, knownConfirmed = true)
+        "Generating voices for ${book.title} on this device."
+    }
+
     fun retryPreparation() {
         val bookId = currentStoreState.selectedBookId ?: return
         val book = books.value.firstOrNull { it.id == bookId } ?: return
@@ -605,6 +642,7 @@ class WhisperbookViewModel(
             val stage = currentBook.preparation.stage
             if (stage == PreparationStage.AWAITING_CHAPTER_SELECTION) return@withLock
             if (stage == PreparationStage.AWAITING_NARRATION_SETUP && !knownConfirmed) return@withLock
+            if (stage == PreparationStage.AWAITING_STORY_REVIEW && !knownConfirmed) return@withLock
             if (!stage.isParsingStage() && !currentBook.preparation.chapterPlanConfirmed) return@withLock
             if (!stage.isParsingStage() && !knownConfirmed && !currentBook.narrationSetupConfirmed) {
                 return@withLock
@@ -859,9 +897,14 @@ class WhisperbookViewModel(
         val snapshot = uiState.value
         val book = snapshot.selectedBook ?: error("Choose a book before correcting a voice")
         val distinctPassageIds = passageIds.distinct()
-        val passages = snapshot.selectedChapter?.passages
-            ?.filter { it.id in distinctPassageIds }
-            .orEmpty()
+        // The story review corrects passages in any selected chapter, not only the reader's.
+        val passages = (
+            snapshot.selectedChapter?.passages.orEmpty().asSequence() +
+                snapshot.storyChapters.asSequence().flatMap { it.passages.asSequence() }
+            )
+            .filter { it.id in distinctPassageIds }
+            .distinctBy { it.id }
+            .toList()
         if (passages.size != distinctPassageIds.size) error("That section is no longer available")
         val speaker = snapshot.characters.firstOrNull { it.id == speakerId }
             ?: error("That voice is no longer available in this book")
@@ -1326,15 +1369,19 @@ private data class BookStorageState(
 private fun PreparationStage.isParsingStage(): Boolean =
     this == PreparationStage.COPY_AND_VALIDATE || this == PreparationStage.READING_CHAPTERS
 
-private fun PreparationStage.isChapterPlanGate(): Boolean =
+private fun PreparationStage.isUserConfirmationGate(): Boolean =
     this == PreparationStage.AWAITING_CHAPTER_SELECTION ||
-        this == PreparationStage.AWAITING_NARRATION_SETUP
+        this == PreparationStage.AWAITING_NARRATION_SETUP ||
+        this == PreparationStage.AWAITING_STORY_REVIEW
+
+private fun Book.awaitsStoryReview(): Boolean =
+    !storyReviewConfirmed && preparation.stage == PreparationStage.AWAITING_STORY_REVIEW
 
 private fun Book.shouldReconcilePreparation(): Boolean {
     val state = preparation
     if (state.runState != PreparationRunState.RUNNING) return false
     if (state.stage == PreparationStage.READY || state.stage == PreparationStage.FAILED) return false
-    if (state.stage.isChapterPlanGate()) return false
+    if (state.stage.isUserConfirmationGate()) return false
     return state.stage.isParsingStage() ||
         (state.chapterPlanConfirmed && narrationSetupConfirmed)
 }

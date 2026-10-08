@@ -74,10 +74,18 @@ Editable diagrams.net source: [offline-pipeline.drawio](diagrams/offline-pipelin
 1. `SafBookImporter` reads the user-selected URI, validates the actual file signature, hashes the content, and creates an app-private copy.
 2. `RoomLibraryRepository` persists the book record and prevents duplicate sources from becoming separate library entries.
 3. `OfflinePublicationExtractor` parses EPUB/PDF structure on CPU. `AndroidPdfOcrHook` recognizes pages without a usable text layer through ML Kit, whose runtime owns hardware-delegate selection.
-4. The preparation worker normalizes passages and detects chapter boundaries, then attributes, casts, and synthesizes one chapter at a time. Chapter 1 reaches audio before later chapters are scanned for characters.
+4. The preparation worker normalizes passages and detects chapter boundaries. After the chapter plan and narration setup are confirmed, it attributes speakers for every selected chapter in listening order, then stops at the story review. Once the listener confirms the Story Preview, it casts voices and synthesizes one chapter at a time, opening chapter first. Chapters added to the plan after the review are attributed lazily during audio preparation and do not reopen the review.
 5. Each committed chapter updates an atomic `characters.json` mirror with stable IDs, aliases, profiles, fingerprints, and idempotent per-chapter counts. Room remains the source of truth for playback and user voice choices.
 6. Supertonic synthesis generates PCM on one low-priority inference lane. API 29+ requests ONNX Runtime's NNAPI provider first; unsupported partitions and failed accelerated sessions fall back to the ONNX Runtime CPU provider. A representative NNAPI utterance above the guarded real-time-factor limit moves later work to CPU for that process, because partial offload can be slower than optimized CPU. Older releases select CPU immediately.
 7. `AppPrivateAudioSegmentStore` validates and atomically commits WAV files. Opening microsegments become playable first; remaining passages are generated sequentially rather than competing for compute in parallel.
+
+### Preparation stages and gates
+
+Stages are persisted by name in `preparation_jobs`, so each worker can resume from its checkpoint:
+
+`COPY_AND_VALIDATE` → `READING_CHAPTERS` → **`AWAITING_CHAPTER_SELECTION`** → **`AWAITING_NARRATION_SETUP`** → `FINDING_CHARACTERS` → **`AWAITING_STORY_REVIEW`** → `ASSIGNING_VOICES` → `PREPARING_AUDIO` → `READY` (or `FAILED`).
+
+The bold stages are durable user gates (`job.chapterPlanConfirmed`, `book.narrationSetupConfirmed`, `book.storyReviewConfirmed`). Reaching a gate is a successful worker stop, and every narration worker rechecks the gates, so a stale or retried WorkManager request never casts or synthesizes past an unconfirmed review. Speaker corrections made during the review are attribution-only edits; no voice or audio exists yet.
 
 ### Playback and read-along
 

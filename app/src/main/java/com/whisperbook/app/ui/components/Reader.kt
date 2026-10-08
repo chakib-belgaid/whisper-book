@@ -115,6 +115,8 @@ fun SpeakerPassageCard(
     activeLabel: String = "Now speaking",
     playPassageDescription: String = "Play passage read by $speakerName",
     changeAttributedVoiceDescription: String = "Correct attributed voice for $speakerName",
+    /** False for previews of text that has no audio yet, such as the story review. */
+    showPlaybackAffordance: Boolean = true,
 ) {
     val colors = WhisperbookTheme.colors
     val shape = WhisperbookTheme.shapes.card
@@ -125,7 +127,7 @@ fun SpeakerPassageCard(
             .paperClickable(onClick = onClick, role = Role.Button, fold = PaperFold.Card)
             .semantics(mergeDescendants = true) {
                 contentDescription = "$speakerName. $passage"
-                stateDescription = semanticState
+                if (showPlaybackAffordance) stateDescription = semanticState
             },
     ) {
         Row(
@@ -208,18 +210,20 @@ fun SpeakerPassageCard(
                 }
             }
         }
-        Box(
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .offset(x = 1.dp, y = 8.dp)
-                .size(45.dp)
-                .clip(WhisperbookTheme.shapes.control)
-                .background(colors.paper)
-                .border(1.5.dp, colors.outline, WhisperbookTheme.shapes.control)
-                .semantics { contentDescription = playPassageDescription },
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(Icons.AutoMirrored.Outlined.VolumeUp, contentDescription = null, tint = accentColor, modifier = Modifier.size(25.dp))
+        if (showPlaybackAffordance) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .offset(x = 1.dp, y = 8.dp)
+                    .size(45.dp)
+                    .clip(WhisperbookTheme.shapes.control)
+                    .background(colors.paper)
+                    .border(1.5.dp, colors.outline, WhisperbookTheme.shapes.control)
+                    .semantics { contentDescription = playPassageDescription },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(Icons.AutoMirrored.Outlined.VolumeUp, contentDescription = null, tint = accentColor, modifier = Modifier.size(25.dp))
+            }
         }
     }
 }

@@ -238,6 +238,133 @@ class WhisperbookViewModelTest {
     }
 
     @Test
+    fun confirmingTheStoryReviewPersistsItAndSchedulesVoices() = runTest(dispatcher) {
+        val services = FakeServices().apply {
+            books.value = listOf(
+                book("book-a").copy(
+                    preparation = PreparationState(
+                        stage = PreparationStage.FINDING_CHARACTERS,
+                        chapterPlanConfirmed = true,
+                    ),
+                    storyReviewConfirmed = false,
+                ),
+            )
+        }
+        val viewModel = WhisperbookViewModel(services)
+
+        viewModel.uiState.test {
+            awaitItem()
+            advanceUntilIdle()
+            services.events.clear()
+
+            viewModel.confirmStoryReview()
+            advanceUntilIdle()
+            assertEquals(
+                "The story is still being read. Review it once every chapter is ready.",
+                expectMostRecentItem().errorMessage,
+            )
+            assertTrue(services.events.none { it.startsWith("confirm-story:") })
+            assertFalse(services.books.value.single().storyReviewConfirmed)
+
+            services.books.value = services.books.value.map { book ->
+                book.copy(
+                    preparation = book.preparation.copy(stage = PreparationStage.AWAITING_STORY_REVIEW),
+                )
+            }
+            advanceUntilIdle()
+            // Reaching the review gate is a durable stop; nothing is rescheduled on its own.
+            assertTrue(services.events.none { it.startsWith("enqueue:") })
+
+            viewModel.confirmStoryReview()
+            advanceUntilIdle()
+
+            assertTrue(services.books.value.single().storyReviewConfirmed)
+            assertEquals(
+                listOf("confirm-story:book-a", "enqueue:book-a"),
+                services.events.takeLast(2),
+            )
+            assertEquals(null, expectMostRecentItem().errorMessage)
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
+    fun storyReviewObservesEverySelectedChapterAndAcceptsCorrectionsInAnyOfThem() = runTest(dispatcher) {
+        val opening = Passage("passage-1", "chapter-1", 0, "\"Hello,\" said Mara.", "narrator", 0.4f, "dialogue")
+        val later = Passage("passage-2", "chapter-2", 0, "\"Goodbye.\"", "narrator", 0.4f, "dialogue")
+        val skipped = Passage("passage-3", "chapter-3", 0, "Not selected.", "narrator", 1f, "narration")
+        val source = listOf(
+            Chapter("chapter-1", "book-a", 0, "One", listOf(opening)),
+            Chapter("chapter-2", "book-a", 1, "Two", listOf(later)),
+            Chapter("chapter-3", "book-a", 2, "Three", listOf(skipped)),
+        )
+        val services = FakeServices().apply {
+            books.value = listOf(
+                book("book-a", currentChapterId = "chapter-1").copy(
+                    preparation = PreparationState(
+                        stage = PreparationStage.READY,
+                        chapterPlanConfirmed = true,
+                    ),
+                ),
+            )
+            chapters.value = mapOf("book-a" to source)
+            plans.value = mapOf(
+                "book-a" to listOf(
+                    ChapterPlanEntry(source[0].copy(passages = emptyList()), isSelected = true, customPosition = 1),
+                    ChapterPlanEntry(source[1].copy(passages = emptyList()), isSelected = true, customPosition = 0),
+                    ChapterPlanEntry(source[2].copy(passages = emptyList()), isSelected = false, customPosition = 2),
+                ),
+            )
+            characters.value = mapOf(
+                "book-a" to listOf(
+                    StoryCharacter("narrator", "book-a", "Narrator", emptySet(), CharacterColorRole.NARRATOR, 0),
+                    StoryCharacter("mara", "book-a", "Mara", emptySet(), CharacterColorRole.BLUE, 1),
+                ),
+            )
+        }
+        val viewModel = WhisperbookViewModel(services)
+
+        viewModel.uiState.test {
+            awaitItem()
+            advanceUntilIdle()
+            assertTrue(expectMostRecentItem().storyChapters.isEmpty())
+            assertEquals(0, services.fullChapterObservationCount)
+
+            services.books.value = services.books.value.map { book ->
+                book.copy(
+                    preparation = book.preparation.copy(stage = PreparationStage.AWAITING_STORY_REVIEW),
+                    storyReviewConfirmed = false,
+                )
+            }
+            advanceUntilIdle()
+
+            val review = expectMostRecentItem()
+            assertEquals(listOf("chapter-2", "chapter-1"), review.storyChapters.map(Chapter::id))
+            assertEquals(listOf(later), review.storyChapters.first().passages)
+
+            // Only one chapter is the reader's selected chapter, but the review may correct any.
+            val otherChapterPassage = if (review.selectedChapter?.id == "chapter-1") "passage-2" else "passage-1"
+            viewModel.correctPassageSpeaker(otherChapterPassage, "mara", SpeakerCorrectionScope.THIS_PASSAGE)
+            advanceUntilIdle()
+
+            val corrected = expectMostRecentItem()
+            assertEquals(null, corrected.errorMessage)
+            assertEquals(
+                "mara",
+                corrected.storyChapters.flatMap(Chapter::passages)
+                    .single { it.id == otherChapterPassage }
+                    .speakerId,
+            )
+            assertTrue(
+                services.events.contains(
+                    "speaker-correction:book-a:$otherChapterPassage:mara:THIS_PASSAGE:1",
+                ),
+            )
+            cancelAndIgnoreRemainingEvents()
+        }
+    }
+
+    @Test
     fun chapterPlanProjectsOnlySelectedChaptersInCustomOrderAndPersistsActions() = runTest(dispatcher) {
         val source = listOf(
             Chapter("chapter-1", "book-a", 0, "One"),
@@ -1395,6 +1522,12 @@ private class FakeServices(
                 }
             }
             events += "confirm-setup:$bookId:$languageCode:$narratorVoiceId"
+        }
+        override suspend fun confirmStoryReview(bookId: String) {
+            books.value = books.value.map { book ->
+                if (book.id == bookId) book.copy(storyReviewConfirmed = true) else book
+            }
+            events += "confirm-story:$bookId"
         }
         override suspend fun setChapterSelected(bookId: String, chapterId: String, selected: Boolean) {
             plans.value = plans.value + (

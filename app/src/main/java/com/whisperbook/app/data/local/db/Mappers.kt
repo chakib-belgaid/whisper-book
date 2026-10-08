@@ -45,6 +45,7 @@ fun BookAggregate.toDomain(): Book {
         narrationProfileSeeded = book.narrationProfileSeeded,
         preferredNarratorVoiceId = book.preferredNarratorVoiceId,
         narrationSetupConfirmed = book.narrationSetupConfirmed,
+        storyReviewConfirmed = book.storyReviewConfirmed,
     )
 }
 
@@ -66,6 +67,7 @@ fun Book.toEntity(sourceSha256: String? = null): BookEntity = BookEntity(
     narrationProfileSeeded = narrationProfileSeeded,
     preferredNarratorVoiceId = preferredNarratorVoiceId,
     narrationSetupConfirmed = narrationSetupConfirmed,
+    storyReviewConfirmed = storyReviewConfirmed,
 )
 
 fun PreparationJobEntity.toDomain(): PreparationState = PreparationState(

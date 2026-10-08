@@ -217,6 +217,13 @@ class RoomLibraryRepositoryAndroidTest {
             assertTrue(confirmed.narrationSetupConfirmed)
             assertEquals("fr", confirmed.narrationLanguageCode)
             assertEquals("jasper", confirmed.preferredNarratorVoiceId)
+            // A new import also stops for the story review once its chapters are attributed.
+            assertFalse(confirmed.storyReviewConfirmed)
+
+            repository.confirmStoryReview(first)
+
+            assertTrue(database.bookDao().getById(first)!!.storyReviewConfirmed)
+            assertTrue(runCatching { repository.confirmStoryReview(first) }.isFailure)
         } finally {
             database.close()
         }

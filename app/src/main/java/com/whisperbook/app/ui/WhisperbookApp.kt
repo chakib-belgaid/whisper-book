@@ -162,6 +162,10 @@ fun WhisperbookApp(
                             navController.navigate(WhisperbookDestination.NarrationSetup.route)
                         }
                         destination.route == WhisperbookDestination.NowPlaying.route &&
+                            appState.storyReviewRequired -> {
+                            navController.navigate(WhisperbookDestination.StoryPreview.route)
+                        }
+                        destination.route == WhisperbookDestination.NowPlaying.route &&
                             !appState.canListen -> {
                             navController.navigate(WhisperbookDestination.Processing.route)
                         }
@@ -348,7 +352,9 @@ private fun PreparationState.backgroundTitle(): String = when {
         "Prepared ${completedUnits.coerceIn(0, totalUnits)} of $totalUnits chapters"
     stage == PreparationStage.READING_CHAPTERS && totalUnits > 0 ->
         "Reading chapter ${completedUnits.coerceIn(0, totalUnits)} of $totalUnits"
-    stage == PreparationStage.FINDING_CHARACTERS -> "Finding story voices"
+    stage == PreparationStage.FINDING_CHARACTERS && totalUnits > 0 ->
+        "Reading the story: chapter ${(completedUnits + 1).coerceIn(1, totalUnits)} of $totalUnits"
+    stage == PreparationStage.FINDING_CHARACTERS -> "Reading the story"
     stage == PreparationStage.ASSIGNING_VOICES -> "Assigning offline voices"
     else -> "Preparing your audiobook"
 }

@@ -18,6 +18,7 @@ sealed interface WhisperbookAction {
         val languageCode: String,
         val narratorVoiceId: String,
     ) : WhisperbookAction
+    data object ConfirmStoryReview : WhisperbookAction
     data object RetryPreparation : WhisperbookAction
     data object PausePreparation : WhisperbookAction
     data object ResumePreparation : WhisperbookAction

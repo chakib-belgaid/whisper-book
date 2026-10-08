@@ -227,6 +227,8 @@ interface LibraryRepository {
         narrationLanguageCode: String = "en",
     ): Result<String>
     suspend fun confirmNarrationSetup(bookId: String, languageCode: String, narratorVoiceId: String)
+    /** Records that the listener reviewed the attributed story, opening voice generation. */
+    suspend fun confirmStoryReview(bookId: String)
     /** Creates an all-selected plan after the parser has persisted the stable chapter list. */
     suspend fun initializeChapterPlan(bookId: String) = Unit
     suspend fun setChapterSelected(bookId: String, chapterId: String, selected: Boolean) = Unit

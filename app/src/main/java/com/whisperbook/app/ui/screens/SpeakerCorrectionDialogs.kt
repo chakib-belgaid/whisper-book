@@ -94,6 +94,8 @@ internal fun AttributedSpeakerPickerSheet(
                 ) {
                     items(cast, key = CastMemberUi::id) { member ->
                         val selected = member.id == passage.speakerId
+                        // Before the story review no voice is cast yet; name the character only.
+                        val hasVoice = member.voice.isNotBlank()
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -112,8 +114,10 @@ internal fun AttributedSpeakerPickerSheet(
                                 .semantics {
                                     contentDescription = buildString {
                                         append(member.character)
-                                        append(", using ")
-                                        append(member.voice)
+                                        if (hasVoice) {
+                                            append(", using ")
+                                            append(member.voice)
+                                        }
                                         if (selected) append(", current attribution")
                                     }
                                 }
@@ -133,7 +137,12 @@ internal fun AttributedSpeakerPickerSheet(
                             Column(Modifier.weight(1f)) {
                                 Text(member.character, color = colors.ink, style = WhisperbookTheme.typography.body)
                                 Text(
-                                    if (selected) "Current voice · ${member.voice}" else "Voice · ${member.voice}",
+                                    when {
+                                        hasVoice && selected -> "Current voice · ${member.voice}"
+                                        hasVoice -> "Voice · ${member.voice}"
+                                        selected -> "Current speaker · ${member.lines} lines"
+                                        else -> "${member.lines} lines"
+                                    },
                                     color = colors.inkMuted,
                                     style = WhisperbookTheme.typography.label,
                                 )
@@ -159,8 +168,13 @@ internal fun SpeakerCorrectionScopeDialog(
         onDismissRequest = onDismiss,
         title = { Text("Apply this voice correction?") },
         text = {
+            val speaker = if (target.voice.isBlank()) {
+                target.character
+            } else {
+                "${target.character}'s ${target.voice} voice"
+            }
             Text(
-                "Use ${target.character}'s ${target.voice} voice for this section, or for matching " +
+                "Use $speaker for this section, or for matching " +
                     "sections in ${bookTitle.ifBlank { "this book" }}. Matching ignores case and punctuation " +
                     "but only changes sections currently attributed to ${passage.speakerName}.",
             )

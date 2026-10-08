@@ -72,7 +72,8 @@ object CharacterVoiceCaster {
     private fun deterministicTieBreak(characterId: String, voiceId: String): Int =
         Math.floorMod("$characterId|$voiceId".hashCode(), 10_000)
 
-    private const val PROFILE_THRESHOLD = 0.60f
+    /** Minimum textual evidence before a gender or age trait influences casting. */
+    internal const val PROFILE_THRESHOLD = 0.60f
     private const val GENDER_MATCH = 40f
     private const val GENDER_MISMATCH = 34f
     private const val AGE_MATCH = 24f

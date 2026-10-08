@@ -102,6 +102,15 @@ interface BookDao {
     @Query(
         """
         UPDATE books
+        SET story_review_confirmed = 1
+        WHERE id = :bookId AND story_review_confirmed = 0
+        """,
+    )
+    suspend fun confirmStoryReview(bookId: String): Int
+
+    @Query(
+        """
+        UPDATE books
         SET narration_profile_revision = narration_profile_revision + 1
         WHERE id = :bookId
         """,

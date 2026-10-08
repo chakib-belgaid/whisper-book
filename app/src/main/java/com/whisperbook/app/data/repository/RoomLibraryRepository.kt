@@ -102,6 +102,7 @@ class RoomLibraryRepository(
                         narrationProfileSeeded = true,
                         preferredNarratorVoiceId = DEFAULT_NARRATOR_VOICE_ID,
                         narrationSetupConfirmed = false,
+                        storyReviewConfirmed = false,
                     ),
                 )
                 database.preparationJobDao().upsert(
@@ -140,6 +141,13 @@ class RoomLibraryRepository(
         require(narratorVoiceId.isNotBlank()) { "Narrator voice id must not be blank" }
         check(database.bookDao().confirmNarrationSetup(bookId, languageCode, narratorVoiceId) == 1) {
             "This book's narration setup is no longer awaiting confirmation"
+        }
+    }
+
+    override suspend fun confirmStoryReview(bookId: String) {
+        require(bookId.isNotBlank()) { "Book id must not be blank" }
+        check(database.bookDao().confirmStoryReview(bookId) == 1) {
+            "This book's story review is no longer awaiting confirmation"
         }
     }
 

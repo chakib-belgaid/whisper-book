@@ -98,6 +98,7 @@ fun LibraryScreen(
                 val currentActionDescription = when {
                     current.needsChapterReview -> "Choose chapters for ${current.title}"
                     current.needsNarrationSetup -> "Set up narration for ${current.title}"
+                    current.needsStoryReview -> "Review the story of ${current.title}"
                     current.canListen -> "Resume ${current.title}"
                     else -> "Open ${current.title}"
                 }
@@ -123,6 +124,7 @@ fun LibraryScreen(
                         when {
                             current.needsChapterReview -> "Choose chapters"
                             current.needsNarrationSetup -> "Finish setup"
+                            current.needsStoryReview -> "Review the story"
                             current.preparation.stage == com.whisperbook.app.domain.model.PreparationStage.COPY_AND_VALIDATE ||
                                 current.preparation.stage == com.whisperbook.app.domain.model.PreparationStage.READING_CHAPTERS ->
                                 "Parsing book"
@@ -215,6 +217,7 @@ fun LibraryScreen(
                                 text = when {
                                     book.needsChapterReview -> "Chapter choices needed"
                                     book.needsNarrationSetup -> "Narration setup needed"
+                                    book.needsStoryReview -> "Story review needed"
                                     else -> book.author
                                 },
                                 color = WhisperbookTheme.colors.inkMuted,
@@ -233,6 +236,7 @@ fun LibraryScreen(
 internal fun LibraryBookUi.libraryProgressLabel(): String = when {
     needsChapterReview -> "Choose which chapters to hear"
     needsNarrationSetup -> "Narration setup needed"
+    needsStoryReview -> "Review the characters before voices are generated"
     preparation.runState == com.whisperbook.app.domain.model.PreparationRunState.PAUSED ->
         "Preparation paused · progress saved"
     preparation.runState == com.whisperbook.app.domain.model.PreparationRunState.CANCELLED ->
@@ -247,6 +251,9 @@ internal fun LibraryBookUi.libraryProgressLabel(): String = when {
         "Reading ${preparation.completedUnits.coerceIn(0, preparation.totalUnits)} of ${preparation.totalUnits}"
     preparation.stage == com.whisperbook.app.domain.model.PreparationStage.READING_CHAPTERS ->
         "Reading chapters on this device"
+    preparation.stage == com.whisperbook.app.domain.model.PreparationStage.FINDING_CHARACTERS &&
+        preparation.totalUnits > 0 ->
+        "Reading the story · ${preparation.completedUnits.coerceIn(0, preparation.totalUnits)} of ${preparation.totalUnits} chapters"
     preparation.stage == com.whisperbook.app.domain.model.PreparationStage.PREPARING_AUDIO &&
         preparation.totalUnits > 0 ->
         "${preparation.completedUnits.coerceIn(0, preparation.totalUnits)} of ${preparation.totalUnits} chapters prepared"
